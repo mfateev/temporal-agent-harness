@@ -32,6 +32,9 @@ Create a clean Temporal-friendly reimplementation of Codex's agentic loop in Go,
 - **Simplicity:** Start with a simplified, working implementation before adding complexity
 - **Extensibility:** Design interfaces that allow future enhancements without breaking changes
 - **Temporal-Native:** Use Temporal patterns and idioms, not just port Rust code
+- **Structural Alignment (CRITICAL):** Follow the original Codex repository structure as closely as makes sense for Go/Temporal to enable future maintenance and incorporation of upstream changes
+
+> **See:** `../CLAUDE.md` for detailed guidance on maintaining structural alignment with Codex
 
 ---
 
@@ -787,6 +790,29 @@ codex-temporal-go/
 ├── go.mod
 └── README.md
 ```
+
+**IMPORTANT: Structural Alignment with Codex**
+
+This project structure mirrors the original Codex repository (`codex-rs/core/src/`) as closely as possible:
+
+| Codex (Rust) | codex-temporal-go (Go) | Purpose |
+|--------------|------------------------|---------|
+| `codex.rs` | `workflow/agentic.go` | Main agentic loop |
+| `state/session.rs` | `workflow/state.go` | Session state management |
+| `client.rs` | `activities/llm.go` + `llm/client.go` | LLM client integration |
+| `tools/router.rs` | `tools/registry.go` | Tool dispatch |
+| `tools/parallel.rs` | Workflow futures pattern | Parallel execution |
+| `tools/handlers/*` | `activities/tools/*` | Tool implementations |
+| `message_history.rs` | `history/manager.go` | History management |
+| `mcp_connection_manager.rs` | `activities/mcp.go` | MCP integration |
+
+**Rationale:** Maintaining structural alignment enables:
+- Easy incorporation of future Codex changes
+- Side-by-side code comparison during development
+- Feature parity tracking
+- Better long-term maintainability
+
+**See:** `../CLAUDE.md` for comprehensive guidelines on maintaining structural alignment.
 
 ### Implementation Phases
 
