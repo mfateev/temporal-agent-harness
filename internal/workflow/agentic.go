@@ -298,7 +298,11 @@ func toolActivityErrorToOutput(logger log.Logger, callID, toolName string, err e
 	reason := "unknown error"
 
 	var appErr *temporal.ApplicationError
-	if errors.As(err, &appErr) {
+	var timeoutErr *temporal.TimeoutError
+	var canceledErr *temporal.CanceledError
+
+	switch {
+	case errors.As(err, &appErr):
 		logger.Warn("Tool activity failed",
 			"tool", toolName,
 			"error_type", appErr.Type(),
@@ -310,8 +314,19 @@ func toolActivityErrorToOutput(logger log.Logger, callID, toolName string, err e
 			_ = appErr.Details(&details)
 			reason = details.Reason
 		}
-	} else {
-		logger.Error("Tool activity failed with non-ApplicationError",
+
+	case errors.As(err, &timeoutErr):
+		logger.Warn("Tool activity timed out",
+			"tool", toolName,
+			"timeout_type", timeoutErr.TimeoutType())
+		reason = "tool execution timed out"
+
+	case errors.As(err, &canceledErr):
+		logger.Warn("Tool activity canceled", "tool", toolName)
+		reason = "tool execution was canceled"
+
+	default:
+		logger.Error("Tool activity failed with unexpected error",
 			"tool", toolName, "error", err)
 		reason = "activity execution failed"
 	}

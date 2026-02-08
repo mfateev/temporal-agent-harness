@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"time"
 
 	"github.com/mfateev/codex-temporal-go/internal/tools"
 )
@@ -39,10 +38,12 @@ func (t *ShellTool) IsMutating(invocation *tools.ToolInvocation) bool {
 	return true
 }
 
-// Handle executes a shell command with a 5-minute timeout.
+// Handle executes a shell command. Timeout is managed by Temporal's
+// StartToCloseTimeout on the activity options — the context is cancelled
+// when the timeout fires, and Temporal retries per the RetryPolicy.
 //
 // Maps to: codex-rs/core/src/tools/handlers/shell.rs handle
-func (t *ShellTool) Handle(invocation *tools.ToolInvocation) (*tools.ToolOutput, error) {
+func (t *ShellTool) Handle(ctx context.Context, invocation *tools.ToolInvocation) (*tools.ToolOutput, error) {
 	commandArg, ok := invocation.Arguments["command"]
 	if !ok {
 		return nil, fmt.Errorf("missing required argument: command")
@@ -57,15 +58,13 @@ func (t *ShellTool) Handle(invocation *tools.ToolInvocation) (*tools.ToolOutput,
 		return nil, fmt.Errorf("command cannot be empty")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
 	output, err := cmd.CombinedOutput()
 
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return nil, fmt.Errorf("command timed out after 5 minutes: %w", context.DeadlineExceeded)
+		if ctx.Err() != nil {
+			// Context cancelled or deadline exceeded — let Temporal handle retry.
+			return nil, ctx.Err()
 		}
 		// Command failed but produced output - return as tool result with Success=false
 		success := false

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -37,7 +38,7 @@ func (t *ReadFileTool) IsMutating(invocation *tools.ToolInvocation) bool {
 // Handle reads a file and returns its contents with line numbers.
 //
 // Maps to: codex-rs/core/src/tools/handlers/read_file.rs handle
-func (t *ReadFileTool) Handle(invocation *tools.ToolInvocation) (*tools.ToolOutput, error) {
+func (t *ReadFileTool) Handle(_ context.Context, invocation *tools.ToolInvocation) (*tools.ToolOutput, error) {
 	pathArg, ok := invocation.Arguments["path"]
 	if !ok {
 		return nil, fmt.Errorf("missing required argument: path")

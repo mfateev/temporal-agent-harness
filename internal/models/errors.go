@@ -109,10 +109,6 @@ const (
 	// Non-retryable: the same bad input will be sent on retry.
 	ToolErrTypeValidation = "ToolValidation"
 
-	// ToolErrTypeTimeout indicates the tool execution timed out.
-	// Non-retryable: the same long-running command will likely time out again.
-	ToolErrTypeTimeout = "ToolTimeout"
-
 	// ToolErrTypeTransient indicates a temporary infrastructure issue
 	// (e.g., resource temporarily unavailable). Retryable.
 	ToolErrTypeTransient = "ToolTransient"
@@ -140,16 +136,6 @@ func NewToolValidationError(toolName string, cause error) error {
 	return temporal.NewNonRetryableApplicationError(
 		"tool validation failed",
 		ToolErrTypeValidation,
-		cause,
-		ToolErrorDetails{ToolName: toolName, Reason: cause.Error()},
-	)
-}
-
-// NewToolTimeoutError creates a non-retryable ApplicationError for tool timeouts.
-func NewToolTimeoutError(toolName string, cause error) error {
-	return temporal.NewNonRetryableApplicationError(
-		"tool execution timed out",
-		ToolErrTypeTimeout,
 		cause,
 		ToolErrorDetails{ToolName: toolName, Reason: cause.Error()},
 	)

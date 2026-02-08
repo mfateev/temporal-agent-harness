@@ -1,6 +1,9 @@
 package tools
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 // ToolHandler is the interface for tool implementations.
 //
@@ -18,9 +21,11 @@ type ToolHandler interface {
 	// Maps to: codex-rs ToolHandler::is_mutating()
 	IsMutating(invocation *ToolInvocation) bool
 
-	// Handle executes the tool with the given invocation context.
+	// Handle executes the tool with the given context and invocation.
+	// The context is the activity context from Temporal — handlers should
+	// use it for cancellation and timeouts (managed by StartToCloseTimeout).
 	// Maps to: codex-rs ToolHandler::handle()
-	Handle(invocation *ToolInvocation) (*ToolOutput, error)
+	Handle(ctx context.Context, invocation *ToolInvocation) (*ToolOutput, error)
 }
 
 // ToolRegistry stores tool handlers by name.

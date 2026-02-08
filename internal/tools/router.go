@@ -1,5 +1,7 @@
 package tools
 
+import "context"
+
 // ToolRouter wraps a ToolRegistry with tool specifications for dispatch.
 // Rebuilt per-turn with the current tool configuration.
 //
@@ -25,12 +27,12 @@ func (r *ToolRouter) GetToolSpecs() []ToolSpec {
 // Dispatch dispatches a tool invocation to the appropriate handler.
 //
 // Maps to: codex-rs/core/src/tools/router.rs ToolRouter::dispatch_tool_call
-func (r *ToolRouter) Dispatch(invocation *ToolInvocation) (*ToolOutput, error) {
+func (r *ToolRouter) Dispatch(ctx context.Context, invocation *ToolInvocation) (*ToolOutput, error) {
 	handler, err := r.registry.GetHandler(invocation.ToolName)
 	if err != nil {
 		return nil, err
 	}
-	return handler.Handle(invocation)
+	return handler.Handle(ctx, invocation)
 }
 
 // Registry returns the underlying ToolRegistry.
