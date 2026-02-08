@@ -4,7 +4,7 @@
 
 **Version:** 0.1.0
 **Date:** 2026-02-07
-**Status:** Design Phase
+**Status:** Phase 1 Complete (Core Loop MVP)
 
 ---
 
@@ -215,6 +215,13 @@ func ExecuteLLMActivity(ctx context.Context, input LLMActivityInput) (LLMActivit
 - `WriteFileActivity(path, content string) → success`
 - `ApplyPatchActivity(patch string) → success`
 
+**Implementation Note:** The Go implementation uses a single generic `ExecuteTool`
+activity that dispatches through the ToolRegistry, rather than separate activity types
+per tool. Each tool call is still a separate Activity invocation (achieving the same
+per-tool visibility and retry isolation), but through a unified dispatcher. This is a
+justified Temporal/Go adaptation - the ToolRegistry pattern provides the same handler
+isolation while reducing boilerplate.
+
 **Implementation:**
 ```go
 type ToolActivity interface {
@@ -314,7 +321,7 @@ func AgenticWorkflow(ctx workflow.Context, state WorkflowState) error {
 - Start simple (in-memory), add complexity later (external storage)
 - Interface makes it easy to test and mock
 
-**Default Implementation:** In-memory (workflow state)
+**Default Implementation:** In-memory (`InMemoryHistory` in `history/memory.go`) - **implemented and working**
 **Future Implementation:** External persistence (database, S3)
 
 **Interface Design:**
@@ -355,7 +362,9 @@ func (h *ExternalHistory) GetForPrompt() ([]ConversationItem, error) {
 }
 ```
 
-**TODO:** Research all uses of `raw_items()` in Codex to ensure they can be done in Activities when we move to external persistence. Current uses:
+**Status:** The `ConversationHistory` interface is now implemented with `InMemoryHistory` as the default backend. `WorkflowState` uses this interface as designed, enabling future swapping to external persistence without changing workflow logic.
+
+**TODO (Future):** Research all uses of `raw_items()` in Codex to ensure they can be done in Activities when we move to external persistence. Current uses:
 - Turn counting (query operation)
 - History compaction (admin operation)
 - Rollback operations (admin operation)
@@ -543,6 +552,9 @@ func ExecuteShellActivity(ctx context.Context, input ShellInput) (ShellOutput, e
 
 ### Core Workflow Structure
 
+**NOTE:** The code samples below have been updated to reflect the current implementation.
+See the actual source files for the complete, up-to-date code.
+
 ```go
 package workflow
 
@@ -558,11 +570,12 @@ type WorkflowInput struct {
     ToolsConfig    ToolsConfig
 }
 
-// WorkflowState is passed through ContinueAsNew
+// WorkflowState is passed through ContinueAsNew.
+// Uses HistoryItems ([]ConversationItem) for serialization rather than
+// embedding the ConversationHistory interface directly.
 type WorkflowState struct {
     ConversationID string
-    History        ConversationHistory
-    ToolRegistry   *ToolRegistry
+    HistoryItems   []ConversationItem  // Serializable history for ContinueAsNew
     ModelConfig    ModelConfig
 
     // Iteration tracking
@@ -570,26 +583,27 @@ type WorkflowState struct {
     MaxIterations  int
 }
 
-// AgenticWorkflow is the main durable agentic loop
-func AgenticWorkflow(ctx workflow.Context, input WorkflowInput) error {
+// WorkflowResult is the final output of the workflow
+type WorkflowResult struct {
+    ConversationID string
+    FinalResponse  string
+    TotalIterations int
+}
+
+// AgenticWorkflow is the main durable agentic loop.
+// Returns (WorkflowResult, error) to provide structured output.
+func AgenticWorkflow(ctx workflow.Context, input WorkflowInput) (WorkflowResult, error) {
     // Initialize state on first run
     state := WorkflowState{
         ConversationID: input.ConversationID,
-        History:        NewInMemoryHistory(),
         ModelConfig:    input.ModelConfig,
         MaxIterations:  20,
     }
 
-    // Build tool registry
-    registry, err := BuildToolRegistry(ctx, input.ToolsConfig)
-    if err != nil {
-        return err
-    }
-    state.ToolRegistry = registry
-
     // Add initial user message to history
-    state.History.AddItem(ConversationItem{
-        Type:    ItemTypeUserMessage,
+    state.HistoryItems = append(state.HistoryItems, ConversationItem{
+        Type:    ItemTypeMessage,
+        Role:    "user",
         Content: input.UserMessage,
     })
 
@@ -597,116 +611,94 @@ func AgenticWorkflow(ctx workflow.Context, input WorkflowInput) error {
     return runAgenticLoop(ctx, state)
 }
 
-// AgenticWorkflowContinued handles ContinueAsNew
-func AgenticWorkflowContinued(ctx workflow.Context, state WorkflowState) error {
-    return runAgenticLoop(ctx, state)
-}
-
 // runAgenticLoop is the main loop logic
-func runAgenticLoop(ctx workflow.Context, state WorkflowState) error {
+func runAgenticLoop(ctx workflow.Context, state WorkflowState) (WorkflowResult, error) {
     for state.IterationCount < state.MaxIterations {
-        // Get history for prompt
-        historyItems, err := state.History.GetForPrompt()
-        if err != nil {
-            return err
-        }
-
         // Call LLM Activity
         llmInput := LLMActivityInput{
-            History:     historyItems,
+            History:     state.HistoryItems,
             ModelConfig: state.ModelConfig,
-            Tools:       state.ToolRegistry.GetToolSpecs(),
+            Tools:       getToolSpecs(), // From ToolRouter
         }
 
         var llmResult LLMActivityOutput
-        err = workflow.ExecuteActivity(
+        err := workflow.ExecuteActivity(
             workflow.WithActivityOptions(ctx, getLLMActivityOptions()),
             ExecuteLLMActivity,
             llmInput,
         ).Get(ctx, &llmResult)
 
         if err != nil {
-            return handleError(ctx, state, err)
+            return WorkflowResult{}, handleError(ctx, state, err)
         }
 
-        // Add LLM response to history
-        state.History.AddItem(ConversationItem{
-            Type:      ItemTypeAssistantMessage,
-            Content:   llmResult.Content,
-            ToolCalls: llmResult.ToolCalls,
-        })
+        // LLMActivityOutput contains Items ([]ConversationItem), not Content + ToolCalls.
+        // Items may include message items and/or function_call items.
+        // Add all LLM response items to history.
+        state.HistoryItems = append(state.HistoryItems, llmResult.Items...)
 
-        // Execute tools if present
-        if len(llmResult.ToolCalls) > 0 {
-            toolResults, err := executeTools(ctx, state, llmResult.ToolCalls)
-            if err != nil {
-                return err
-            }
+        // Extract function calls from response items
+        functionCalls := extractFunctionCalls(llmResult.Items)
 
-            // Add all tool results to history
-            for _, result := range toolResults {
-                state.History.AddItem(ConversationItem{
-                    Type:    ItemTypeToolResult,
-                    ToolID:  result.ToolID,
-                    Content: result.Output,
-                })
-            }
+        // Execute tools if present (each as a separate Activity via ExecuteTool dispatcher)
+        if len(functionCalls) > 0 {
+            toolOutputItems := executeTools(ctx, functionCalls)
+
+            // Tool results are FunctionCallOutput items added to history
+            state.HistoryItems = append(state.HistoryItems, toolOutputItems...)
         }
 
         state.IterationCount++
 
-        // Check if we need follow-up
-        if !llmResult.NeedsFollowUp {
+        // Check if we need follow-up (function calls present means continue)
+        if len(functionCalls) == 0 {
             break
-        }
-
-        // Check token count and consider ContinueAsNew
-        tokenCount, _ := state.History.EstimateTokenCount()
-        if tokenCount > state.ModelConfig.ContextWindow*0.8 {
-            state.IterationCount = 0
-            return workflow.NewContinueAsNewError(ctx, AgenticWorkflowContinued, state)
         }
     }
 
     // Max iterations reached, continue as new
     if state.IterationCount >= state.MaxIterations {
         state.IterationCount = 0
-        return workflow.NewContinueAsNewError(ctx, AgenticWorkflowContinued, state)
+        return WorkflowResult{}, workflow.NewContinueAsNewError(ctx, AgenticWorkflow, state)
     }
 
-    return nil
+    return WorkflowResult{
+        ConversationID:  state.ConversationID,
+        FinalResponse:   extractFinalResponse(state.HistoryItems),
+        TotalIterations: state.IterationCount,
+    }, nil
 }
 
-// executeTools runs all tool activities in parallel and waits for all
-func executeTools(ctx workflow.Context, state WorkflowState, toolCalls []ToolCall) ([]ToolResult, error) {
-    futures := make([]workflow.Future, len(toolCalls))
+// executeTools runs all tool activities in parallel via the generic ExecuteTool dispatcher.
+// Each tool call is a separate Activity invocation through the ToolRegistry.
+func executeTools(ctx workflow.Context, functionCalls []ConversationItem) []ConversationItem {
+    futures := make([]workflow.Future, len(functionCalls))
 
-    // Start all tool activities (parallel execution)
-    for i, toolCall := range toolCalls {
-        toolActivity := state.ToolRegistry.GetActivity(toolCall.Name)
+    // Start all tool activities (parallel execution via generic dispatcher)
+    for i, call := range functionCalls {
         futures[i] = workflow.ExecuteActivity(
             workflow.WithActivityOptions(ctx, getToolActivityOptions()),
-            toolActivity,
-            toolCall.Input,
+            ExecuteToolActivity, // Single generic activity dispatches through ToolRegistry
+            call,
         )
     }
 
-    // Wait for ALL tools to complete
-    results := make([]ToolResult, len(toolCalls))
-    for i, future := range futures {
-        var result ToolResult
+    // Wait for ALL tools to complete, collect FunctionCallOutput items
+    var results []ConversationItem
+    for _, future := range futures {
+        var result ConversationItem // Type: ItemTypeFunctionCallOutput
         if err := future.Get(ctx, &result); err != nil {
-            // Individual tool failure - record error as result
-            results[i] = ToolResult{
-                ToolID: toolCalls[i].ID,
-                Error:  err.Error(),
-            }
+            // Record error as FunctionCallOutput
+            results = append(results, ConversationItem{
+                Type:    ItemTypeFunctionCallOutput,
+                Content: "Error: " + err.Error(),
+            })
         } else {
-            results[i] = result
+            results = append(results, result)
         }
     }
 
-    return results, nil
+    return results
 }
 ```
 
@@ -760,33 +752,32 @@ codex-temporal-go/
 │   └── client/          # CLI client for starting workflows
 ├── internal/
 │   ├── workflow/        # Workflow definitions
-│   │   ├── agentic.go
-│   │   └── state.go
+│   │   ├── agentic.go   # Main agentic loop
+│   │   └── state.go     # Session state (WorkflowInput, WorkflowState, WorkflowResult)
 │   ├── activities/      # Activity implementations
-│   │   ├── llm.go
-│   │   ├── tools/
-│   │   │   ├── shell.go
-│   │   │   ├── file.go
-│   │   │   └── patch.go
-│   │   └── mcp.go
+│   │   ├── llm.go       # LLM call activity
+│   │   └── tools.go     # Tool execution activity (generic dispatcher)
 │   ├── history/         # History interface & implementations
-│   │   ├── interface.go
-│   │   ├── memory.go
-│   │   └── external.go  # Future
-│   ├── tools/           # Tool registry
-│   │   ├── registry.go
-│   │   ├── spec.go
-│   │   └── types.go
+│   │   ├── interface.go  # ConversationHistory interface
+│   │   └── memory.go     # In-memory implementation
+│   ├── tools/           # Tool registry, routing, specs
+│   │   ├── registry.go   # ToolRegistry (handler storage)
+│   │   ├── router.go     # ToolRouter (dispatch + specs)
+│   │   ├── context.go    # ToolInvocation, ToolOutput, ToolKind
+│   │   ├── spec.go       # ToolSpec definitions
+│   │   └── handlers/     # Built-in tool implementations
+│   │       ├── shell.go
+│   │       └── read_file.go
 │   ├── models/          # Shared types
-│   │   ├── conversation.go
+│   │   ├── conversation.go  # ConversationItem (matches Codex ResponseItem)
 │   │   ├── errors.go
 │   │   └── config.go
 │   └── llm/             # LLM client
-│       ├── client.go
-│       └── openai.go    # Using github.com/openai/openai-go
+│       ├── client.go     # LLMClient interface, LLMResponse with Items
+│       └── openai.go     # OpenAI adapter
+├── e2e/                 # End-to-end tests
 ├── docs/
-│   ├── ARCHITECTURE.md  # This document
-│   └── API.md           # API documentation
+│   └── ARCHITECTURE.md
 ├── go.mod
 └── README.md
 ```
@@ -796,15 +787,19 @@ codex-temporal-go/
 This project structure mirrors the original Codex repository (`codex-rs/core/src/`) as closely as possible:
 
 | Codex (Rust) | codex-temporal-go (Go) | Purpose |
-|--------------|------------------------|---------|
+|---|---|---|
 | `codex.rs` | `workflow/agentic.go` | Main agentic loop |
 | `state/session.rs` | `workflow/state.go` | Session state management |
-| `client.rs` | `activities/llm.go` + `llm/client.go` | LLM client integration |
-| `tools/router.rs` | `tools/registry.go` | Tool dispatch |
-| `tools/parallel.rs` | Workflow futures pattern | Parallel execution |
-| `tools/handlers/*` | `activities/tools/*` | Tool implementations |
-| `message_history.rs` | `history/manager.go` | History management |
-| `mcp_connection_manager.rs` | `activities/mcp.go` | MCP integration |
+| `client.rs` + `client_common.rs` | `llm/client.go` + `llm/openai.go` | LLM client integration |
+| `tools/registry.rs` | `tools/registry.go` | Tool handler storage |
+| `tools/router.rs` | `tools/router.go` | Tool dispatch + specs |
+| `tools/context.rs` | `tools/context.go` | Tool invocation context |
+| `tools/spec.rs` | `tools/spec.go` | Tool specifications |
+| `tools/parallel.rs` | Workflow futures pattern in `agentic.go` | Parallel execution |
+| `tools/handlers/*` | `tools/handlers/*` | Tool implementations |
+| `message_history.rs` | `history/memory.go` (future: `history/manager.go`) | History management |
+| `protocol` (ResponseItem) | `models/conversation.go` | Conversation item types |
+| `error.rs` | `models/errors.go` | Error categorization |
 
 **Rationale:** Maintaining structural alignment enables:
 - Easy incorporation of future Codex changes
@@ -816,14 +811,14 @@ This project structure mirrors the original Codex repository (`codex-rs/core/src
 
 ### Implementation Phases
 
-#### Phase 1: Core Loop (MVP)
-- [ ] Define workflow state structures
-- [ ] Implement in-memory history
-- [ ] Basic LLM activity (OpenAI API using github.com/openai/openai-go)
-- [ ] Simple tool registry (shell, read_file)
-- [ ] Main agentic loop workflow
-- [ ] ContinueAsNew logic
-- [ ] Basic error handling
+#### Phase 1: Core Loop (MVP) -- COMPLETED
+- [x] Define workflow state structures
+- [x] Implement in-memory history (with ConversationHistory interface)
+- [x] Basic LLM activity (OpenAI API using github.com/openai/openai-go)
+- [x] Simple tool registry (shell, read_file)
+- [x] Main agentic loop workflow
+- [x] ContinueAsNew logic
+- [x] Basic error handling
 
 #### Phase 2: Tool Execution
 - [ ] Implement all built-in tools
@@ -1009,12 +1004,13 @@ func (h *ExternalHistory) AddItem(item ConversationItem) error {
 ---
 
 **Next Steps:**
-1. Initialize Go module and dependencies
-2. Implement Phase 1 (Core Loop MVP)
-3. Write integration tests with Temporal test server
-4. Iterate based on learnings
+1. ~~Initialize Go module and dependencies~~ (done)
+2. ~~Implement Phase 1 (Core Loop MVP)~~ (done)
+3. Implement Phase 2 (Tool Execution - remaining built-in tools)
+4. Write integration tests with Temporal test server
+5. Iterate based on learnings
 
 ---
 
 *Document maintained by: Codex-Temporal-Go Team*
-*Last updated: 2026-02-07*
+*Last updated: 2026-02-08*

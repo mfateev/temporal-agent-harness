@@ -2,7 +2,6 @@ package llm
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -15,40 +14,36 @@ import (
 	"github.com/openai/openai-go/shared"
 )
 
-// OpenAIClient implements LLMClient using OpenAI's API
+// OpenAIClient implements LLMClient using OpenAI's API.
 //
 // Maps to: codex-rs/core/src/client.rs OpenAI implementation
 type OpenAIClient struct {
 	client openai.Client
 }
 
-// NewOpenAIClient creates an OpenAI client
+// NewOpenAIClient creates an OpenAI client.
 func NewOpenAIClient() *OpenAIClient {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	client := openai.NewClient(option.WithAPIKey(apiKey))
-
-	return &OpenAIClient{
-		client: client,
-	}
+	return &OpenAIClient{client: client}
 }
 
-// Call sends a request to OpenAI and returns the complete response
+// Call sends a request to OpenAI and returns the complete response.
+// The response items match Codex's ResponseItem format:
+// - AssistantMessage item for text content
+// - Separate FunctionCall items for each tool call
 func (c *OpenAIClient) Call(ctx context.Context, request LLMRequest) (LLMResponse, error) {
-	// Convert history to OpenAI messages format
 	messages := c.convertHistoryToMessages(request.History)
 
-	// Prepare parameters
 	params := openai.ChatCompletionNewParams{
 		Model:    openai.ChatModel(request.ModelConfig.Model),
 		Messages: messages,
 	}
 
-	// Add tool definitions if tools are provided
 	if len(request.ToolSpecs) > 0 {
 		params.Tools = c.buildToolDefinitions(request.ToolSpecs)
 	}
 
-	// Call OpenAI
 	completion, err := c.client.Chat.Completions.New(ctx, params)
 	if err != nil {
 		return LLMResponse{}, classifyError(err)
@@ -60,67 +55,73 @@ func (c *OpenAIClient) Call(ctx context.Context, request LLMRequest) (LLMRespons
 
 	choice := completion.Choices[0]
 
-	response := LLMResponse{
-		Content:      choice.Message.Content,
-		FinishReason: models.FinishReasonStop,
+	// Build response items matching Codex's ResponseItem format
+	var items []models.ConversationItem
+
+	// Add assistant message if there's text content
+	if choice.Message.Content != "" {
+		items = append(items, models.ConversationItem{
+			Type:    models.ItemTypeAssistantMessage,
+			Content: choice.Message.Content,
+		})
+	}
+
+	// Add separate FunctionCall items for each tool call
+	// Matches Codex's ResponseItem::FunctionCall separation
+	finishReason := models.FinishReasonStop
+	if len(choice.Message.ToolCalls) > 0 {
+		finishReason = models.FinishReasonToolCalls
+		for _, tc := range choice.Message.ToolCalls {
+			items = append(items, models.ConversationItem{
+				Type:      models.ItemTypeFunctionCall,
+				CallID:    tc.ID,
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments, // Raw JSON string
+			})
+		}
+	}
+
+	// If no content and no tool calls, add empty assistant message
+	if len(items) == 0 {
+		items = append(items, models.ConversationItem{
+			Type: models.ItemTypeAssistantMessage,
+		})
+	}
+
+	return LLMResponse{
+		Items:        items,
+		FinishReason: finishReason,
 		TokenUsage: models.TokenUsage{
 			PromptTokens:     int(completion.Usage.PromptTokens),
 			CompletionTokens: int(completion.Usage.CompletionTokens),
 			TotalTokens:      int(completion.Usage.TotalTokens),
 		},
-	}
-
-	// Parse tool calls if present
-	if len(choice.Message.ToolCalls) > 0 {
-		toolCalls := make([]models.ToolCall, 0, len(choice.Message.ToolCalls))
-		for _, tc := range choice.Message.ToolCalls {
-			var args map[string]interface{}
-			if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
-				args = map[string]interface{}{"_raw": tc.Function.Arguments}
-			}
-
-			toolCalls = append(toolCalls, models.ToolCall{
-				ID:        tc.ID,
-				Name:      tc.Function.Name,
-				Arguments: args,
-			})
-		}
-		response.ToolCalls = toolCalls
-		response.FinishReason = models.FinishReasonToolCalls
-	}
-
-	return response, nil
+	}, nil
 }
 
 // convertHistoryToMessages converts conversation history to OpenAI messages format.
 //
 // OpenAI requires that tool result messages are preceded by an assistant message
-// containing the corresponding tool_calls. This function constructs the proper
-// message sequence including tool calls in assistant messages.
+// containing the corresponding tool_calls. Since our history stores FunctionCall
+// items separately (matching Codex), we need to group consecutive FunctionCall
+// items into a single assistant message with tool_calls.
 func (c *OpenAIClient) convertHistoryToMessages(history []models.ConversationItem) []openai.ChatCompletionMessageParamUnion {
 	messages := make([]openai.ChatCompletionMessageParamUnion, 0, len(history))
 
-	for _, item := range history {
+	i := 0
+	for i < len(history) {
+		item := history[i]
+
 		switch item.Type {
 		case models.ItemTypeUserMessage:
 			messages = append(messages, openai.UserMessage(item.Content))
+			i++
 
 		case models.ItemTypeAssistantMessage:
-			if len(item.ToolCalls) > 0 {
-				// Build tool calls for the assistant message
-				toolCalls := make([]openai.ChatCompletionMessageToolCallParam, 0, len(item.ToolCalls))
-				for _, tc := range item.ToolCalls {
-					argsJSON, _ := json.Marshal(tc.Arguments)
-					toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallParam{
-						ID: tc.ID,
-						Function: openai.ChatCompletionMessageToolCallFunctionParam{
-							Name:      tc.Name,
-							Arguments: string(argsJSON),
-						},
-					})
-				}
-
-				// Create assistant message with tool calls via OfAssistant pointer
+			// Check if followed by FunctionCall items - if so, bundle them
+			// into the assistant message's tool_calls (OpenAI format requirement)
+			toolCalls := collectFollowingFunctionCalls(history, i+1)
+			if len(toolCalls) > 0 {
 				assistantMsg := &openai.ChatCompletionAssistantMessageParam{
 					ToolCalls: toolCalls,
 				}
@@ -132,29 +133,68 @@ func (c *OpenAIClient) convertHistoryToMessages(history []models.ConversationIte
 				messages = append(messages, openai.ChatCompletionMessageParamUnion{
 					OfAssistant: assistantMsg,
 				})
+				i += 1 + len(toolCalls) // Skip assistant + function call items
 			} else {
 				messages = append(messages, openai.AssistantMessage(item.Content))
+				i++
 			}
 
-		case models.ItemTypeToolResult:
-			// Tool result message - must follow an assistant message with tool_calls
-			content := item.ToolOutput
-			if item.ToolError != "" {
-				content = fmt.Sprintf("Error: %s", item.ToolError)
+		case models.ItemTypeFunctionCall:
+			// Orphaned FunctionCall without preceding AssistantMessage -
+			// create an assistant message with just tool_calls
+			toolCalls := collectFunctionCallsFrom(history, i)
+			assistantMsg := &openai.ChatCompletionAssistantMessageParam{
+				ToolCalls: toolCalls,
 			}
-			messages = append(messages, openai.ToolMessage(content, item.ToolCallID))
+			messages = append(messages, openai.ChatCompletionMessageParamUnion{
+				OfAssistant: assistantMsg,
+			})
+			i += len(toolCalls)
+
+		case models.ItemTypeFunctionCallOutput:
+			content := ""
+			if item.Output != nil {
+				content = item.Output.Content
+			}
+			messages = append(messages, openai.ToolMessage(content, item.CallID))
+			i++
+
+		default:
+			i++
 		}
 	}
 
 	return messages
 }
 
-// buildToolDefinitions converts ToolSpecs to OpenAI tool definitions
+// collectFollowingFunctionCalls collects consecutive FunctionCall items starting at index.
+func collectFollowingFunctionCalls(history []models.ConversationItem, startIdx int) []openai.ChatCompletionMessageToolCallParam {
+	var toolCalls []openai.ChatCompletionMessageToolCallParam
+	for j := startIdx; j < len(history); j++ {
+		if history[j].Type != models.ItemTypeFunctionCall {
+			break
+		}
+		toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallParam{
+			ID: history[j].CallID,
+			Function: openai.ChatCompletionMessageToolCallFunctionParam{
+				Name:      history[j].Name,
+				Arguments: history[j].Arguments,
+			},
+		})
+	}
+	return toolCalls
+}
+
+// collectFunctionCallsFrom collects consecutive FunctionCall items starting at index.
+func collectFunctionCallsFrom(history []models.ConversationItem, startIdx int) []openai.ChatCompletionMessageToolCallParam {
+	return collectFollowingFunctionCalls(history, startIdx)
+}
+
+// buildToolDefinitions converts ToolSpecs to OpenAI tool definitions.
 func (c *OpenAIClient) buildToolDefinitions(specs []tools.ToolSpec) []openai.ChatCompletionToolParam {
 	toolDefs := make([]openai.ChatCompletionToolParam, 0, len(specs))
 
 	for _, spec := range specs {
-		// Convert parameters to JSON schema
 		properties := make(map[string]interface{})
 		required := make([]string, 0)
 
@@ -163,14 +203,13 @@ func (c *OpenAIClient) buildToolDefinitions(specs []tools.ToolSpec) []openai.Cha
 				"type":        p.Type,
 				"description": p.Description,
 			}
-
 			if p.Required {
 				required = append(required, p.Name)
 			}
 		}
 
 		funcDef := shared.FunctionDefinitionParam{
-			Name: spec.Name,
+			Name:        spec.Name,
 			Description: param.NewOpt(spec.Description),
 			Parameters: shared.FunctionParameters{
 				"type":       "object",
@@ -187,7 +226,7 @@ func (c *OpenAIClient) buildToolDefinitions(specs []tools.ToolSpec) []openai.Cha
 	return toolDefs
 }
 
-// classifyError categorizes an OpenAI API error
+// classifyError categorizes an OpenAI API error.
 func classifyError(err error) error {
 	errMsg := strings.ToLower(err.Error())
 	if strings.Contains(errMsg, "context_length") || strings.Contains(errMsg, "maximum context length") {

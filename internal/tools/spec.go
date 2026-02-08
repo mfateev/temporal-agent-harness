@@ -1,26 +1,30 @@
-// Package tools provides tool registry and handler implementations.
+// Package tools provides tool registry, routing, and handler specifications.
 //
 // Corresponds to: codex-rs/core/src/tools/
+// - registry.rs (tool handler registry)
+// - router.rs (tool dispatch and routing)
+// - spec.rs (tool specifications)
+// - context.rs (tool invocation context)
 package tools
 
-// ToolSpec defines the specification for a tool (for LLM prompt)
+// ToolSpec defines the specification for a tool (sent to LLM in prompt).
 //
-// Maps to: codex-rs/core/src/tools/spec.rs ToolSpec
+// Maps to: codex-rs/core/src/tools/spec.rs ToolSpec::Function
 type ToolSpec struct {
-	Name        string           `json:"name"`
-	Description string           `json:"description"`
-	Parameters  []ToolParameter  `json:"parameters"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  []ToolParameter `json:"parameters"`
 }
 
-// ToolParameter defines a parameter for a tool
+// ToolParameter defines a parameter for a tool.
 type ToolParameter struct {
 	Name        string `json:"name"`
-	Type        string `json:"type"`        // e.g., "string", "integer", "boolean"
+	Type        string `json:"type"`
 	Description string `json:"description"`
 	Required    bool   `json:"required"`
 }
 
-// NewShellToolSpec creates the specification for the shell tool
+// NewShellToolSpec creates the specification for the shell tool.
 //
 // Maps to: codex-rs/core/src/tools/handlers/shell.rs tool spec
 func NewShellToolSpec() ToolSpec {
@@ -38,7 +42,7 @@ func NewShellToolSpec() ToolSpec {
 	}
 }
 
-// NewReadFileToolSpec creates the specification for the read_file tool
+// NewReadFileToolSpec creates the specification for the read_file tool.
 //
 // Maps to: codex-rs/core/src/tools/handlers/read_file.rs tool spec
 func NewReadFileToolSpec() ToolSpec {

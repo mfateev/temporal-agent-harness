@@ -10,29 +10,29 @@ import (
 	"github.com/mfateev/codex-temporal-go/internal/tools"
 )
 
-// LLMRequest represents a request to the LLM
+// LLMRequest represents a request to the LLM.
 //
-// Maps to: codex-rs/core/src/client.rs ModelClientSession input
+// Maps to: codex-rs/core/src/client_common.rs Prompt
 type LLMRequest struct {
 	History     []models.ConversationItem `json:"history"`
 	ModelConfig models.ModelConfig        `json:"model_config"`
 	ToolSpecs   []tools.ToolSpec          `json:"tool_specs"`
 }
 
-// LLMResponse represents a response from the LLM
+// LLMResponse represents a response from the LLM.
+// Items contains all response items (assistant messages + function calls),
+// matching Codex's SamplingRequestResult which returns Vec<ResponseItem>.
 //
-// Maps to: codex-rs/core/src/client.rs ModelClientSession output
+// Maps to: codex-rs/core/src/codex.rs SamplingRequestResult
 type LLMResponse struct {
-	Content      string               `json:"content"`
-	ToolCalls    []models.ToolCall    `json:"tool_calls,omitempty"`
-	FinishReason models.FinishReason  `json:"finish_reason"`
-	TokenUsage   models.TokenUsage    `json:"token_usage"`
+	Items        []models.ConversationItem `json:"items"`
+	FinishReason models.FinishReason       `json:"finish_reason"`
+	TokenUsage   models.TokenUsage         `json:"token_usage"`
 }
 
-// LLMClient is the interface for LLM providers
+// LLMClient is the interface for LLM providers.
 //
 // Maps to: codex-rs/core/src/client.rs ModelClient trait
 type LLMClient interface {
-	// Call sends a request to the LLM and returns the complete response (buffered, not streaming)
 	Call(ctx context.Context, request LLMRequest) (LLMResponse, error)
 }

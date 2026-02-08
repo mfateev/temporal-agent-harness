@@ -4,6 +4,7 @@
 package workflow
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -17,43 +18,10 @@ import (
 	"github.com/mfateev/codex-temporal-go/internal/tools"
 )
 
-// WorkflowInput is the initial input to start a conversation
-//
-// Maps to: codex-rs/core/src/codex.rs run_turn input
-type WorkflowInput struct {
-	ConversationID string               `json:"conversation_id"`
-	UserMessage    string               `json:"user_message"`
-	ModelConfig    models.ModelConfig   `json:"model_config"`
-	ToolsConfig    models.ToolsConfig   `json:"tools_config"`
-}
-
-// WorkflowState is passed through ContinueAsNew
-//
-// Maps to: codex-rs/core/src/state/session.rs SessionState
-type WorkflowState struct {
-	ConversationID string                      `json:"conversation_id"`
-	History        *history.InMemoryHistory    `json:"history"`
-	ToolSpecs      []tools.ToolSpec            `json:"tool_specs"`
-	ModelConfig    models.ModelConfig          `json:"model_config"`
-
-	// Iteration tracking
-	IterationCount int `json:"iteration_count"`
-	MaxIterations  int `json:"max_iterations"`
-}
-
-// WorkflowResult is the final result of the workflow
-type WorkflowResult struct {
-	ConversationID    string   `json:"conversation_id"`
-	TotalIterations   int      `json:"total_iterations"`
-	TotalTokens       int      `json:"total_tokens"`
-	ToolCallsExecuted []string `json:"tool_calls_executed"`
-}
-
-// AgenticWorkflow is the main durable agentic loop
+// AgenticWorkflow is the main durable agentic loop.
 //
 // Maps to: codex-rs/core/src/codex.rs run_turn
 func AgenticWorkflow(ctx workflow.Context, input WorkflowInput) (WorkflowResult, error) {
-	// Initialize state on first run
 	state := WorkflowState{
 		ConversationID: input.ConversationID,
 		History:        history.NewInMemoryHistory(),
@@ -74,18 +42,17 @@ func AgenticWorkflow(ctx workflow.Context, input WorkflowInput) (WorkflowResult,
 		return WorkflowResult{}, fmt.Errorf("failed to add user message: %w", err)
 	}
 
-	// Run the agentic loop
 	return runAgenticLoop(ctx, state)
 }
 
-// AgenticWorkflowContinued handles ContinueAsNew
-//
-// This is called when the workflow continues after hitting max iterations
+// AgenticWorkflowContinued handles ContinueAsNew.
 func AgenticWorkflowContinued(ctx workflow.Context, state WorkflowState) (WorkflowResult, error) {
+	// Restore History interface from serialized HistoryItems
+	state.initHistory()
 	return runAgenticLoop(ctx, state)
 }
 
-// runAgenticLoop is the main loop logic
+// runAgenticLoop is the main loop logic.
 //
 // Maps to: codex-rs/core/src/codex.rs run_sampling_request
 func runAgenticLoop(ctx workflow.Context, state WorkflowState) (WorkflowResult, error) {
@@ -125,74 +92,85 @@ func runAgenticLoop(ctx workflow.Context, state WorkflowState) (WorkflowResult, 
 		err = workflow.ExecuteActivity(llmCtx, "ExecuteLLMCall", llmInput).Get(ctx, &llmResult)
 
 		if err != nil {
-			// Handle different error types
 			var activityErr *models.ActivityError
 			if errors.As(err, &activityErr) {
 				switch activityErr.Type {
 				case models.ErrorTypeContextOverflow:
-					// Trigger ContinueAsNew to compress history
 					logger.Warn("Context overflow, triggering ContinueAsNew")
 					state.IterationCount = 0
+					state.syncHistoryItems()
 					return WorkflowResult{}, workflow.NewContinueAsNewError(ctx, "AgenticWorkflowContinued", state)
 
 				case models.ErrorTypeAPILimit:
-					// Wait and retry
 					logger.Warn("API rate limit, sleeping for 1 minute")
 					workflow.Sleep(ctx, time.Minute)
 					continue
 
 				case models.ErrorTypeFatal:
-					// Stop workflow
 					return WorkflowResult{}, fmt.Errorf("fatal error: %w", err)
 				}
 			}
-			// For transient errors, Temporal will retry automatically
 			return WorkflowResult{}, fmt.Errorf("LLM activity failed: %w", err)
 		}
 
 		// Track token usage
 		totalTokens += llmResult.TokenUsage.TotalTokens
-		logger.Info("LLM call completed", "tokens", llmResult.TokenUsage.TotalTokens, "finish_reason", llmResult.FinishReason)
+		logger.Info("LLM call completed",
+			"tokens", llmResult.TokenUsage.TotalTokens,
+			"finish_reason", llmResult.FinishReason,
+			"items", len(llmResult.Items))
 
-		// Add assistant message to history
-		err = state.History.AddItem(models.ConversationItem{
-			Type:      models.ItemTypeAssistantMessage,
-			Content:   llmResult.Content,
-			ToolCalls: llmResult.ToolCalls,
-		})
-		if err != nil {
-			return WorkflowResult{}, fmt.Errorf("failed to add assistant message: %w", err)
+		// Add all LLM response items to history
+		// Matches Codex: record_into_history(items)
+		for _, item := range llmResult.Items {
+			if err := state.History.AddItem(item); err != nil {
+				return WorkflowResult{}, fmt.Errorf("failed to add response item: %w", err)
+			}
+		}
+
+		// Extract FunctionCall items for execution
+		// Matches Codex: separate function calls from response items
+		var functionCalls []models.ConversationItem
+		for _, item := range llmResult.Items {
+			if item.Type == models.ItemTypeFunctionCall {
+				functionCalls = append(functionCalls, item)
+			}
 		}
 
 		// Execute tools if present (parallel execution)
-		if len(llmResult.ToolCalls) > 0 {
-			logger.Info("Executing tools", "count", len(llmResult.ToolCalls))
+		if len(functionCalls) > 0 {
+			logger.Info("Executing tools", "count", len(functionCalls))
 
-			toolResults, err := executeToolsInParallel(ctx, llmResult.ToolCalls)
+			toolResults, err := executeToolsInParallel(ctx, functionCalls)
 			if err != nil {
 				return WorkflowResult{}, fmt.Errorf("failed to execute tools: %w", err)
 			}
 
 			// Track which tools were executed
-			for _, tc := range llmResult.ToolCalls {
-				toolCallsExecuted = append(toolCallsExecuted, tc.Name)
+			for _, fc := range functionCalls {
+				toolCallsExecuted = append(toolCallsExecuted, fc.Name)
 			}
 
-			// Add all tool results to history
+			// Add all tool results to history as FunctionCallOutput items
+			// Matches Codex: drain_in_flight() -> record results
 			for _, result := range toolResults {
-				item := models.ConversationItem{
-					Type:       models.ItemTypeToolResult,
-					ToolCallID: result.ToolCallID,
+				outputPayload := &models.FunctionCallOutputPayload{
+					Content: result.Content,
+					Success: result.Success,
 				}
-
 				if result.Error != "" {
-					item.ToolError = result.Error
-				} else {
-					item.ToolOutput = result.Output
+					outputPayload.Content = fmt.Sprintf("Error: %s", result.Error)
+					success := false
+					outputPayload.Success = &success
 				}
 
-				err = state.History.AddItem(item)
-				if err != nil {
+				item := models.ConversationItem{
+					Type:   models.ItemTypeFunctionCallOutput,
+					CallID: result.CallID,
+					Output: outputPayload,
+				}
+
+				if err := state.History.AddItem(item); err != nil {
 					return WorkflowResult{}, fmt.Errorf("failed to add tool result: %w", err)
 				}
 			}
@@ -202,9 +180,8 @@ func runAgenticLoop(ctx workflow.Context, state WorkflowState) (WorkflowResult, 
 			continue
 		}
 
-		// No tool calls - check finish reason
+		// No function calls - check finish reason
 		if llmResult.FinishReason == models.FinishReasonStop {
-			// Conversation completed naturally
 			logger.Info("Conversation completed", "iterations", state.IterationCount)
 			return WorkflowResult{
 				ConversationID:    state.ConversationID,
@@ -219,24 +196,22 @@ func runAgenticLoop(ctx workflow.Context, state WorkflowState) (WorkflowResult, 
 		break
 	}
 
-	// Max iterations reached - check if we should continue
+	// Max iterations reached
 	if state.IterationCount >= state.MaxIterations {
 		logger.Info("Max iterations reached, triggering ContinueAsNew")
 
-		// Check token count and consider ContinueAsNew
 		tokenCount, _ := state.History.EstimateTokenCount()
 		contextUsage := float64(tokenCount) / float64(state.ModelConfig.ContextWindow)
 
 		if contextUsage > 0.8 {
-			// High context usage, reset for ContinueAsNew
-			logger.Info("High context usage, resetting for ContinueAsNew", "usage", contextUsage)
+			logger.Info("High context usage", "usage", contextUsage)
 		}
 
 		state.IterationCount = 0
+		state.syncHistoryItems()
 		return WorkflowResult{}, workflow.NewContinueAsNewError(ctx, "AgenticWorkflowContinued", state)
 	}
 
-	// Workflow completed
 	return WorkflowResult{
 		ConversationID:    state.ConversationID,
 		TotalIterations:   state.IterationCount,
@@ -245,13 +220,12 @@ func runAgenticLoop(ctx workflow.Context, state WorkflowState) (WorkflowResult, 
 	}, nil
 }
 
-// executeToolsInParallel runs all tool activities in parallel and waits for all
+// executeToolsInParallel runs all tool activities in parallel and waits for all.
 //
 // Maps to: codex-rs/core/src/tools/parallel.rs drain_in_flight
-func executeToolsInParallel(ctx workflow.Context, toolCalls []models.ToolCall) ([]activities.ToolActivityOutput, error) {
+func executeToolsInParallel(ctx workflow.Context, functionCalls []models.ConversationItem) ([]activities.ToolActivityOutput, error) {
 	logger := workflow.GetLogger(ctx)
 
-	// Configure tool activity options
 	toolActivityOptions := workflow.ActivityOptions{
 		StartToCloseTimeout: 5 * time.Minute,
 		RetryPolicy: &temporal.RetryPolicy{
@@ -263,35 +237,43 @@ func executeToolsInParallel(ctx workflow.Context, toolCalls []models.ToolCall) (
 	}
 	toolCtx := workflow.WithActivityOptions(ctx, toolActivityOptions)
 
-	// Start all tool activities (parallel execution using futures)
-	futures := make([]workflow.Future, len(toolCalls))
-	for i, toolCall := range toolCalls {
-		logger.Info("Starting tool execution", "tool", toolCall.Name, "id", toolCall.ID)
+	// Start all tool activities in parallel using futures
+	futures := make([]workflow.Future, len(functionCalls))
+	for i, fc := range functionCalls {
+		logger.Info("Starting tool execution", "tool", fc.Name, "call_id", fc.CallID)
+
+		// Parse arguments from raw JSON string
+		var args map[string]interface{}
+		if fc.Arguments != "" {
+			if err := json.Unmarshal([]byte(fc.Arguments), &args); err != nil {
+				args = map[string]interface{}{"_raw": fc.Arguments}
+			}
+		}
 
 		input := activities.ToolActivityInput{
-			ToolCall: toolCall,
+			CallID:    fc.CallID,
+			ToolName:  fc.Name,
+			Arguments: args,
 		}
 		futures[i] = workflow.ExecuteActivity(toolCtx, "ExecuteTool", input)
 	}
 
 	// Wait for ALL tools to complete
-	results := make([]activities.ToolActivityOutput, len(toolCalls))
+	results := make([]activities.ToolActivityOutput, len(functionCalls))
 	for i, future := range futures {
 		var result activities.ToolActivityOutput
 		if err := future.Get(ctx, &result); err != nil {
-			// Activity itself failed (not tool execution failure)
-			// Record as tool error
-			logger.Error("Tool activity failed", "tool", toolCalls[i].Name, "error", err)
+			logger.Error("Tool activity failed", "tool", functionCalls[i].Name, "error", err)
 			results[i] = activities.ToolActivityOutput{
-				ToolCallID: toolCalls[i].ID,
-				Error:      fmt.Sprintf("Activity execution failed: %v", err),
+				CallID: functionCalls[i].CallID,
+				Error:  fmt.Sprintf("Activity execution failed: %v", err),
 			}
 		} else {
 			results[i] = result
 			if result.Error != "" {
-				logger.Warn("Tool execution returned error", "tool", toolCalls[i].Name, "error", result.Error)
+				logger.Warn("Tool execution returned error", "tool", functionCalls[i].Name, "error", result.Error)
 			} else {
-				logger.Info("Tool execution completed", "tool", toolCalls[i].Name)
+				logger.Info("Tool execution completed", "tool", functionCalls[i].Name)
 			}
 		}
 	}
@@ -299,7 +281,7 @@ func executeToolsInParallel(ctx workflow.Context, toolCalls []models.ToolCall) (
 	return results, nil
 }
 
-// buildToolSpecs builds tool specifications based on configuration
+// buildToolSpecs builds tool specifications based on configuration.
 func buildToolSpecs(config models.ToolsConfig) []tools.ToolSpec {
 	specs := []tools.ToolSpec{}
 
@@ -310,11 +292,6 @@ func buildToolSpecs(config models.ToolsConfig) []tools.ToolSpec {
 	if config.EnableReadFile {
 		specs = append(specs, tools.NewReadFileToolSpec())
 	}
-
-	// Future: Add more tools as they're implemented
-	// if config.EnableWriteFile {
-	//     specs = append(specs, tools.NewWriteFileToolSpec())
-	// }
 
 	return specs
 }

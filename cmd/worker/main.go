@@ -13,6 +13,7 @@ import (
 	"github.com/mfateev/codex-temporal-go/internal/activities"
 	"github.com/mfateev/codex-temporal-go/internal/llm"
 	"github.com/mfateev/codex-temporal-go/internal/tools"
+	"github.com/mfateev/codex-temporal-go/internal/tools/handlers"
 	"github.com/mfateev/codex-temporal-go/internal/workflow"
 )
 
@@ -42,15 +43,13 @@ func main() {
 	w.RegisterWorkflow(workflow.AgenticWorkflow)
 	w.RegisterWorkflow(workflow.AgenticWorkflowContinued)
 
-	// Create tool registry
+	// Create tool registry with handlers
+	// Maps to: codex-rs/core/src/tools/registry.rs ToolRegistry setup
 	toolRegistry := tools.NewToolRegistry()
-	toolRegistry.Register(tools.NewShellTool(), tools.NewShellToolSpec())
-	toolRegistry.Register(tools.NewReadFileTool(), tools.NewReadFileToolSpec())
+	toolRegistry.Register(handlers.NewShellTool())
+	toolRegistry.Register(handlers.NewReadFileTool())
 
-	log.Printf("Registered %d tools: ", toolRegistry.ToolCount())
-	for _, spec := range toolRegistry.GetToolSpecs() {
-		log.Printf("  - %s: %s", spec.Name, spec.Description)
-	}
+	log.Printf("Registered %d tools", toolRegistry.ToolCount())
 
 	// Create LLM client
 	llmClient := llm.NewOpenAIClient()
