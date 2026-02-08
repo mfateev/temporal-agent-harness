@@ -4,9 +4,12 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"os/exec"
 
+	"github.com/mfateev/codex-temporal-go/internal/command_safety"
+	execpkg "github.com/mfateev/codex-temporal-go/internal/exec"
 	"github.com/mfateev/codex-temporal-go/internal/tools"
 )
 
@@ -30,11 +33,21 @@ func (t *ShellTool) Kind() tools.ToolKind {
 	return tools.ToolKindFunction
 }
 
-// IsMutating returns true - shell commands can modify the environment.
+// IsMutating returns true if the command might modify the environment.
+// Uses command safety classification to identify read-only commands.
 //
 // Maps to: codex-rs/core/src/tools/handlers/shell.rs is_mutating
 func (t *ShellTool) IsMutating(invocation *tools.ToolInvocation) bool {
-	return true
+	commandArg, ok := invocation.Arguments["command"]
+	if !ok {
+		return true // Can't determine safety without a command
+	}
+	command, ok := commandArg.(string)
+	if !ok || command == "" {
+		return true
+	}
+	cmdVec := []string{"bash", "-c", command}
+	return !command_safety.IsKnownSafeCommand(cmdVec)
 }
 
 // Handle executes a shell command. Timeout is managed by Temporal's
@@ -61,7 +74,16 @@ func (t *ShellTool) Handle(ctx context.Context, invocation *tools.ToolInvocation
 	if invocation.Cwd != "" {
 		cmd.Dir = invocation.Cwd
 	}
-	output, err := cmd.CombinedOutput()
+
+	// Capture stdout and stderr separately for smart aggregation with output limiting.
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+
+	err := cmd.Run()
+
+	// Aggregate and limit output.
+	output := execpkg.AggregateOutput(stdoutBuf.Bytes(), stderrBuf.Bytes())
 
 	if err != nil {
 		if ctx.Err() != nil {

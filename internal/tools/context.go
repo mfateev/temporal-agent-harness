@@ -31,3 +31,26 @@ type ToolInvocation struct {
 	Cwd       string                 `json:"cwd,omitempty"` // Working directory for tool execution
 	// Future: Session context, turn context, diff tracker
 }
+
+// ExecApprovalRequirement classifies what approval a command needs before execution.
+// Foundation type for the future approval system (not wired yet).
+//
+// Maps to: codex-rs/core/src/tools/context.rs (approval concepts)
+type ExecApprovalRequirement int
+
+const (
+	// ApprovalSkip means the command is safe and no approval is needed.
+	ApprovalSkip ExecApprovalRequirement = iota
+	// ApprovalNeeded means the command requires user approval before execution.
+	ApprovalNeeded
+	// ApprovalForbidden means the command is forbidden and must not be executed.
+	ApprovalForbidden
+)
+
+// CommandSafetyClassification holds the result of classifying a command's safety.
+type CommandSafetyClassification struct {
+	Requirement ExecApprovalRequirement
+	Reason      string
+	IsSafe      bool
+	IsDangerous bool
+}
