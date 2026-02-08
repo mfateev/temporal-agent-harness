@@ -2,6 +2,7 @@ package activities
 
 import (
 	"context"
+	"errors"
 
 	"github.com/mfateev/codex-temporal-go/internal/models"
 	"github.com/mfateev/codex-temporal-go/internal/tools"
@@ -69,7 +70,17 @@ func (a *ToolActivities) ExecuteTool(ctx context.Context, input ToolActivityInpu
 		if ctx.Err() != nil {
 			return ToolActivityOutput{}, ctx.Err()
 		}
-		// All other handler errors are validation failures (non-retryable).
+
+		// Check error type to determine retry behavior:
+		// - TransientError: retryable (e.g., RPC 500, network timeout)
+		// - ValidationError: non-retryable (e.g., missing argument)
+		// - Other errors: assume non-retryable (validation/permanent)
+		var transientErr *tools.TransientError
+		if errors.As(err, &transientErr) {
+			return ToolActivityOutput{}, models.NewToolTransientError(input.ToolName, err)
+		}
+
+		// Validation errors and unknown errors are non-retryable
 		return ToolActivityOutput{}, models.NewToolValidationError(input.ToolName, err)
 	}
 

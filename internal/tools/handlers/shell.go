@@ -5,7 +5,6 @@ package handlers
 
 import (
 	"context"
-	"fmt"
 	"os/exec"
 
 	"github.com/mfateev/codex-temporal-go/internal/tools"
@@ -46,16 +45,16 @@ func (t *ShellTool) IsMutating(invocation *tools.ToolInvocation) bool {
 func (t *ShellTool) Handle(ctx context.Context, invocation *tools.ToolInvocation) (*tools.ToolOutput, error) {
 	commandArg, ok := invocation.Arguments["command"]
 	if !ok {
-		return nil, fmt.Errorf("missing required argument: command")
+		return nil, tools.NewValidationError("missing required argument: command")
 	}
 
 	command, ok := commandArg.(string)
 	if !ok {
-		return nil, fmt.Errorf("command must be a string")
+		return nil, tools.NewValidationError("command must be a string")
 	}
 
 	if command == "" {
-		return nil, fmt.Errorf("command cannot be empty")
+		return nil, tools.NewValidationError("command cannot be empty")
 	}
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)

@@ -41,16 +41,16 @@ func (t *ReadFileTool) IsMutating(invocation *tools.ToolInvocation) bool {
 func (t *ReadFileTool) Handle(_ context.Context, invocation *tools.ToolInvocation) (*tools.ToolOutput, error) {
 	pathArg, ok := invocation.Arguments["path"]
 	if !ok {
-		return nil, fmt.Errorf("missing required argument: path")
+		return nil, tools.NewValidationError("missing required argument: path")
 	}
 
 	path, ok := pathArg.(string)
 	if !ok {
-		return nil, fmt.Errorf("path must be a string")
+		return nil, tools.NewValidationError("path must be a string")
 	}
 
 	if path == "" {
-		return nil, fmt.Errorf("path cannot be empty")
+		return nil, tools.NewValidationError("path cannot be empty")
 	}
 
 	offset := 0
@@ -61,7 +61,7 @@ func (t *ReadFileTool) Handle(_ context.Context, invocation *tools.ToolInvocatio
 		case float64:
 			offset = int(v)
 		default:
-			return nil, fmt.Errorf("offset must be an integer")
+			return nil, tools.NewValidationError("offset must be an integer")
 		}
 	}
 
@@ -73,7 +73,7 @@ func (t *ReadFileTool) Handle(_ context.Context, invocation *tools.ToolInvocatio
 		case float64:
 			limit = int(v)
 		default:
-			return nil, fmt.Errorf("limit must be an integer")
+			return nil, tools.NewValidationError("limit must be an integer")
 		}
 	}
 
