@@ -1,0 +1,24 @@
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Binaries
+worker
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binaries
+*.test
+
+# Output of go coverage
+*.out
+
+# Dependency directories
+vendor/
+
+# OS files
+.DS_Store
