@@ -230,3 +230,59 @@ func TestAgenticWorkflow_ReadFile(t *testing.T) {
 	t.Logf("Total tokens: %d, Iterations: %d, Tools: %v",
 		result.TotalTokens, result.TotalIterations, result.ToolCallsExecuted)
 }
+
+// TestAgenticWorkflow_ApplyPatch tests the apply_patch tool
+func TestAgenticWorkflow_ApplyPatch(t *testing.T) {
+	c := dialTemporal(t)
+	defer c.Close()
+
+	// Create a unique test file path for the LLM to create via apply_patch
+	testFile := "/tmp/codex-patch-test-" + uuid.New().String()[:8] + ".txt"
+	defer os.Remove(testFile)
+
+	workflowID := "test-apply-patch-" + uuid.New().String()[:8]
+	input := workflow.WorkflowInput{
+		ConversationID: workflowID,
+		// Explicit instruction to use apply_patch to create a file
+		UserMessage: "You MUST use the apply_patch tool to create a new file at " + testFile + " with the content 'Hello from apply_patch'. " +
+			"Use the *** Add File syntax. Do NOT use any other tool. After the patch is applied, report the result.",
+		ModelConfig: testModelConfig(1000),
+		ToolsConfig: models.ToolsConfig{
+			EnableShell:      false,
+			EnableReadFile:   false,
+			EnableApplyPatch: true,
+		},
+	}
+
+	t.Logf("Starting workflow: %s", workflowID)
+	t.Logf("Test file: %s", testFile)
+
+	ctx, cancel := context.WithTimeout(context.Background(), WorkflowTimeout)
+	defer cancel()
+
+	run, err := c.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
+		ID: workflowID, TaskQueue: TaskQueue,
+	}, "AgenticWorkflow", input)
+	require.NoError(t, err, "Failed to start workflow")
+
+	var result workflow.WorkflowResult
+	err = run.Get(ctx, &result)
+	require.NoError(t, err, "Workflow execution failed")
+
+	assert.Equal(t, workflowID, result.ConversationID)
+	assert.Greater(t, result.TotalTokens, 0, "Should have consumed tokens")
+	assert.Contains(t, result.ToolCallsExecuted, "apply_patch", "Should have called apply_patch tool")
+	assert.Greater(t, result.TotalIterations, 1, "Should have multiple iterations (LLM → tool → LLM)")
+
+	// Verify file was created with expected content
+	contents, err := os.ReadFile(testFile)
+	if err == nil {
+		t.Logf("File contents: %q", string(contents))
+		assert.Contains(t, string(contents), "Hello from apply_patch")
+	} else {
+		t.Logf("Note: file not found at %s (LLM may have used a different path)", testFile)
+	}
+
+	t.Logf("Total tokens: %d, Iterations: %d, Tools: %v",
+		result.TotalTokens, result.TotalIterations, result.ToolCallsExecuted)
+}

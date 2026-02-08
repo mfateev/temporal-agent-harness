@@ -10,9 +10,10 @@ package tools
 // Default timeouts in milliseconds.
 // Maps to: codex-rs/core/src/exec.rs DEFAULT_EXEC_COMMAND_TIMEOUT_MS
 const (
-	DefaultShellTimeoutMs    = 10_000  // 10s — matches Codex default
-	DefaultReadFileTimeoutMs = 30_000  // 30s
-	DefaultToolTimeoutMs     = 120_000 // 2min — fallback for tools without a default
+	DefaultShellTimeoutMs      = 10_000  // 10s — matches Codex default
+	DefaultReadFileTimeoutMs   = 30_000  // 30s
+	DefaultApplyPatchTimeoutMs = 30_000  // 30s
+	DefaultToolTimeoutMs       = 120_000 // 2min — fallback for tools without a default
 )
 
 // ToolSpec defines the specification for a tool (sent to LLM in prompt).
@@ -90,5 +91,55 @@ func NewReadFileToolSpec() ToolSpec {
 			},
 		},
 		DefaultTimeoutMs: DefaultReadFileTimeoutMs,
+	}
+}
+
+// NewApplyPatchToolSpec creates the specification for the apply_patch tool.
+//
+// Maps to: codex-rs/core/src/tools/handlers/apply_patch.rs create_apply_patch_json_tool
+func NewApplyPatchToolSpec() ToolSpec {
+	return ToolSpec{
+		Name: "apply_patch",
+		Description: `Use the apply_patch tool to edit files.
+Your patch language is a stripped-down, file-oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high-level envelope:
+
+*** Begin Patch
+[ one or more file sections ]
+*** End Patch
+
+Within that envelope, you get a sequence of file operations.
+You MUST include a header to specify the action you are taking.
+Each operation starts with one of three headers:
+
+*** Add File: <path> - create a new file. Every following line is a + line (the initial contents).
+*** Delete File: <path> - remove an existing file. Nothing follows.
+*** Update File: <path> - patch an existing file in place (optionally with a rename).
+
+May be immediately followed by *** Move to: <new path> if you want to rename the file.
+Then one or more "hunks", each introduced by @@ (optionally followed by a hunk header).
+Within a hunk each line starts with ' ' (context), '-' (removed), or '+' (added).
+
+For context: show 3 lines of code immediately above and 3 lines immediately below each change. If 3 lines of context is insufficient to uniquely identify the snippet of code within the file, use the @@ operator to indicate the class or function to which the snippet belongs.
+
+The full grammar:
+Patch := Begin { FileOp } End
+Begin := "*** Begin Patch" NEWLINE
+End := "*** End Patch" NEWLINE
+FileOp := AddFile | DeleteFile | UpdateFile
+AddFile := "*** Add File: " path NEWLINE { "+" line NEWLINE }
+DeleteFile := "*** Delete File: " path NEWLINE
+UpdateFile := "*** Update File: " path NEWLINE [ MoveTo ] { Hunk }
+MoveTo := "*** Move to: " newPath NEWLINE
+Hunk := "@@" [ header ] NEWLINE { HunkLine } [ "*** End of File" NEWLINE ]
+HunkLine := (" " | "-" | "+") text NEWLINE`,
+		Parameters: []ToolParameter{
+			{
+				Name:        "input",
+				Type:        "string",
+				Description: "The entire contents of the apply_patch command",
+				Required:    true,
+			},
+		},
+		DefaultTimeoutMs: DefaultApplyPatchTimeoutMs,
 	}
 }

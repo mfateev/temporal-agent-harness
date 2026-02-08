@@ -48,6 +48,7 @@ func main() {
 	toolRegistry := tools.NewToolRegistry()
 	toolRegistry.Register(handlers.NewShellTool())
 	toolRegistry.Register(handlers.NewReadFileTool())
+	toolRegistry.Register(handlers.NewApplyPatchTool())
 
 	log.Printf("Registered %d tools", toolRegistry.ToolCount())
 
