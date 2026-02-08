@@ -142,7 +142,7 @@ func runAgenticLoop(ctx workflow.Context, state WorkflowState) (WorkflowResult, 
 		if len(functionCalls) > 0 {
 			logger.Info("Executing tools", "count", len(functionCalls))
 
-			toolResults, err := executeToolsInParallel(ctx, functionCalls)
+			toolResults, err := executeToolsInParallel(ctx, functionCalls, state.ToolSpecs)
 			if err != nil {
 				return WorkflowResult{}, fmt.Errorf("failed to execute tools: %w", err)
 			}
@@ -220,20 +220,20 @@ func runAgenticLoop(ctx workflow.Context, state WorkflowState) (WorkflowResult, 
 
 // executeToolsInParallel runs all tool activities in parallel and waits for all.
 //
+// Each tool gets a per-activity StartToCloseTimeout derived from:
+//  1. timeout_ms argument provided by the LLM (highest priority)
+//  2. DefaultTimeoutMs from the tool's ToolSpec
+//  3. DefaultToolTimeoutMs constant as a fallback
+//
 // Maps to: codex-rs/core/src/tools/parallel.rs drain_in_flight
-func executeToolsInParallel(ctx workflow.Context, functionCalls []models.ConversationItem) ([]activities.ToolActivityOutput, error) {
+func executeToolsInParallel(ctx workflow.Context, functionCalls []models.ConversationItem, toolSpecs []tools.ToolSpec) ([]activities.ToolActivityOutput, error) {
 	logger := workflow.GetLogger(ctx)
 
-	toolActivityOptions := workflow.ActivityOptions{
-		StartToCloseTimeout: 5 * time.Minute,
-		RetryPolicy: &temporal.RetryPolicy{
-			InitialInterval:    time.Second,
-			BackoffCoefficient: 2.0,
-			MaximumInterval:    time.Minute,
-			MaximumAttempts:    5,
-		},
+	// Build a lookup map from tool name to spec for fast access.
+	specByName := make(map[string]tools.ToolSpec, len(toolSpecs))
+	for _, spec := range toolSpecs {
+		specByName[spec.Name] = spec
 	}
-	toolCtx := workflow.WithActivityOptions(ctx, toolActivityOptions)
 
 	// Start all tool activities in parallel using futures
 	futures := make([]workflow.Future, len(functionCalls))
@@ -247,6 +247,19 @@ func executeToolsInParallel(ctx workflow.Context, functionCalls []models.Convers
 				args = map[string]interface{}{"_raw": fc.Arguments}
 			}
 		}
+
+		// Resolve per-tool timeout for StartToCloseTimeout.
+		timeout := resolveToolTimeout(specByName, fc.Name, args)
+
+		toolCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+			StartToCloseTimeout: timeout,
+			RetryPolicy: &temporal.RetryPolicy{
+				InitialInterval:    time.Second,
+				BackoffCoefficient: 2.0,
+				MaximumInterval:    time.Minute,
+				MaximumAttempts:    5,
+			},
+		})
 
 		input := activities.ToolActivityInput{
 			CallID:    fc.CallID,
@@ -336,4 +349,44 @@ func toolActivityErrorToOutput(logger log.Logger, callID, toolName string, err e
 		Content: reason,
 		Success: &success,
 	}
+}
+
+// resolveToolTimeout determines the StartToCloseTimeout for a tool activity.
+//
+// Priority:
+//  1. timeout_ms argument from LLM (per-invocation override)
+//  2. DefaultTimeoutMs from the tool's ToolSpec
+//  3. DefaultToolTimeoutMs constant as a global fallback
+//
+// Maps to: codex-rs/core/src/exec.rs timeout resolution for tool commands
+func resolveToolTimeout(specByName map[string]tools.ToolSpec, toolName string, args map[string]interface{}) time.Duration {
+	// 1. Check for LLM-provided timeout_ms in arguments.
+	if args != nil {
+		if v, ok := args["timeout_ms"]; ok {
+			if ms, ok := toInt64(v); ok && ms > 0 {
+				return time.Duration(ms) * time.Millisecond
+			}
+		}
+	}
+
+	// 2. Use the tool spec's default timeout.
+	if spec, ok := specByName[toolName]; ok && spec.DefaultTimeoutMs > 0 {
+		return time.Duration(spec.DefaultTimeoutMs) * time.Millisecond
+	}
+
+	// 3. Global fallback.
+	return time.Duration(tools.DefaultToolTimeoutMs) * time.Millisecond
+}
+
+// toInt64 converts a JSON-decoded number (float64) to int64.
+func toInt64(v interface{}) (int64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int64(n), true
+	case int64:
+		return n, true
+	case int:
+		return int64(n), true
+	}
+	return 0, false
 }

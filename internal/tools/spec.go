@@ -7,6 +7,14 @@
 // - context.rs (tool invocation context)
 package tools
 
+// Default timeouts in milliseconds.
+// Maps to: codex-rs/core/src/exec.rs DEFAULT_EXEC_COMMAND_TIMEOUT_MS
+const (
+	DefaultShellTimeoutMs    = 10_000  // 10s — matches Codex default
+	DefaultReadFileTimeoutMs = 30_000  // 30s
+	DefaultToolTimeoutMs     = 120_000 // 2min — fallback for tools without a default
+)
+
 // ToolSpec defines the specification for a tool (sent to LLM in prompt).
 //
 // Maps to: codex-rs/core/src/tools/spec.rs ToolSpec::Function
@@ -14,6 +22,11 @@ type ToolSpec struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	Parameters  []ToolParameter `json:"parameters"`
+
+	// DefaultTimeoutMs is the default StartToCloseTimeout for this tool's
+	// activity when the LLM does not provide a timeout_ms argument.
+	// Tools that expose timeout_ms as a parameter let the LLM override this.
+	DefaultTimeoutMs int64 `json:"-"` // not sent to LLM
 }
 
 // ToolParameter defines a parameter for a tool.
@@ -26,7 +39,7 @@ type ToolParameter struct {
 
 // NewShellToolSpec creates the specification for the shell tool.
 //
-// Maps to: codex-rs/core/src/tools/handlers/shell.rs tool spec
+// Maps to: codex-rs/core/src/tools/spec.rs shell tool spec
 func NewShellToolSpec() ToolSpec {
 	return ToolSpec{
 		Name:        "shell",
@@ -38,7 +51,14 @@ func NewShellToolSpec() ToolSpec {
 				Description: "The shell command to execute (will be run with bash -c)",
 				Required:    true,
 			},
+			{
+				Name:        "timeout_ms",
+				Type:        "number",
+				Description: "The timeout for the command in milliseconds. Defaults to 10000 (10s). Use longer timeouts for builds, installs, or test suites.",
+				Required:    false,
+			},
 		},
+		DefaultTimeoutMs: DefaultShellTimeoutMs,
 	}
 }
 
@@ -69,5 +89,6 @@ func NewReadFileToolSpec() ToolSpec {
 				Required:    false,
 			},
 		},
+		DefaultTimeoutMs: DefaultReadFileTimeoutMs,
 	}
 }
