@@ -65,7 +65,7 @@ func (t *ShellTool) Handle(invocation *tools.ToolInvocation) (*tools.ToolOutput,
 
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return nil, fmt.Errorf("command timed out after 5 minutes")
+			return nil, fmt.Errorf("command timed out after 5 minutes: %w", context.DeadlineExceeded)
 		}
 		// Command failed but produced output - return as tool result with Success=false
 		success := false

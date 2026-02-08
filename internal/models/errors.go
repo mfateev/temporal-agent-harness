@@ -1,6 +1,10 @@
 package models
 
-import "fmt"
+import (
+	"fmt"
+
+	"go.temporal.io/sdk/temporal"
+)
 
 // ErrorType categorizes errors for appropriate handling
 //
@@ -91,4 +95,72 @@ func NewFatalError(message string) *ActivityError {
 		Retryable: false,
 		Message:   message,
 	}
+}
+
+// Tool error type strings for temporal.ApplicationError.Type().
+// Use these constants to match errors on the workflow side via appErr.Type().
+// Never parse error messages — use appErr.Details() for structured data.
+const (
+	// ToolErrTypeNotFound indicates the requested tool is not registered.
+	// Non-retryable: the tool won't appear on retry.
+	ToolErrTypeNotFound = "ToolNotFound"
+
+	// ToolErrTypeValidation indicates invalid or missing arguments.
+	// Non-retryable: the same bad input will be sent on retry.
+	ToolErrTypeValidation = "ToolValidation"
+
+	// ToolErrTypeTimeout indicates the tool execution timed out.
+	// Non-retryable: the same long-running command will likely time out again.
+	ToolErrTypeTimeout = "ToolTimeout"
+
+	// ToolErrTypeTransient indicates a temporary infrastructure issue
+	// (e.g., resource temporarily unavailable). Retryable.
+	ToolErrTypeTransient = "ToolTransient"
+)
+
+// ToolErrorDetails carries structured context in ApplicationError.Details().
+// Extract on the workflow side via: appErr.Details(&details)
+type ToolErrorDetails struct {
+	ToolName string `json:"tool_name"`
+	Reason   string `json:"reason"` // Human-readable reason for LLM context
+}
+
+// NewToolNotFoundError creates a non-retryable ApplicationError for missing tools.
+func NewToolNotFoundError(toolName string) error {
+	return temporal.NewNonRetryableApplicationError(
+		"tool not found",
+		ToolErrTypeNotFound,
+		nil,
+		ToolErrorDetails{ToolName: toolName, Reason: fmt.Sprintf("tool %q is not registered", toolName)},
+	)
+}
+
+// NewToolValidationError creates a non-retryable ApplicationError for invalid arguments.
+func NewToolValidationError(toolName string, cause error) error {
+	return temporal.NewNonRetryableApplicationError(
+		"tool validation failed",
+		ToolErrTypeValidation,
+		cause,
+		ToolErrorDetails{ToolName: toolName, Reason: cause.Error()},
+	)
+}
+
+// NewToolTimeoutError creates a non-retryable ApplicationError for tool timeouts.
+func NewToolTimeoutError(toolName string, cause error) error {
+	return temporal.NewNonRetryableApplicationError(
+		"tool execution timed out",
+		ToolErrTypeTimeout,
+		cause,
+		ToolErrorDetails{ToolName: toolName, Reason: cause.Error()},
+	)
+}
+
+// NewToolTransientError creates a retryable ApplicationError for temporary failures.
+func NewToolTransientError(toolName string, cause error) error {
+	return temporal.NewApplicationErrorWithCause(
+		"tool transient failure",
+		ToolErrTypeTransient,
+		cause,
+		ToolErrorDetails{ToolName: toolName, Reason: cause.Error()},
+	)
 }

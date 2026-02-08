@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"go.temporal.io/sdk/log"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
@@ -151,17 +152,14 @@ func runAgenticLoop(ctx workflow.Context, state WorkflowState) (WorkflowResult, 
 				toolCallsExecuted = append(toolCallsExecuted, fc.Name)
 			}
 
-			// Add all tool results to history as FunctionCallOutput items
+			// Add all tool results to history as FunctionCallOutput items.
+			// Errors from tool activities have already been converted to
+			// results with Success=false in executeToolsInParallel.
 			// Matches Codex: drain_in_flight() -> record results
 			for _, result := range toolResults {
 				outputPayload := &models.FunctionCallOutputPayload{
 					Content: result.Content,
 					Success: result.Success,
-				}
-				if result.Error != "" {
-					outputPayload.Content = fmt.Sprintf("Error: %s", result.Error)
-					success := false
-					outputPayload.Success = &success
 				}
 
 				item := models.ConversationItem{
@@ -258,23 +256,17 @@ func executeToolsInParallel(ctx workflow.Context, functionCalls []models.Convers
 		futures[i] = workflow.ExecuteActivity(toolCtx, "ExecuteTool", input)
 	}
 
-	// Wait for ALL tools to complete
+	// Wait for ALL tools to complete.
+	// Activity errors (ApplicationError) are converted to failed tool results
+	// so the LLM can see what went wrong and decide how to proceed.
 	results := make([]activities.ToolActivityOutput, len(functionCalls))
 	for i, future := range futures {
 		var result activities.ToolActivityOutput
 		if err := future.Get(ctx, &result); err != nil {
-			logger.Error("Tool activity failed", "tool", functionCalls[i].Name, "error", err)
-			results[i] = activities.ToolActivityOutput{
-				CallID: functionCalls[i].CallID,
-				Error:  fmt.Sprintf("Activity execution failed: %v", err),
-			}
+			results[i] = toolActivityErrorToOutput(logger, functionCalls[i].CallID, functionCalls[i].Name, err)
 		} else {
 			results[i] = result
-			if result.Error != "" {
-				logger.Warn("Tool execution returned error", "tool", functionCalls[i].Name, "error", result.Error)
-			} else {
-				logger.Info("Tool execution completed", "tool", functionCalls[i].Name)
-			}
+			logger.Info("Tool execution completed", "tool", functionCalls[i].Name)
 		}
 	}
 
@@ -294,4 +286,39 @@ func buildToolSpecs(config models.ToolsConfig) []tools.ToolSpec {
 	}
 
 	return specs
+}
+
+// toolActivityErrorToOutput converts a tool activity error into a ToolActivityOutput
+// so the LLM can see what went wrong and decide how to proceed.
+//
+// Uses ApplicationError.Type() for classification and .Details() for structured context.
+// Never parses error messages.
+func toolActivityErrorToOutput(logger log.Logger, callID, toolName string, err error) activities.ToolActivityOutput {
+	success := false
+	reason := "unknown error"
+
+	var appErr *temporal.ApplicationError
+	if errors.As(err, &appErr) {
+		logger.Warn("Tool activity failed",
+			"tool", toolName,
+			"error_type", appErr.Type(),
+			"non_retryable", appErr.NonRetryable())
+
+		// Extract structured context from Details — never parse the message.
+		var details models.ToolErrorDetails
+		if appErr.HasDetails() {
+			_ = appErr.Details(&details)
+			reason = details.Reason
+		}
+	} else {
+		logger.Error("Tool activity failed with non-ApplicationError",
+			"tool", toolName, "error", err)
+		reason = "activity execution failed"
+	}
+
+	return activities.ToolActivityOutput{
+		CallID:  callID,
+		Content: reason,
+		Success: &success,
+	}
 }
