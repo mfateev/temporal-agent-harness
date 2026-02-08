@@ -302,6 +302,10 @@ func buildToolSpecs(config models.ToolsConfig) []tools.ToolSpec {
 		specs = append(specs, tools.NewWriteFileToolSpec())
 	}
 
+	if config.EnableListDir {
+		specs = append(specs, tools.NewListDirToolSpec())
+	}
+
 	if config.EnableApplyPatch {
 		specs = append(specs, tools.NewApplyPatchToolSpec())
 	}

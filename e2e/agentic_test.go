@@ -14,6 +14,7 @@ package e2e
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -226,6 +227,55 @@ func TestAgenticWorkflow_ReadFile(t *testing.T) {
 	assert.Equal(t, workflowID, result.ConversationID)
 	assert.Greater(t, result.TotalTokens, 0, "Should have consumed tokens")
 	assert.Contains(t, result.ToolCallsExecuted, "read_file", "Should have called read_file tool")
+
+	t.Logf("Total tokens: %d, Iterations: %d, Tools: %v",
+		result.TotalTokens, result.TotalIterations, result.ToolCallsExecuted)
+}
+
+// TestAgenticWorkflow_ListDir tests the list_dir tool
+func TestAgenticWorkflow_ListDir(t *testing.T) {
+	c := dialTemporal(t)
+	defer c.Close()
+
+	// Create a temporary directory with known contents for the LLM to list.
+	testDir := "/tmp/codex-listdir-test-" + uuid.New().String()[:8]
+	require.NoError(t, os.MkdirAll(filepath.Join(testDir, "subdir"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "hello.txt"), []byte("hello"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "subdir", "nested.txt"), []byte("nested"), 0o644))
+	defer os.RemoveAll(testDir)
+
+	workflowID := "test-list-dir-" + uuid.New().String()[:8]
+	input := workflow.WorkflowInput{
+		ConversationID: workflowID,
+		UserMessage: "You MUST use the list_dir tool to list the directory at " + testDir + ". " +
+			"Do NOT use any other tool. After listing, report the entries you see.",
+		ModelConfig: testModelConfig(500),
+		ToolsConfig: models.ToolsConfig{
+			EnableShell:    false,
+			EnableReadFile: false,
+			EnableListDir:  true,
+		},
+	}
+
+	t.Logf("Starting workflow: %s", workflowID)
+	t.Logf("Test dir: %s", testDir)
+
+	ctx, cancel := context.WithTimeout(context.Background(), WorkflowTimeout)
+	defer cancel()
+
+	run, err := c.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
+		ID: workflowID, TaskQueue: TaskQueue,
+	}, "AgenticWorkflow", input)
+	require.NoError(t, err, "Failed to start workflow")
+
+	var result workflow.WorkflowResult
+	err = run.Get(ctx, &result)
+	require.NoError(t, err, "Workflow execution failed")
+
+	assert.Equal(t, workflowID, result.ConversationID)
+	assert.Greater(t, result.TotalTokens, 0, "Should have consumed tokens")
+	assert.Contains(t, result.ToolCallsExecuted, "list_dir", "Should have called list_dir tool")
+	assert.Greater(t, result.TotalIterations, 1, "Should have multiple iterations (LLM → tool → LLM)")
 
 	t.Logf("Total tokens: %d, Iterations: %d, Tools: %v",
 		result.TotalTokens, result.TotalIterations, result.ToolCallsExecuted)

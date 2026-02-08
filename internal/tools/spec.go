@@ -14,6 +14,7 @@ const (
 	DefaultReadFileTimeoutMs   = 30_000  // 30s
 	DefaultApplyPatchTimeoutMs = 30_000  // 30s
 	DefaultWriteFileTimeoutMs  = 30_000  // 30s
+	DefaultListDirTimeoutMs    = 30_000  // 30s
 	DefaultToolTimeoutMs       = 120_000 // 2min — fallback for tools without a default
 )
 
@@ -168,5 +169,42 @@ func NewWriteFileToolSpec() ToolSpec {
 			},
 		},
 		DefaultTimeoutMs: DefaultWriteFileTimeoutMs,
+	}
+}
+
+// NewListDirToolSpec creates the specification for the list_dir tool.
+//
+// Maps to: codex-rs/core/src/tools/spec.rs create_list_dir_tool
+func NewListDirToolSpec() ToolSpec {
+	return ToolSpec{
+		Name:        "list_dir",
+		Description: "Lists entries in a local directory with 1-indexed entry numbers and simple type labels.",
+		Parameters: []ToolParameter{
+			{
+				Name:        "dir_path",
+				Type:        "string",
+				Description: "Absolute path to the directory to list.",
+				Required:    true,
+			},
+			{
+				Name:        "offset",
+				Type:        "number",
+				Description: "The entry number to start listing from. Must be 1 or greater.",
+				Required:    false,
+			},
+			{
+				Name:        "limit",
+				Type:        "number",
+				Description: "The maximum number of entries to return.",
+				Required:    false,
+			},
+			{
+				Name:        "depth",
+				Type:        "number",
+				Description: "The maximum directory depth to traverse. Must be 1 or greater.",
+				Required:    false,
+			},
+		},
+		DefaultTimeoutMs: DefaultListDirTimeoutMs,
 	}
 }

@@ -27,6 +27,7 @@ type ToolsConfig struct {
 	EnableShell    bool `json:"enable_shell"`
 	EnableReadFile bool `json:"enable_read_file"`
 	EnableWriteFile  bool `json:"enable_write_file,omitempty"`  // Built-in write_file tool
+	EnableListDir    bool `json:"enable_list_dir,omitempty"`    // Built-in list_dir tool
 	EnableApplyPatch bool `json:"enable_apply_patch,omitempty"` // Built-in apply_patch tool
 }
 
@@ -36,6 +37,7 @@ func DefaultToolsConfig() ToolsConfig {
 		EnableShell:      true,
 		EnableReadFile:   true,
 		EnableWriteFile:  true,
+		EnableListDir:    true,
 		EnableApplyPatch: true,
 	}
 }
