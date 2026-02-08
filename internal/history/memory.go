@@ -7,7 +7,7 @@ import (
 	"github.com/mfateev/codex-temporal-go/internal/models"
 )
 
-// InMemoryHistory is a simple in-memory implementation of ConversationHistory.
+// InMemoryHistory is a simple in-memory implementation of ContextManager.
 //
 // Maps to: codex-rs/core/src/state/session.rs SessionState history field
 type InMemoryHistory struct {

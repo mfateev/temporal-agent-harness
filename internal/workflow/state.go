@@ -22,12 +22,12 @@ type WorkflowInput struct {
 }
 
 // SessionState is passed through ContinueAsNew.
-// Uses ConversationHistory interface to allow pluggable storage backends.
+// Uses ContextManager interface to allow pluggable storage backends.
 //
 // Corresponds to: codex-rs/core/src/state/session.rs SessionState
 type SessionState struct {
 	ConversationID string                     `json:"conversation_id"`
-	History        history.ConversationHistory `json:"-"`              // Not serialized directly; see note below
+	History        history.ContextManager `json:"-"`              // Not serialized directly; see note below
 	HistoryItems   []models.ConversationItem  `json:"history_items"` // Serialized form for ContinueAsNew
 	ToolSpecs      []tools.ToolSpec           `json:"tool_specs"`
 	ModelConfig    models.ModelConfig         `json:"model_config"`

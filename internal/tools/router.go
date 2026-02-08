@@ -24,10 +24,10 @@ func (r *ToolRouter) GetToolSpecs() []ToolSpec {
 	return r.specs
 }
 
-// Dispatch dispatches a tool invocation to the appropriate handler.
+// DispatchToolCall dispatches a tool invocation to the appropriate handler.
 //
 // Maps to: codex-rs/core/src/tools/router.rs ToolRouter::dispatch_tool_call
-func (r *ToolRouter) Dispatch(ctx context.Context, invocation *ToolInvocation) (*ToolOutput, error) {
+func (r *ToolRouter) DispatchToolCall(ctx context.Context, invocation *ToolInvocation) (*ToolOutput, error) {
 	handler, err := r.registry.GetHandler(invocation.ToolName)
 	if err != nil {
 		return nil, err

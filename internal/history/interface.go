@@ -5,14 +5,14 @@ package history
 
 import "github.com/mfateev/codex-temporal-go/internal/models"
 
-// ConversationHistory is the interface for managing conversation history
+// ContextManager is the interface for managing conversation history.
 //
-// Maps to: codex-rs/core/src/state/session.rs ContextManager trait
+// Corresponds to: codex-rs/core/src/state/session.rs ContextManager
 //
 // This interface supports multiple implementations:
 // - InMemoryHistory: Simple in-memory storage (default)
 // - ExternalHistory: External persistence (future)
-type ConversationHistory interface {
+type ContextManager interface {
 	// Core operations
 
 	// AddItem adds a new conversation item to history

@@ -284,7 +284,7 @@ for _, future := range futures {
 **Pattern:**
 ```go
 type SessionState struct {
-    History          ConversationHistory
+    History          ContextManager
     ToolRegistry     *ToolRegistry
     IterationCount   int
     MaxIterations    int
@@ -326,8 +326,8 @@ func AgenticWorkflow(ctx workflow.Context, state SessionState) error {
 
 **Interface Design:**
 ```go
-// ConversationHistory interface - pluggable storage backend
-type ConversationHistory interface {
+// ContextManager interface - pluggable storage backend
+type ContextManager interface {
     // Core operations
     AddItem(item ConversationItem) error
     GetForPrompt() ([]ConversationItem, error)
@@ -362,7 +362,7 @@ func (h *ExternalHistory) GetForPrompt() ([]ConversationItem, error) {
 }
 ```
 
-**Status:** The `ConversationHistory` interface is now implemented with `InMemoryHistory` as the default backend. `SessionState` uses this interface as designed, enabling future swapping to external persistence without changing workflow logic.
+**Status:** The `ContextManager` interface is now implemented with `InMemoryHistory` as the default backend. `SessionState` uses this interface as designed, enabling future swapping to external persistence without changing workflow logic.
 
 **TODO (Future):** Research all uses of `raw_items()` in Codex to ensure they can be done in Activities when we move to external persistence. Current uses:
 - Turn counting (query operation)
@@ -572,7 +572,7 @@ type WorkflowInput struct {
 
 // SessionState is passed through ContinueAsNew.
 // Uses HistoryItems ([]ConversationItem) for serialization rather than
-// embedding the ConversationHistory interface directly.
+// embedding the ContextManager interface directly.
 type SessionState struct {
     ConversationID string
     HistoryItems   []ConversationItem  // Serializable history for ContinueAsNew
@@ -758,7 +758,7 @@ codex-temporal-go/
 │   │   ├── llm.go       # LLM call activity
 │   │   └── tools.go     # Tool execution activity (generic dispatcher)
 │   ├── history/         # History interface & implementations
-│   │   ├── interface.go  # ConversationHistory interface
+│   │   ├── interface.go  # ContextManager interface
 │   │   └── memory.go     # In-memory implementation
 │   ├── tools/           # Tool registry, routing, specs
 │   │   ├── registry.go   # ToolRegistry (handler storage)
@@ -813,7 +813,7 @@ This project structure mirrors the original Codex repository (`codex-rs/core/src
 
 #### Phase 1: Core Loop (MVP) -- COMPLETED
 - [x] Define workflow state structures
-- [x] Implement in-memory history (with ConversationHistory interface)
+- [x] Implement in-memory history (with ContextManager interface)
 - [x] Basic LLM activity (OpenAI API using github.com/openai/openai-go)
 - [x] Simple tool registry (shell, read_file)
 - [x] Main agentic loop workflow
