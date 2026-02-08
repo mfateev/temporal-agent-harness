@@ -1,10 +1,11 @@
 module github.com/mfateev/codex-temporal-go
 
-go 1.25.1
+go 1.23.0
 
 require (
 	github.com/google/uuid v1.6.0
 	github.com/openai/openai-go v1.12.0
+	github.com/stretchr/testify v1.11.1
 	go.temporal.io/sdk v1.39.0
 )
 
@@ -19,7 +20,6 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/robfig/cron v1.2.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
-	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/tidwall/gjson v1.14.4 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
