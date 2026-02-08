@@ -15,10 +15,9 @@ import (
 //
 // Maps to: codex-rs/core/src/codex.rs run_turn input
 type WorkflowInput struct {
-	ConversationID string             `json:"conversation_id"`
-	UserMessage    string             `json:"user_message"`
-	ModelConfig    models.ModelConfig `json:"model_config"`
-	ToolsConfig    models.ToolsConfig `json:"tools_config"`
+	ConversationID string                      `json:"conversation_id"`
+	UserMessage    string                      `json:"user_message"`
+	Config         models.SessionConfiguration `json:"config"`
 }
 
 // SessionState is passed through ContinueAsNew.
@@ -26,11 +25,11 @@ type WorkflowInput struct {
 //
 // Corresponds to: codex-rs/core/src/state/session.rs SessionState
 type SessionState struct {
-	ConversationID string                     `json:"conversation_id"`
-	History        history.ContextManager `json:"-"`              // Not serialized directly; see note below
-	HistoryItems   []models.ConversationItem  `json:"history_items"` // Serialized form for ContinueAsNew
-	ToolSpecs      []tools.ToolSpec           `json:"tool_specs"`
-	ModelConfig    models.ModelConfig         `json:"model_config"`
+	ConversationID string                      `json:"conversation_id"`
+	History        history.ContextManager      `json:"-"`             // Not serialized directly; see note below
+	HistoryItems   []models.ConversationItem   `json:"history_items"` // Serialized form for ContinueAsNew
+	ToolSpecs      []tools.ToolSpec            `json:"tool_specs"`
+	Config         models.SessionConfiguration `json:"config"`
 
 	// Iteration tracking
 	IterationCount int `json:"iteration_count"`

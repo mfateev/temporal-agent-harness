@@ -15,6 +15,7 @@ type ToolActivityInput struct {
 	CallID    string                 `json:"call_id"`
 	ToolName  string                 `json:"tool_name"`
 	Arguments map[string]interface{} `json:"arguments"`
+	Cwd       string                 `json:"cwd,omitempty"` // Working directory for tool execution
 }
 
 // ToolActivityOutput is the output from tool execution.
@@ -58,6 +59,7 @@ func (a *ToolActivities) ExecuteTool(ctx context.Context, input ToolActivityInpu
 		CallID:    input.CallID,
 		ToolName:  input.ToolName,
 		Arguments: input.Arguments,
+		Cwd:       input.Cwd,
 	}
 
 	// Pass the activity context to the handler. Temporal manages timeouts

@@ -34,14 +34,17 @@ const (
 	CheapModel       = "gpt-4o-mini"
 )
 
-// testModelConfig returns a deterministic model config for testing.
+// testSessionConfig returns a deterministic session configuration for testing.
 // Temperature 0 makes LLM responses reproducible.
-func testModelConfig(maxTokens int) models.ModelConfig {
-	return models.ModelConfig{
-		Model:         CheapModel,
-		Temperature:   0,
-		MaxTokens:     maxTokens,
-		ContextWindow: 128000,
+func testSessionConfig(maxTokens int, tools models.ToolsConfig) models.SessionConfiguration {
+	return models.SessionConfiguration{
+		Model: models.ModelConfig{
+			Model:         CheapModel,
+			Temperature:   0,
+			MaxTokens:     maxTokens,
+			ContextWindow: 128000,
+		},
+		Tools: tools,
 	}
 }
 
@@ -67,11 +70,10 @@ func TestAgenticWorkflow_SingleTurn(t *testing.T) {
 	input := workflow.WorkflowInput{
 		ConversationID: workflowID,
 		UserMessage:    "Say hello in exactly 3 words. Do not use any tools.",
-		ModelConfig:    testModelConfig(100),
-		ToolsConfig: models.ToolsConfig{
+		Config: testSessionConfig(100, models.ToolsConfig{
 			EnableShell:    false,
 			EnableReadFile: false,
-		},
+		}),
 	}
 
 	t.Logf("Starting workflow: %s", workflowID)
@@ -106,11 +108,10 @@ func TestAgenticWorkflow_WithShellTool(t *testing.T) {
 		// Very explicit instruction to use the tool
 		UserMessage: "You MUST use the shell tool to execute this exact command: echo 'Hello from shell test'. " +
 			"Do NOT answer without calling the shell tool first. After getting the result, report the output.",
-		ModelConfig: testModelConfig(500),
-		ToolsConfig: models.ToolsConfig{
+		Config: testSessionConfig(500, models.ToolsConfig{
 			EnableShell:    true,
 			EnableReadFile: false,
-		},
+		}),
 	}
 
 	t.Logf("Starting workflow: %s", workflowID)
@@ -152,11 +153,10 @@ func TestAgenticWorkflow_MultiTurn(t *testing.T) {
 			"Step 1: Use the shell tool to run: echo 'Test content' > " + testFile + "\n" +
 			"Step 2: After the shell command succeeds, use the read_file tool to read " + testFile + "\n" +
 			"Step 3: Report what read_file returned.",
-		ModelConfig: testModelConfig(1000),
-		ToolsConfig: models.ToolsConfig{
+		Config: testSessionConfig(1000, models.ToolsConfig{
 			EnableShell:    true,
 			EnableReadFile: true,
-		},
+		}),
 	}
 
 	t.Logf("Starting workflow: %s", workflowID)
@@ -202,11 +202,10 @@ func TestAgenticWorkflow_ReadFile(t *testing.T) {
 		// Very explicit instruction to use the tool
 		UserMessage: "You MUST use the read_file tool to read the file at path " + testFile + ". " +
 			"Do NOT answer without calling read_file first. After reading, tell me how many lines it has.",
-		ModelConfig: testModelConfig(500),
-		ToolsConfig: models.ToolsConfig{
+		Config: testSessionConfig(500, models.ToolsConfig{
 			EnableShell:    false,
 			EnableReadFile: true,
-		},
+		}),
 	}
 
 	t.Logf("Starting workflow: %s", workflowID)
@@ -249,12 +248,11 @@ func TestAgenticWorkflow_ListDir(t *testing.T) {
 		ConversationID: workflowID,
 		UserMessage: "You MUST use the list_dir tool to list the directory at " + testDir + ". " +
 			"Do NOT use any other tool. After listing, report the entries you see.",
-		ModelConfig: testModelConfig(500),
-		ToolsConfig: models.ToolsConfig{
+		Config: testSessionConfig(500, models.ToolsConfig{
 			EnableShell:    false,
 			EnableReadFile: false,
 			EnableListDir:  true,
-		},
+		}),
 	}
 
 	t.Logf("Starting workflow: %s", workflowID)
@@ -298,12 +296,11 @@ func TestAgenticWorkflow_GrepFiles(t *testing.T) {
 		ConversationID: workflowID,
 		UserMessage: "You MUST use the grep_files tool to search for the pattern 'needle' in the directory " + testDir + ". " +
 			"Do NOT use any other tool. After searching, report which files matched.",
-		ModelConfig: testModelConfig(500),
-		ToolsConfig: models.ToolsConfig{
+		Config: testSessionConfig(500, models.ToolsConfig{
 			EnableShell:     false,
 			EnableReadFile:  false,
 			EnableGrepFiles: true,
-		},
+		}),
 	}
 
 	t.Logf("Starting workflow: %s", workflowID)
@@ -343,13 +340,12 @@ func TestAgenticWorkflow_WriteFile(t *testing.T) {
 		ConversationID: workflowID,
 		UserMessage: "You MUST use the write_file tool to create a file at " + testFile + " with the content 'Hello from write_file'. " +
 			"Do NOT use any other tool. After writing, report what you did.",
-		ModelConfig: testModelConfig(500),
-		ToolsConfig: models.ToolsConfig{
+		Config: testSessionConfig(500, models.ToolsConfig{
 			EnableShell:      false,
 			EnableReadFile:   true,
 			EnableWriteFile:  true,
 			EnableApplyPatch: false,
-		},
+		}),
 	}
 
 	t.Logf("Starting workflow: %s", workflowID)
@@ -400,12 +396,11 @@ func TestAgenticWorkflow_ApplyPatch(t *testing.T) {
 		// Explicit instruction to use apply_patch to create a file
 		UserMessage: "You MUST use the apply_patch tool to create a new file at " + testFile + " with the content 'Hello from apply_patch'. " +
 			"Use the *** Add File syntax. Do NOT use any other tool. After the patch is applied, report the result.",
-		ModelConfig: testModelConfig(1000),
-		ToolsConfig: models.ToolsConfig{
+		Config: testSessionConfig(1000, models.ToolsConfig{
 			EnableShell:      false,
 			EnableReadFile:   false,
 			EnableApplyPatch: true,
-		},
+		}),
 	}
 
 	t.Logf("Starting workflow: %s", workflowID)

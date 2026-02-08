@@ -26,13 +26,13 @@ func AgenticWorkflow(ctx workflow.Context, input WorkflowInput) (WorkflowResult,
 	state := SessionState{
 		ConversationID: input.ConversationID,
 		History:        history.NewInMemoryHistory(),
-		ModelConfig:    input.ModelConfig,
+		Config:         input.Config,
 		MaxIterations:  20,
 		IterationCount: 0,
 	}
 
 	// Build tool specs based on configuration
-	state.ToolSpecs = buildToolSpecs(input.ToolsConfig)
+	state.ToolSpecs = buildToolSpecs(input.Config.Tools)
 
 	// Add initial user message to history
 	err := state.History.AddItem(models.ConversationItem{
@@ -84,9 +84,12 @@ func (s *SessionState) runAgenticLoop(ctx workflow.Context) (WorkflowResult, err
 
 		// Call LLM Activity
 		llmInput := activities.LLMActivityInput{
-			History:     historyItems,
-			ModelConfig: s.ModelConfig,
-			ToolSpecs:   s.ToolSpecs,
+			History:               historyItems,
+			ModelConfig:           s.Config.Model,
+			ToolSpecs:             s.ToolSpecs,
+			BaseInstructions:      s.Config.BaseInstructions,
+			DeveloperInstructions: s.Config.DeveloperInstructions,
+			UserInstructions:      s.Config.UserInstructions,
 		}
 
 		var llmResult activities.LLMActivityOutput
@@ -142,7 +145,7 @@ func (s *SessionState) runAgenticLoop(ctx workflow.Context) (WorkflowResult, err
 		if len(functionCalls) > 0 {
 			logger.Info("Executing tools", "count", len(functionCalls))
 
-			toolResults, err := executeToolsInParallel(ctx, functionCalls, s.ToolSpecs)
+			toolResults, err := executeToolsInParallel(ctx, functionCalls, s.ToolSpecs, s.Config.Cwd)
 			if err != nil {
 				return WorkflowResult{}, fmt.Errorf("failed to execute tools: %w", err)
 			}
@@ -199,7 +202,7 @@ func (s *SessionState) runAgenticLoop(ctx workflow.Context) (WorkflowResult, err
 		logger.Info("Max iterations reached, triggering ContinueAsNew")
 
 		tokenCount, _ := s.History.EstimateTokenCount()
-		contextUsage := float64(tokenCount) / float64(s.ModelConfig.ContextWindow)
+		contextUsage := float64(tokenCount) / float64(s.Config.Model.ContextWindow)
 
 		if contextUsage > 0.8 {
 			logger.Info("High context usage", "usage", contextUsage)
@@ -226,7 +229,7 @@ func (s *SessionState) runAgenticLoop(ctx workflow.Context) (WorkflowResult, err
 //  3. DefaultToolTimeoutMs constant as a fallback
 //
 // Maps to: codex-rs/core/src/tools/parallel.rs drain_in_flight
-func executeToolsInParallel(ctx workflow.Context, functionCalls []models.ConversationItem, toolSpecs []tools.ToolSpec) ([]activities.ToolActivityOutput, error) {
+func executeToolsInParallel(ctx workflow.Context, functionCalls []models.ConversationItem, toolSpecs []tools.ToolSpec, cwd string) ([]activities.ToolActivityOutput, error) {
 	logger := workflow.GetLogger(ctx)
 
 	// Build a lookup map from tool name to spec for fast access.
@@ -265,6 +268,7 @@ func executeToolsInParallel(ctx workflow.Context, functionCalls []models.Convers
 			CallID:    fc.CallID,
 			ToolName:  fc.Name,
 			Arguments: args,
+			Cwd:       cwd,
 		}
 		futures[i] = workflow.ExecuteActivity(toolCtx, "ExecuteTool", input)
 	}

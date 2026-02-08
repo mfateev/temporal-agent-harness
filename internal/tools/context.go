@@ -28,5 +28,6 @@ type ToolInvocation struct {
 	CallID    string                 `json:"call_id"`
 	ToolName  string                 `json:"tool_name"`
 	Arguments map[string]interface{} `json:"arguments"`
+	Cwd       string                 `json:"cwd,omitempty"` // Working directory for tool execution
 	// Future: Session context, turn context, diff tracker
 }

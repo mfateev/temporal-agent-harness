@@ -58,6 +58,9 @@ func (t *ShellTool) Handle(ctx context.Context, invocation *tools.ToolInvocation
 	}
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
+	if invocation.Cwd != "" {
+		cmd.Dir = invocation.Cwd
+	}
 	output, err := cmd.CombinedOutput()
 
 	if err != nil {

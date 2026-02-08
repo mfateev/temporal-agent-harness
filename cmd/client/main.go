@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -43,19 +44,29 @@ func main() {
 	// Generate workflow ID
 	workflowID := fmt.Sprintf("codex-%s", uuid.New().String()[:8])
 
+	// Determine working directory
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = ""
+	}
+
 	// Prepare workflow input
 	input := workflow.WorkflowInput{
 		ConversationID: workflowID,
 		UserMessage:    *message,
-		ModelConfig: models.ModelConfig{
-			Model:         *model,
-			Temperature:   0.7,
-			MaxTokens:     4096,
-			ContextWindow: 128000,
-		},
-		ToolsConfig: models.ToolsConfig{
-			EnableShell:    *enableShell,
-			EnableReadFile: *enableReadFile,
+		Config: models.SessionConfiguration{
+			Model: models.ModelConfig{
+				Model:         *model,
+				Temperature:   0.7,
+				MaxTokens:     4096,
+				ContextWindow: 128000,
+			},
+			Tools: models.ToolsConfig{
+				EnableShell:    *enableShell,
+				EnableReadFile: *enableReadFile,
+			},
+			Cwd:           cwd,
+			SessionSource: "cli",
 		},
 	}
 

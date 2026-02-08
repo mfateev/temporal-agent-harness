@@ -18,6 +18,11 @@ type LLMActivityInput struct {
 	History     []models.ConversationItem `json:"history"`
 	ModelConfig models.ModelConfig        `json:"model_config"`
 	ToolSpecs   []tools.ToolSpec          `json:"tool_specs"`
+
+	// Instructions hierarchy (maps to Codex 3-tier system)
+	BaseInstructions      string `json:"base_instructions,omitempty"`
+	DeveloperInstructions string `json:"developer_instructions,omitempty"`
+	UserInstructions      string `json:"user_instructions,omitempty"`
 }
 
 // LLMActivityOutput is the output from the LLM activity.
@@ -46,9 +51,12 @@ func NewLLMActivities(client llm.LLMClient) *LLMActivities {
 // Maps to: codex-rs/core/src/codex.rs try_run_sampling_request
 func (a *LLMActivities) ExecuteLLMCall(ctx context.Context, input LLMActivityInput) (LLMActivityOutput, error) {
 	request := llm.LLMRequest{
-		History:     input.History,
-		ModelConfig: input.ModelConfig,
-		ToolSpecs:   input.ToolSpecs,
+		History:               input.History,
+		ModelConfig:           input.ModelConfig,
+		ToolSpecs:             input.ToolSpecs,
+		BaseInstructions:      input.BaseInstructions,
+		DeveloperInstructions: input.DeveloperInstructions,
+		UserInstructions:      input.UserInstructions,
 	}
 
 	response, err := a.client.Call(ctx, request)

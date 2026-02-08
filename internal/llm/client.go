@@ -17,6 +17,11 @@ type LLMRequest struct {
 	History     []models.ConversationItem `json:"history"`
 	ModelConfig models.ModelConfig        `json:"model_config"`
 	ToolSpecs   []tools.ToolSpec          `json:"tool_specs"`
+
+	// Instructions hierarchy (maps to Codex 3-tier system)
+	BaseInstructions      string `json:"base_instructions,omitempty"`
+	DeveloperInstructions string `json:"developer_instructions,omitempty"`
+	UserInstructions      string `json:"user_instructions,omitempty"`
 }
 
 // LLMResponse represents a response from the LLM.

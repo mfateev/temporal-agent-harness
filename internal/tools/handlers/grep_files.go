@@ -79,12 +79,15 @@ func (t *GrepFilesTool) Handle(ctx context.Context, invocation *tools.ToolInvoca
 		limit = grepMaxLimit
 	}
 
-	// Resolve search path: use provided path or current working directory.
+	// Resolve search path: use provided path, invocation Cwd, or process cwd.
 	searchPath := ""
 	if pathArg, ok := invocation.Arguments["path"]; ok {
 		if p, ok := pathArg.(string); ok && strings.TrimSpace(p) != "" {
 			searchPath = strings.TrimSpace(p)
 		}
+	}
+	if searchPath == "" && invocation.Cwd != "" {
+		searchPath = invocation.Cwd
 	}
 	if searchPath == "" {
 		cwd, err := os.Getwd()

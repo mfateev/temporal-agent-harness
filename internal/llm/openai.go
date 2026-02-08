@@ -33,11 +33,19 @@ func NewOpenAIClient() *OpenAIClient {
 // - AssistantMessage item for text content
 // - Separate FunctionCall items for each tool call
 func (c *OpenAIClient) Call(ctx context.Context, request LLMRequest) (LLMResponse, error) {
-	messages := c.convertHistoryToMessages(request.History)
+	messages := c.buildMessages(request)
 
 	params := openai.ChatCompletionNewParams{
 		Model:    openai.ChatModel(request.ModelConfig.Model),
 		Messages: messages,
+	}
+
+	// Pass model parameters — these were previously ignored (bug fix).
+	if request.ModelConfig.Temperature > 0 {
+		params.Temperature = param.NewOpt(request.ModelConfig.Temperature)
+	}
+	if request.ModelConfig.MaxTokens > 0 {
+		params.MaxTokens = param.NewOpt(int64(request.ModelConfig.MaxTokens))
 	}
 
 	if len(request.ToolSpecs) > 0 {
@@ -97,6 +105,37 @@ func (c *OpenAIClient) Call(ctx context.Context, request LLMRequest) (LLMRespons
 			TotalTokens:      int(completion.Usage.TotalTokens),
 		},
 	}, nil
+}
+
+// buildMessages constructs the full message list: instruction messages + history.
+//
+// Instruction hierarchy (maps to Codex 3-tier system):
+//   - BaseInstructions + UserInstructions → system message
+//   - DeveloperInstructions → developer message
+func (c *OpenAIClient) buildMessages(request LLMRequest) []openai.ChatCompletionMessageParamUnion {
+	var messages []openai.ChatCompletionMessageParamUnion
+
+	// Build system message from BaseInstructions + UserInstructions
+	systemContent := request.BaseInstructions
+	if request.UserInstructions != "" {
+		if systemContent != "" {
+			systemContent += "\n\n" + request.UserInstructions
+		} else {
+			systemContent = request.UserInstructions
+		}
+	}
+	if systemContent != "" {
+		messages = append(messages, openai.SystemMessage(systemContent))
+	}
+
+	// Developer instructions as a separate developer message
+	if request.DeveloperInstructions != "" {
+		messages = append(messages, openai.DeveloperMessage(request.DeveloperInstructions))
+	}
+
+	// Append conversation history
+	messages = append(messages, c.convertHistoryToMessages(request.History)...)
+	return messages
 }
 
 // convertHistoryToMessages converts conversation history to OpenAI messages format.
