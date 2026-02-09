@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"regexp"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -9,6 +10,13 @@ import (
 	"github.com/mfateev/codex-temporal-go/internal/models"
 	"github.com/mfateev/codex-temporal-go/internal/workflow"
 )
+
+// stripANSI removes ANSI escape sequences from a string for test assertions.
+var ansiRegexp = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func stripANSI(s string) string {
+	return ansiRegexp.ReplaceAllString(s, "")
+}
 
 func TestRenderer_RenderAssistantMessage(t *testing.T) {
 	var buf bytes.Buffer
@@ -185,6 +193,66 @@ func TestRenderer_ColorEnabled(t *testing.T) {
 
 	// Should contain ANSI escape codes
 	assert.Contains(t, buf.String(), "\033[")
+}
+
+func TestRenderer_MarkdownRendersFormattedOutput(t *testing.T) {
+	var buf bytes.Buffer
+	r := NewRenderer(&buf, false, false) // noMarkdown=false → glamour enabled
+
+	mdContent := "# Heading\n\nSome **bold** text and a list:\n\n- item one\n- item two\n"
+	r.RenderItem(models.ConversationItem{
+		Type:    models.ItemTypeAssistantMessage,
+		Content: mdContent,
+	})
+
+	output := buf.String()
+	plain := stripANSI(output)
+	// Glamour output should differ from raw input (it adds ANSI codes or reformats).
+	assert.NotEqual(t, "\n"+mdContent+"\n\n", output, "Markdown renderer should transform the content")
+	assert.Contains(t, plain, "Heading")
+	assert.Contains(t, plain, "item one")
+}
+
+func TestRenderer_NoMarkdownProducesPlainText(t *testing.T) {
+	var buf bytes.Buffer
+	r := NewRenderer(&buf, true, true) // noMarkdown=true → plain text
+
+	mdContent := "# Heading\n\nSome **bold** text."
+	r.RenderItem(models.ConversationItem{
+		Type:    models.ItemTypeAssistantMessage,
+		Content: mdContent,
+	})
+
+	// Plain text path wraps content with \n prefix and \n\n suffix.
+	assert.Equal(t, "\n"+mdContent+"\n\n", buf.String())
+}
+
+func TestRenderer_MarkdownEmptyContent(t *testing.T) {
+	var buf bytes.Buffer
+	r := NewRenderer(&buf, false, false) // markdown enabled
+
+	r.RenderItem(models.ConversationItem{
+		Type:    models.ItemTypeAssistantMessage,
+		Content: "",
+	})
+
+	// Empty content → renderAssistantMessage returns without writing.
+	assert.Empty(t, buf.String())
+}
+
+func TestRenderer_MarkdownCodeBlockPreserved(t *testing.T) {
+	var buf bytes.Buffer
+	r := NewRenderer(&buf, false, false) // markdown enabled
+
+	mdContent := "Here is code:\n\n```go\nfmt.Println(\"hello\")\n```\n"
+	r.RenderItem(models.ConversationItem{
+		Type:    models.ItemTypeAssistantMessage,
+		Content: mdContent,
+	})
+
+	plain := stripANSI(buf.String())
+	assert.Contains(t, plain, "hello", "Code block content should be preserved in output")
+	assert.Contains(t, plain, "Println", "Code block content should be preserved in output")
 }
 
 func TestFormatTokens(t *testing.T) {
