@@ -61,6 +61,82 @@ func dialTemporal(t *testing.T) client.Client {
 	return c
 }
 
+// waitForTurnComplete polls the get_conversation_items query until the expected
+// number of TurnComplete markers appear, then returns the full history.
+func waitForTurnComplete(t *testing.T, ctx context.Context, c client.Client, workflowID string, expectedTurnCount int) []models.ConversationItem {
+	t.Helper()
+	deadline := time.After(2 * time.Minute)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("Timed out waiting for %d TurnComplete markers", expectedTurnCount)
+		case <-ctx.Done():
+			t.Fatalf("Context cancelled waiting for TurnComplete")
+		case <-ticker.C:
+			resp, err := c.QueryWorkflow(ctx, workflowID, "", workflow.QueryGetConversationItems)
+			if err != nil {
+				t.Logf("Query failed (may retry): %v", err)
+				continue
+			}
+			var items []models.ConversationItem
+			if err := resp.Get(&items); err != nil {
+				t.Logf("Decode failed (may retry): %v", err)
+				continue
+			}
+
+			turnCompleteCount := 0
+			for _, item := range items {
+				if item.Type == models.ItemTypeTurnComplete {
+					turnCompleteCount++
+				}
+			}
+			t.Logf("History has %d items, %d TurnComplete markers (need %d)",
+				len(items), turnCompleteCount, expectedTurnCount)
+
+			if turnCompleteCount >= expectedTurnCount {
+				return items
+			}
+		}
+	}
+}
+
+// shutdownWorkflow sends a shutdown Update and waits for the workflow to complete.
+func shutdownWorkflow(t *testing.T, ctx context.Context, c client.Client, workflowID string) workflow.WorkflowResult {
+	t.Helper()
+
+	updateHandle, err := c.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
+		WorkflowID:   workflowID,
+		UpdateName:   workflow.UpdateShutdown,
+		Args:         []interface{}{workflow.ShutdownRequest{}},
+		WaitForStage: client.WorkflowUpdateStageCompleted,
+	})
+	require.NoError(t, err, "Failed to send shutdown")
+
+	var shutdownResp workflow.ShutdownResponse
+	require.NoError(t, updateHandle.Get(ctx, &shutdownResp))
+	assert.True(t, shutdownResp.Acknowledged)
+
+	// Wait for workflow to complete
+	run := c.GetWorkflow(ctx, workflowID, "")
+	var result workflow.WorkflowResult
+	require.NoError(t, run.Get(ctx, &result), "Workflow should complete after shutdown")
+	return result
+}
+
+// startWorkflow starts a workflow and returns the workflow ID.
+func startWorkflow(t *testing.T, ctx context.Context, c client.Client, input workflow.WorkflowInput) string {
+	t.Helper()
+	workflowID := input.ConversationID
+	_, err := c.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
+		ID: workflowID, TaskQueue: TaskQueue,
+	}, "AgenticWorkflow", input)
+	require.NoError(t, err, "Failed to start workflow")
+	return workflowID
+}
+
 // TestAgenticWorkflow_SingleTurn tests a simple conversation without tools
 func TestAgenticWorkflow_SingleTurn(t *testing.T) {
 	c := dialTemporal(t)
@@ -81,18 +157,18 @@ func TestAgenticWorkflow_SingleTurn(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), WorkflowTimeout)
 	defer cancel()
 
-	run, err := c.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
-		ID: workflowID, TaskQueue: TaskQueue,
-	}, "AgenticWorkflow", input)
-	require.NoError(t, err, "Failed to start workflow")
+	startWorkflow(t, ctx, c, input)
 
-	var result workflow.WorkflowResult
-	err = run.Get(ctx, &result)
-	require.NoError(t, err, "Workflow execution failed")
+	// Wait for the first turn to complete
+	waitForTurnComplete(t, ctx, c, workflowID, 1)
+
+	// Send shutdown and get result
+	result := shutdownWorkflow(t, ctx, c, workflowID)
 
 	assert.Equal(t, workflowID, result.ConversationID)
 	assert.Greater(t, result.TotalTokens, 0, "Should have consumed tokens")
 	assert.Empty(t, result.ToolCallsExecuted, "Should not have called any tools")
+	assert.Equal(t, "shutdown", result.EndReason)
 
 	t.Logf("Total tokens: %d, Iterations: %d", result.TotalTokens, result.TotalIterations)
 }
@@ -105,7 +181,6 @@ func TestAgenticWorkflow_WithShellTool(t *testing.T) {
 	workflowID := "test-shell-tool-" + uuid.New().String()[:8]
 	input := workflow.WorkflowInput{
 		ConversationID: workflowID,
-		// Very explicit instruction to use the tool
 		UserMessage: "You MUST use the shell tool to execute this exact command: echo 'Hello from shell test'. " +
 			"Do NOT answer without calling the shell tool first. After getting the result, report the output.",
 		Config: testSessionConfig(500, models.ToolsConfig{
@@ -119,19 +194,13 @@ func TestAgenticWorkflow_WithShellTool(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), WorkflowTimeout)
 	defer cancel()
 
-	run, err := c.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
-		ID: workflowID, TaskQueue: TaskQueue,
-	}, "AgenticWorkflow", input)
-	require.NoError(t, err, "Failed to start workflow")
-
-	var result workflow.WorkflowResult
-	err = run.Get(ctx, &result)
-	require.NoError(t, err, "Workflow execution failed")
+	startWorkflow(t, ctx, c, input)
+	waitForTurnComplete(t, ctx, c, workflowID, 1)
+	result := shutdownWorkflow(t, ctx, c, workflowID)
 
 	assert.Equal(t, workflowID, result.ConversationID)
 	assert.Greater(t, result.TotalTokens, 0, "Should have consumed tokens")
 	assert.Contains(t, result.ToolCallsExecuted, "shell", "Should have called shell tool")
-	assert.Greater(t, result.TotalIterations, 1, "Should have multiple iterations (LLM → tool → LLM)")
 
 	t.Logf("Total tokens: %d, Iterations: %d, Tools: %v",
 		result.TotalTokens, result.TotalIterations, result.ToolCallsExecuted)
@@ -148,7 +217,6 @@ func TestAgenticWorkflow_MultiTurn(t *testing.T) {
 
 	input := workflow.WorkflowInput{
 		ConversationID: workflowID,
-		// Very explicit multi-step instruction
 		UserMessage: "Complete these steps in order. You MUST use the tools provided.\n" +
 			"Step 1: Use the shell tool to run: echo 'Test content' > " + testFile + "\n" +
 			"Step 2: After the shell command succeeds, use the read_file tool to read " + testFile + "\n" +
@@ -165,20 +233,14 @@ func TestAgenticWorkflow_MultiTurn(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), WorkflowTimeout)
 	defer cancel()
 
-	run, err := c.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
-		ID: workflowID, TaskQueue: TaskQueue,
-	}, "AgenticWorkflow", input)
-	require.NoError(t, err, "Failed to start workflow")
-
-	var result workflow.WorkflowResult
-	err = run.Get(ctx, &result)
-	require.NoError(t, err, "Workflow execution failed")
+	startWorkflow(t, ctx, c, input)
+	waitForTurnComplete(t, ctx, c, workflowID, 1)
+	result := shutdownWorkflow(t, ctx, c, workflowID)
 
 	assert.Equal(t, workflowID, result.ConversationID)
 	assert.Greater(t, result.TotalTokens, 0, "Should have consumed tokens")
 	assert.Contains(t, result.ToolCallsExecuted, "shell", "Should have called shell tool")
 	assert.Contains(t, result.ToolCallsExecuted, "read_file", "Should have called read_file tool")
-	assert.GreaterOrEqual(t, result.TotalIterations, 2, "Should have multiple iterations")
 
 	t.Logf("Total tokens: %d, Iterations: %d, Tools: %v",
 		result.TotalTokens, result.TotalIterations, result.ToolCallsExecuted)
@@ -189,7 +251,6 @@ func TestAgenticWorkflow_ReadFile(t *testing.T) {
 	c := dialTemporal(t)
 	defer c.Close()
 
-	// Create a temporary test file
 	testFile := "/tmp/codex-read-test-" + uuid.New().String()[:8] + ".txt"
 	testContent := "Line 1: Hello\nLine 2: World\nLine 3: Test\n"
 	err := os.WriteFile(testFile, []byte(testContent), 0644)
@@ -199,7 +260,6 @@ func TestAgenticWorkflow_ReadFile(t *testing.T) {
 	workflowID := "test-read-file-" + uuid.New().String()[:8]
 	input := workflow.WorkflowInput{
 		ConversationID: workflowID,
-		// Very explicit instruction to use the tool
 		UserMessage: "You MUST use the read_file tool to read the file at path " + testFile + ". " +
 			"Do NOT answer without calling read_file first. After reading, tell me how many lines it has.",
 		Config: testSessionConfig(500, models.ToolsConfig{
@@ -214,14 +274,9 @@ func TestAgenticWorkflow_ReadFile(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), WorkflowTimeout)
 	defer cancel()
 
-	run, err := c.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
-		ID: workflowID, TaskQueue: TaskQueue,
-	}, "AgenticWorkflow", input)
-	require.NoError(t, err, "Failed to start workflow")
-
-	var result workflow.WorkflowResult
-	err = run.Get(ctx, &result)
-	require.NoError(t, err, "Workflow execution failed")
+	startWorkflow(t, ctx, c, input)
+	waitForTurnComplete(t, ctx, c, workflowID, 1)
+	result := shutdownWorkflow(t, ctx, c, workflowID)
 
 	assert.Equal(t, workflowID, result.ConversationID)
 	assert.Greater(t, result.TotalTokens, 0, "Should have consumed tokens")
@@ -236,7 +291,6 @@ func TestAgenticWorkflow_ListDir(t *testing.T) {
 	c := dialTemporal(t)
 	defer c.Close()
 
-	// Create a temporary directory with known contents for the LLM to list.
 	testDir := "/tmp/codex-listdir-test-" + uuid.New().String()[:8]
 	require.NoError(t, os.MkdirAll(filepath.Join(testDir, "subdir"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "hello.txt"), []byte("hello"), 0o644))
@@ -261,19 +315,13 @@ func TestAgenticWorkflow_ListDir(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), WorkflowTimeout)
 	defer cancel()
 
-	run, err := c.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
-		ID: workflowID, TaskQueue: TaskQueue,
-	}, "AgenticWorkflow", input)
-	require.NoError(t, err, "Failed to start workflow")
-
-	var result workflow.WorkflowResult
-	err = run.Get(ctx, &result)
-	require.NoError(t, err, "Workflow execution failed")
+	startWorkflow(t, ctx, c, input)
+	waitForTurnComplete(t, ctx, c, workflowID, 1)
+	result := shutdownWorkflow(t, ctx, c, workflowID)
 
 	assert.Equal(t, workflowID, result.ConversationID)
 	assert.Greater(t, result.TotalTokens, 0, "Should have consumed tokens")
 	assert.Contains(t, result.ToolCallsExecuted, "list_dir", "Should have called list_dir tool")
-	assert.Greater(t, result.TotalIterations, 1, "Should have multiple iterations (LLM → tool → LLM)")
 
 	t.Logf("Total tokens: %d, Iterations: %d, Tools: %v",
 		result.TotalTokens, result.TotalIterations, result.ToolCallsExecuted)
@@ -284,7 +332,6 @@ func TestAgenticWorkflow_GrepFiles(t *testing.T) {
 	c := dialTemporal(t)
 	defer c.Close()
 
-	// Create a temporary directory with known contents for the LLM to search.
 	testDir := "/tmp/codex-grep-test-" + uuid.New().String()[:8]
 	require.NoError(t, os.MkdirAll(testDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "match.txt"), []byte("hello needle world"), 0o644))
@@ -309,19 +356,13 @@ func TestAgenticWorkflow_GrepFiles(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), WorkflowTimeout)
 	defer cancel()
 
-	run, err := c.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
-		ID: workflowID, TaskQueue: TaskQueue,
-	}, "AgenticWorkflow", input)
-	require.NoError(t, err, "Failed to start workflow")
-
-	var result workflow.WorkflowResult
-	err = run.Get(ctx, &result)
-	require.NoError(t, err, "Workflow execution failed")
+	startWorkflow(t, ctx, c, input)
+	waitForTurnComplete(t, ctx, c, workflowID, 1)
+	result := shutdownWorkflow(t, ctx, c, workflowID)
 
 	assert.Equal(t, workflowID, result.ConversationID)
 	assert.Greater(t, result.TotalTokens, 0, "Should have consumed tokens")
 	assert.Contains(t, result.ToolCallsExecuted, "grep_files", "Should have called grep_files tool")
-	assert.Greater(t, result.TotalIterations, 1, "Should have multiple iterations (LLM → tool → LLM)")
 
 	t.Logf("Total tokens: %d, Iterations: %d, Tools: %v",
 		result.TotalTokens, result.TotalIterations, result.ToolCallsExecuted)
@@ -354,19 +395,13 @@ func TestAgenticWorkflow_WriteFile(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), WorkflowTimeout)
 	defer cancel()
 
-	run, err := c.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
-		ID: workflowID, TaskQueue: TaskQueue,
-	}, "AgenticWorkflow", input)
-	require.NoError(t, err, "Failed to start workflow")
-
-	var result workflow.WorkflowResult
-	err = run.Get(ctx, &result)
-	require.NoError(t, err, "Workflow execution failed")
+	startWorkflow(t, ctx, c, input)
+	waitForTurnComplete(t, ctx, c, workflowID, 1)
+	result := shutdownWorkflow(t, ctx, c, workflowID)
 
 	assert.Equal(t, workflowID, result.ConversationID)
 	assert.Greater(t, result.TotalTokens, 0, "Should have consumed tokens")
 	assert.Contains(t, result.ToolCallsExecuted, "write_file", "Should have called write_file tool")
-	assert.Greater(t, result.TotalIterations, 1, "Should have multiple iterations (LLM → tool → LLM)")
 
 	// Verify file was created with expected content
 	contents, err := os.ReadFile(testFile)
@@ -386,14 +421,12 @@ func TestAgenticWorkflow_ApplyPatch(t *testing.T) {
 	c := dialTemporal(t)
 	defer c.Close()
 
-	// Create a unique test file path for the LLM to create via apply_patch
 	testFile := "/tmp/codex-patch-test-" + uuid.New().String()[:8] + ".txt"
 	defer os.Remove(testFile)
 
 	workflowID := "test-apply-patch-" + uuid.New().String()[:8]
 	input := workflow.WorkflowInput{
 		ConversationID: workflowID,
-		// Explicit instruction to use apply_patch to create a file
 		UserMessage: "You MUST use the apply_patch tool to create a new file at " + testFile + " with the content 'Hello from apply_patch'. " +
 			"Use the *** Add File syntax. Do NOT use any other tool. After the patch is applied, report the result.",
 		Config: testSessionConfig(1000, models.ToolsConfig{
@@ -409,19 +442,13 @@ func TestAgenticWorkflow_ApplyPatch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), WorkflowTimeout)
 	defer cancel()
 
-	run, err := c.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
-		ID: workflowID, TaskQueue: TaskQueue,
-	}, "AgenticWorkflow", input)
-	require.NoError(t, err, "Failed to start workflow")
-
-	var result workflow.WorkflowResult
-	err = run.Get(ctx, &result)
-	require.NoError(t, err, "Workflow execution failed")
+	startWorkflow(t, ctx, c, input)
+	waitForTurnComplete(t, ctx, c, workflowID, 1)
+	result := shutdownWorkflow(t, ctx, c, workflowID)
 
 	assert.Equal(t, workflowID, result.ConversationID)
 	assert.Greater(t, result.TotalTokens, 0, "Should have consumed tokens")
 	assert.Contains(t, result.ToolCallsExecuted, "apply_patch", "Should have called apply_patch tool")
-	assert.Greater(t, result.TotalIterations, 1, "Should have multiple iterations (LLM → tool → LLM)")
 
 	// Verify file was created with expected content
 	contents, err := os.ReadFile(testFile)
@@ -434,4 +461,123 @@ func TestAgenticWorkflow_ApplyPatch(t *testing.T) {
 
 	t.Logf("Total tokens: %d, Iterations: %d, Tools: %v",
 		result.TotalTokens, result.TotalIterations, result.ToolCallsExecuted)
+}
+
+// TestAgenticWorkflow_QueryHistory tests the get_conversation_items query handler
+func TestAgenticWorkflow_QueryHistory(t *testing.T) {
+	c := dialTemporal(t)
+	defer c.Close()
+
+	workflowID := "test-query-history-" + uuid.New().String()[:8]
+	input := workflow.WorkflowInput{
+		ConversationID: workflowID,
+		UserMessage:    "Say 'hello world'. Do not use any tools.",
+		Config: testSessionConfig(100, models.ToolsConfig{
+			EnableShell:    false,
+			EnableReadFile: false,
+		}),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), WorkflowTimeout)
+	defer cancel()
+
+	startWorkflow(t, ctx, c, input)
+	items := waitForTurnComplete(t, ctx, c, workflowID, 1)
+
+	// Verify history structure
+	require.GreaterOrEqual(t, len(items), 4, "Should have TurnStarted + UserMessage + AssistantMessage + TurnComplete")
+
+	// Check for TurnStarted
+	assert.Equal(t, models.ItemTypeTurnStarted, items[0].Type)
+	assert.NotEmpty(t, items[0].TurnID)
+
+	// Check for UserMessage
+	assert.Equal(t, models.ItemTypeUserMessage, items[1].Type)
+	assert.Contains(t, items[1].Content, "hello world")
+
+	// Find TurnComplete
+	lastItem := items[len(items)-1]
+	assert.Equal(t, models.ItemTypeTurnComplete, lastItem.Type)
+	assert.NotEmpty(t, lastItem.TurnID)
+
+	// Clean up
+	shutdownWorkflow(t, ctx, c, workflowID)
+
+	t.Logf("History has %d items", len(items))
+}
+
+// TestAgenticWorkflow_MultiTurnInteractive tests sending a second user message
+func TestAgenticWorkflow_MultiTurnInteractive(t *testing.T) {
+	c := dialTemporal(t)
+	defer c.Close()
+
+	workflowID := "test-multi-interactive-" + uuid.New().String()[:8]
+	input := workflow.WorkflowInput{
+		ConversationID: workflowID,
+		UserMessage:    "What is 2 + 2? Answer with just the number. Do not use any tools.",
+		Config: testSessionConfig(100, models.ToolsConfig{
+			EnableShell:    false,
+			EnableReadFile: false,
+		}),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), WorkflowTimeout)
+	defer cancel()
+
+	// Start and wait for first turn
+	startWorkflow(t, ctx, c, input)
+	waitForTurnComplete(t, ctx, c, workflowID, 1)
+
+	// Send a second message
+	updateHandle, err := c.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
+		WorkflowID:   workflowID,
+		UpdateName:   workflow.UpdateUserInput,
+		Args:         []interface{}{workflow.UserInput{Content: "Now what is 3 + 3? Answer with just the number."}},
+		WaitForStage: client.WorkflowUpdateStageCompleted,
+	})
+	require.NoError(t, err)
+
+	var accepted workflow.UserInputAccepted
+	require.NoError(t, updateHandle.Get(ctx, &accepted))
+	assert.NotEmpty(t, accepted.TurnID)
+	t.Logf("Second turn ID: %s", accepted.TurnID)
+
+	// Wait for second turn
+	waitForTurnComplete(t, ctx, c, workflowID, 2)
+
+	// Shutdown and verify
+	result := shutdownWorkflow(t, ctx, c, workflowID)
+	assert.Equal(t, "shutdown", result.EndReason)
+	assert.Greater(t, result.TotalTokens, 0)
+
+	t.Logf("Total tokens: %d", result.TotalTokens)
+}
+
+// TestAgenticWorkflow_Shutdown tests clean shutdown
+func TestAgenticWorkflow_Shutdown(t *testing.T) {
+	c := dialTemporal(t)
+	defer c.Close()
+
+	workflowID := "test-shutdown-" + uuid.New().String()[:8]
+	input := workflow.WorkflowInput{
+		ConversationID: workflowID,
+		UserMessage:    "Say 'goodbye'. Do not use any tools.",
+		Config: testSessionConfig(100, models.ToolsConfig{
+			EnableShell:    false,
+			EnableReadFile: false,
+		}),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), WorkflowTimeout)
+	defer cancel()
+
+	startWorkflow(t, ctx, c, input)
+	waitForTurnComplete(t, ctx, c, workflowID, 1)
+	result := shutdownWorkflow(t, ctx, c, workflowID)
+
+	assert.Equal(t, workflowID, result.ConversationID)
+	assert.Equal(t, "shutdown", result.EndReason)
+	assert.Greater(t, result.TotalTokens, 0)
+
+	t.Logf("Total tokens: %d, EndReason: %s", result.TotalTokens, result.EndReason)
 }

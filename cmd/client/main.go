@@ -1,8 +1,17 @@
-// CLI client for starting codex-temporal-go workflows
+// CLI client for codex-temporal-go workflows.
+//
+// Sub-commands:
+//
+//	start    --message "..."         Start a new workflow, print workflow ID
+//	send     --workflow-id <id> --message "..."  Send a user_input Update
+//	history  --workflow-id <id>      Query conversation history
+//	interrupt --workflow-id <id>     Send interrupt Update
+//	end      --workflow-id <id>      Send shutdown Update
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -21,36 +30,74 @@ const (
 )
 
 func main() {
-	// Parse command-line flags
-	message := flag.String("message", "", "User message to send to the agent (required)")
-	model := flag.String("model", "gpt-4o-mini", "LLM model to use (default: gpt-4o-mini)")
-	enableShell := flag.Bool("enable-shell", true, "Enable shell tool")
-	enableReadFile := flag.Bool("enable-read-file", true, "Enable read_file tool")
-	flag.Parse()
-
-	if *message == "" {
-		log.Fatal("Error: --message is required\n\nUsage: client --message \"Your message here\"")
+	if len(os.Args) < 2 {
+		printUsage()
+		os.Exit(1)
 	}
 
-	// Create Temporal client
+	subcommand := os.Args[1]
+	switch subcommand {
+	case "start":
+		cmdStart(os.Args[2:])
+	case "send":
+		cmdSend(os.Args[2:])
+	case "history":
+		cmdHistory(os.Args[2:])
+	case "interrupt":
+		cmdInterrupt(os.Args[2:])
+	case "end":
+		cmdEnd(os.Args[2:])
+	default:
+		log.Fatalf("Unknown sub-command: %s\n\n", subcommand)
+		printUsage()
+		os.Exit(1)
+	}
+}
+
+func printUsage() {
+	fmt.Fprintln(os.Stderr, "Usage: client <command> [flags]")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Commands:")
+	fmt.Fprintln(os.Stderr, "  start      Start a new agentic workflow")
+	fmt.Fprintln(os.Stderr, "  send       Send a user message to a running workflow")
+	fmt.Fprintln(os.Stderr, "  history    Query conversation history")
+	fmt.Fprintln(os.Stderr, "  interrupt  Interrupt the current turn")
+	fmt.Fprintln(os.Stderr, "  end        Shutdown the workflow")
+}
+
+func dialTemporal() client.Client {
 	c, err := client.Dial(client.Options{
-		HostPort: client.DefaultHostPort, // localhost:7233
+		HostPort: client.DefaultHostPort,
 	})
 	if err != nil {
 		log.Fatalf("Failed to create Temporal client: %v", err)
 	}
+	return c
+}
+
+// cmdStart starts a new agentic workflow.
+func cmdStart(args []string) {
+	fs := flag.NewFlagSet("start", flag.ExitOnError)
+	message := fs.String("message", "", "User message to send to the agent (required)")
+	model := fs.String("model", "gpt-4o-mini", "LLM model to use")
+	enableShell := fs.Bool("enable-shell", true, "Enable shell tool")
+	enableReadFile := fs.Bool("enable-read-file", true, "Enable read_file tool")
+	fs.Parse(args)
+
+	if *message == "" {
+		log.Fatal("Error: --message is required\n\nUsage: client start --message \"Your message here\"")
+	}
+
+	c := dialTemporal()
 	defer c.Close()
 
-	// Generate workflow ID
 	workflowID := fmt.Sprintf("codex-%s", uuid.New().String()[:8])
 
-	// Determine working directory
 	cwd, err := os.Getwd()
 	if err != nil {
 		cwd = ""
 	}
 
-	// Prepare workflow input
 	input := workflow.WorkflowInput{
 		ConversationID: workflowID,
 		UserMessage:    *message,
@@ -70,19 +117,14 @@ func main() {
 		},
 	}
 
-	// Start workflow
 	log.Printf("Starting workflow: %s", workflowID)
 	log.Printf("Message: %s", *message)
-	log.Printf("Model: %s", *model)
-	log.Printf("Tools enabled: shell=%v, read_file=%v", *enableShell, *enableReadFile)
-
-	workflowOptions := client.StartWorkflowOptions{
-		ID:        workflowID,
-		TaskQueue: TaskQueue,
-	}
 
 	ctx := context.Background()
-	run, err := c.ExecuteWorkflow(ctx, workflowOptions, "AgenticWorkflow", input)
+	run, err := c.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
+		ID:        workflowID,
+		TaskQueue: TaskQueue,
+	}, "AgenticWorkflow", input)
 	if err != nil {
 		log.Fatalf("Failed to start workflow: %v", err)
 	}
@@ -91,26 +133,143 @@ func main() {
 	log.Printf("Workflow ID: %s", workflowID)
 	log.Printf("Run ID: %s", run.GetRunID())
 	log.Printf("Temporal UI: http://localhost:8233/namespaces/default/workflows/%s", workflowID)
-	log.Println()
-	log.Println("Waiting for workflow to complete...")
 
-	// Wait for workflow to complete (with timeout)
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
+	// Print workflow ID on stdout for scripting
+	fmt.Println(workflowID)
+}
 
-	var result workflow.WorkflowResult
-	err = run.Get(ctx, &result)
-	if err != nil {
-		log.Fatalf("Workflow execution failed: %v", err)
+// cmdSend sends a user_input Update to a running workflow.
+func cmdSend(args []string) {
+	fs := flag.NewFlagSet("send", flag.ExitOnError)
+	workflowID := fs.String("workflow-id", "", "Workflow ID (required)")
+	message := fs.String("message", "", "User message (required)")
+	fs.Parse(args)
+
+	if *workflowID == "" || *message == "" {
+		log.Fatal("Error: --workflow-id and --message are required")
 	}
 
-	// Print results
-	log.Println()
-	log.Println("=== Workflow Completed ===")
-	log.Printf("Conversation ID: %s", result.ConversationID)
-	log.Printf("Total Iterations: %d", result.TotalIterations)
-	log.Printf("Total Tokens: %d", result.TotalTokens)
-	log.Printf("Tools Executed: %v", result.ToolCallsExecuted)
-	log.Println()
-	log.Printf("View full history in Temporal UI: http://localhost:8233/namespaces/default/workflows/%s", workflowID)
+	c := dialTemporal()
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	updateHandle, err := c.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
+		WorkflowID:   *workflowID,
+		UpdateName:   workflow.UpdateUserInput,
+		Args:         []interface{}{workflow.UserInput{Content: *message}},
+		WaitForStage: client.WorkflowUpdateStageCompleted,
+	})
+	if err != nil {
+		log.Fatalf("Failed to send user input: %v", err)
+	}
+
+	var accepted workflow.UserInputAccepted
+	if err := updateHandle.Get(ctx, &accepted); err != nil {
+		log.Fatalf("Update failed: %v", err)
+	}
+
+	log.Printf("Message accepted, turn ID: %s", accepted.TurnID)
+	fmt.Println(accepted.TurnID)
+}
+
+// cmdHistory queries the conversation history.
+func cmdHistory(args []string) {
+	fs := flag.NewFlagSet("history", flag.ExitOnError)
+	workflowID := fs.String("workflow-id", "", "Workflow ID (required)")
+	fs.Parse(args)
+
+	if *workflowID == "" {
+		log.Fatal("Error: --workflow-id is required")
+	}
+
+	c := dialTemporal()
+	defer c.Close()
+
+	resp, err := c.QueryWorkflow(context.Background(), *workflowID, "", workflow.QueryGetConversationItems)
+	if err != nil {
+		log.Fatalf("Failed to query history: %v", err)
+	}
+
+	var items []models.ConversationItem
+	if err := resp.Get(&items); err != nil {
+		log.Fatalf("Failed to decode history: %v", err)
+	}
+
+	// Print items as JSON
+	data, err := json.MarshalIndent(items, "", "  ")
+	if err != nil {
+		log.Fatalf("Failed to marshal history: %v", err)
+	}
+	fmt.Println(string(data))
+}
+
+// cmdInterrupt sends an interrupt Update.
+func cmdInterrupt(args []string) {
+	fs := flag.NewFlagSet("interrupt", flag.ExitOnError)
+	workflowID := fs.String("workflow-id", "", "Workflow ID (required)")
+	fs.Parse(args)
+
+	if *workflowID == "" {
+		log.Fatal("Error: --workflow-id is required")
+	}
+
+	c := dialTemporal()
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	updateHandle, err := c.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
+		WorkflowID:   *workflowID,
+		UpdateName:   workflow.UpdateInterrupt,
+		Args:         []interface{}{workflow.InterruptRequest{}},
+		WaitForStage: client.WorkflowUpdateStageCompleted,
+	})
+	if err != nil {
+		log.Fatalf("Failed to send interrupt: %v", err)
+	}
+
+	var resp workflow.InterruptResponse
+	if err := updateHandle.Get(ctx, &resp); err != nil {
+		log.Fatalf("Interrupt failed: %v", err)
+	}
+
+	log.Printf("Interrupt acknowledged: %v", resp.Acknowledged)
+}
+
+// cmdEnd sends a shutdown Update.
+func cmdEnd(args []string) {
+	fs := flag.NewFlagSet("end", flag.ExitOnError)
+	workflowID := fs.String("workflow-id", "", "Workflow ID (required)")
+	reason := fs.String("reason", "", "Shutdown reason (optional)")
+	fs.Parse(args)
+
+	if *workflowID == "" {
+		log.Fatal("Error: --workflow-id is required")
+	}
+
+	c := dialTemporal()
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	updateHandle, err := c.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
+		WorkflowID:   *workflowID,
+		UpdateName:   workflow.UpdateShutdown,
+		Args:         []interface{}{workflow.ShutdownRequest{Reason: *reason}},
+		WaitForStage: client.WorkflowUpdateStageCompleted,
+	})
+	if err != nil {
+		log.Fatalf("Failed to send shutdown: %v", err)
+	}
+
+	var resp workflow.ShutdownResponse
+	if err := updateHandle.Get(ctx, &resp); err != nil {
+		log.Fatalf("Shutdown failed: %v", err)
+	}
+
+	log.Printf("Shutdown acknowledged: %v", resp.Acknowledged)
 }

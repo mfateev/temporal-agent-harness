@@ -13,6 +13,10 @@ const (
 	ItemTypeAssistantMessage   ConversationItemType = "assistant_message"    // Codex: ResponseItem::AssistantMessage
 	ItemTypeFunctionCall       ConversationItemType = "function_call"        // Codex: ResponseItem::FunctionCall
 	ItemTypeFunctionCallOutput ConversationItemType = "function_call_output" // Codex: ResponseItem::FunctionCallOutput
+
+	// Turn lifecycle markers (maps to Codex EventMsg::TurnStarted / EventMsg::TurnComplete)
+	ItemTypeTurnStarted  ConversationItemType = "turn_started"  // Codex: EventMsg::TurnStarted
+	ItemTypeTurnComplete ConversationItemType = "turn_complete"  // Codex: EventMsg::TurnComplete
 )
 
 // FunctionCallOutputPayload matches Codex's FunctionCallOutputPayload.
@@ -47,6 +51,9 @@ type ConversationItem struct {
 	// FunctionCallOutput fields (Codex: ResponseItem::FunctionCallOutput)
 	// CallID is shared with FunctionCall
 	Output *FunctionCallOutputPayload `json:"output,omitempty"`
+
+	// Turn tracking (maps to Codex TurnContext.turn_id)
+	TurnID string `json:"turn_id,omitempty"`
 }
 
 // ToolCall represents a parsed tool call for internal dispatch.
