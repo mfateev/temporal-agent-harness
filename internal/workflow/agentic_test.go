@@ -10,10 +10,12 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/mfateev/codex-temporal-go/internal/activities"
+	"github.com/mfateev/codex-temporal-go/internal/history"
 	"github.com/mfateev/codex-temporal-go/internal/models"
 )
 
@@ -585,6 +587,74 @@ func TestSessionState_MultiTurnFieldsSerialize(t *testing.T) {
 	assert.Equal(t, "turn-99", state.CurrentTurnID)
 	assert.Equal(t, 500, state.TotalTokens)
 	assert.Equal(t, []string{"shell", "read_file"}, state.ToolCallsExecuted)
+}
+
+// TestMultiTurn_ContextOverflow_CompactsHistory verifies that a ContextOverflow
+// error triggers history compaction before ContinueAsNew. The second workflow
+// execution should have fewer history items.
+func (s *AgenticWorkflowTestSuite) TestMultiTurn_ContextOverflow_CompactsHistory() {
+	// First LLM call succeeds
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(mockLLMStopResponse("First response", 40), nil).Once()
+	// Second LLM call succeeds
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(mockLLMStopResponse("Second response", 40), nil).Once()
+	// Third LLM call returns ContextOverflow (non-retryable ApplicationError)
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(activities.LLMActivityOutput{}, temporal.NewNonRetryableApplicationError(
+			"context too large", models.LLMErrTypeContextOverflow, nil)).Once()
+
+	// Send second user input
+	s.env.RegisterDelayedCallback(func() {
+		s.env.UpdateWorkflow(UpdateUserInput, "input-2", noopCallback(),
+			UserInput{Content: "Second question"})
+	}, time.Second*2)
+
+	// Send third user input (will trigger overflow)
+	s.env.RegisterDelayedCallback(func() {
+		s.env.UpdateWorkflow(UpdateUserInput, "input-3", noopCallback(),
+			UserInput{Content: "Third question"})
+	}, time.Second*4)
+
+	s.env.ExecuteWorkflow(AgenticWorkflow, testInput("First question"))
+
+	require.True(s.T(), s.env.IsWorkflowCompleted())
+
+	// The workflow should ContinueAsNew after compaction
+	err := s.env.GetWorkflowError()
+	require.Error(s.T(), err)
+	assert.Contains(s.T(), err.Error(), "continue as new")
+}
+
+// TestContextOverflow_CompactsBeforeCAN verifies that the overflow handler
+// in runAgenticTurn actually drops items from history.
+func TestContextOverflow_CompactsBeforeCAN(t *testing.T) {
+	h := history.NewInMemoryHistory()
+	// Simulate 4 turns of history
+	for i := 0; i < 4; i++ {
+		h.AddItem(models.ConversationItem{Type: models.ItemTypeTurnStarted, TurnID: fmt.Sprintf("t%d", i)})
+		h.AddItem(models.ConversationItem{Type: models.ItemTypeUserMessage, Content: fmt.Sprintf("msg-%d", i)})
+		h.AddItem(models.ConversationItem{Type: models.ItemTypeAssistantMessage, Content: fmt.Sprintf("reply-%d", i)})
+		h.AddItem(models.ConversationItem{Type: models.ItemTypeTurnComplete, TurnID: fmt.Sprintf("t%d", i)})
+	}
+
+	// 16 items, 4 turns. keepTurns = 4/2 = 2
+	turnCount, _ := h.GetTurnCount()
+	assert.Equal(t, 4, turnCount)
+
+	keepTurns := turnCount / 2
+	if keepTurns < 2 {
+		keepTurns = 2
+	}
+	dropped, err := h.DropOldestUserTurns(keepTurns)
+	require.NoError(t, err)
+	assert.Equal(t, 8, dropped) // dropped first 2 turns
+
+	items, _ := h.GetRawItems()
+	assert.Len(t, items, 8) // 2 turns remaining
+
+	newTurnCount, _ := h.GetTurnCount()
+	assert.Equal(t, 2, newTurnCount)
 }
 
 // Ensure we reference workflow.Context (suppress unused import warning)

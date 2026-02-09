@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/chzyer/readline"
 	"github.com/google/uuid"
+	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 
 	"github.com/mfateev/codex-temporal-go/internal/models"
@@ -31,14 +33,13 @@ const (
 	StateStartup State = iota
 	StateInput
 	StateWatching
-	StateInterrupted
 	StateShutdown
 )
 
 // Config holds CLI configuration.
 type Config struct {
 	TemporalHost string
-	WorkflowID   string // Resume existing workflow
+	Session      string // Resume existing session (workflow ID)
 	Message      string // Initial message for new workflow
 	Model        string
 	NoMarkdown   bool
@@ -68,6 +69,9 @@ type App struct {
 	// Ctrl+C tracking
 	lastInterruptTime time.Time
 	interruptMu       sync.Mutex
+
+	// Consecutive poll errors (reset on success)
+	consecutiveErrors int
 
 	// Readline instance
 	rl *readline.Instance
@@ -116,14 +120,14 @@ func (a *App) Run() error {
 	defer signal.Stop(a.sigCh)
 
 	// Startup: either resume or start new workflow
-	if a.config.WorkflowID != "" {
+	if a.config.Session != "" {
 		if err := a.resumeWorkflow(); err != nil {
 			return err
 		}
 	} else {
 		// If no initial message, prompt for one
 		if a.config.Message == "" {
-			fmt.Fprintf(os.Stderr, "codex-temporal (type /exit to quit)\n")
+			fmt.Fprintf(os.Stderr, "codex-temporal (type /exit to disconnect, /end to terminate session)\n")
 			line, err := a.rl.Readline()
 			if err != nil {
 				return nil // User cancelled
@@ -193,7 +197,7 @@ func (a *App) startWorkflow() error {
 }
 
 func (a *App) resumeWorkflow() error {
-	a.workflowID = a.config.WorkflowID
+	a.workflowID = a.config.Session
 
 	fmt.Fprintf(os.Stderr, "Resuming session: %s\n", a.workflowID)
 
@@ -254,6 +258,10 @@ func (a *App) mainLoop() error {
 	}
 
 	startInput := func() {
+		// Wait for any previous input goroutine to finish
+		if inputDone != nil {
+			<-inputDone
+		}
 		inputDone = make(chan struct{})
 		go func() {
 			defer close(inputDone)
@@ -283,8 +291,14 @@ func (a *App) mainLoop() error {
 
 			// Handle special commands
 			if line == "/exit" || line == "/quit" {
-				a.state = StateShutdown
-				a.spinner.Start("Shutting down...")
+				// Disconnect — workflow stays alive
+				a.printResumeHint()
+				return nil
+			}
+
+			if line == "/end" {
+				// Explicit shutdown — terminates the workflow
+				a.spinner.Start("Ending session...")
 				if err := a.sendShutdown(); err != nil {
 					fmt.Fprintf(os.Stderr, "Error sending shutdown: %v\n", err)
 				}
@@ -305,15 +319,24 @@ func (a *App) mainLoop() error {
 
 		case result := <-a.pollCh:
 			if result.Err != nil {
-				// Check if workflow completed
-				if isWorkflowCompleted(result.Err) {
+				switch classifyPollError(result.Err) {
+				case pollErrorCompleted:
 					a.spinner.Stop()
 					fmt.Fprintf(os.Stderr, "Session ended.\n")
 					return nil
+				case pollErrorTransient:
+					continue
+				case pollErrorFatal:
+					a.consecutiveErrors++
+					if a.consecutiveErrors >= 5 {
+						a.spinner.Stop()
+						fmt.Fprintf(os.Stderr, "Error: %v\n", result.Err)
+						return result.Err
+					}
+					continue
 				}
-				// Transient error (e.g., during ContinueAsNew) — ignore
-				continue
 			}
+			a.consecutiveErrors = 0
 
 			// Render new items
 			a.renderNewItems(result.Items)
@@ -337,7 +360,7 @@ func (a *App) mainLoop() error {
 		case <-a.sigCh:
 			a.handleInterrupt(startPolling, stopPolling, startInput)
 			if a.state == StateShutdown {
-				return a.waitForCompletion()
+				return nil // disconnect cleanly, workflow stays alive
 			}
 		}
 	}
@@ -347,8 +370,11 @@ func (a *App) readInput() {
 	line, err := a.rl.Readline()
 	if err != nil {
 		if err == readline.ErrInterrupt {
-			// Ctrl+C during input — send to sigCh
-			a.sigCh <- syscall.SIGINT
+			// Ctrl+C during input — non-blocking send to sigCh
+			select {
+			case a.sigCh <- syscall.SIGINT:
+			default: // signal already pending, skip
+			}
 			return
 		}
 		if err == io.EOF {
@@ -356,6 +382,8 @@ func (a *App) readInput() {
 			a.inputCh <- "/exit"
 			return
 		}
+		// Unexpected error — signal exit instead of hanging
+		a.inputCh <- "/exit"
 		return
 	}
 	a.inputCh <- line
@@ -424,34 +452,26 @@ func (a *App) handleInterrupt(startPolling, stopPolling, startInput func()) {
 	switch a.state {
 	case StateWatching:
 		if now.Sub(a.lastInterruptTime) < 2*time.Second {
-			// Second Ctrl+C within 2s — shutdown
+			// Second Ctrl+C within 2s — disconnect (workflow stays alive)
 			a.spinner.Stop()
-			fmt.Fprintf(os.Stderr, "\nShutting down...\n")
+			a.printResumeHint()
 			a.state = StateShutdown
-			_ = a.sendShutdown()
 			return
 		}
 
 		// First Ctrl+C — interrupt current turn
 		a.lastInterruptTime = now
 		a.spinner.Stop()
-		fmt.Fprintf(os.Stderr, "\nInterrupting... (press Ctrl+C again to exit)\n")
+		fmt.Fprintf(os.Stderr, "\nInterrupting... (Ctrl+C again to disconnect)\n")
 		_ = a.sendInterrupt()
 
 		// Stay in watching mode, wait for turn_complete(interrupted)
 		a.spinner.Start("Interrupting...")
 
 	case StateInput:
-		// Ctrl+C during input — shutdown
-		fmt.Fprintf(os.Stderr, "\nShutting down...\n")
+		// Ctrl+C during input — disconnect (workflow stays alive)
+		a.printResumeHint()
 		a.state = StateShutdown
-		_ = a.sendShutdown()
-
-	case StateInterrupted:
-		// Already interrupted — force shutdown
-		fmt.Fprintf(os.Stderr, "\nForce shutting down...\n")
-		a.state = StateShutdown
-		_ = a.sendShutdown()
 	}
 }
 
@@ -501,9 +521,41 @@ func (a *App) waitForCompletion() error {
 	return nil
 }
 
-func isWorkflowCompleted(err error) bool {
-	// Check for common "workflow not found" or "completed" errors
-	errStr := err.Error()
-	return strings.Contains(errStr, "workflow execution already completed") ||
-		strings.Contains(errStr, "not found")
+func (a *App) printResumeHint() {
+	fmt.Fprintf(os.Stderr, "\nSession suspended. Resume with:\n  cli --session %s\n", a.workflowID)
+}
+
+// pollErrorKind classifies errors from workflow queries.
+type pollErrorKind int
+
+const (
+	pollErrorTransient pollErrorKind = iota // retry silently
+	pollErrorCompleted                      // workflow done, exit
+	pollErrorFatal                          // show error, exit
+)
+
+// classifyPollError categorizes a poll error using Temporal SDK typed errors.
+func classifyPollError(err error) pollErrorKind {
+	// Typed checks first
+	var notFoundErr *serviceerror.NotFound
+	if errors.As(err, &notFoundErr) {
+		return pollErrorCompleted
+	}
+
+	var notReadyErr *serviceerror.WorkflowNotReady
+	if errors.As(err, &notReadyErr) {
+		return pollErrorTransient
+	}
+
+	var queryFailedErr *serviceerror.QueryFailed
+	if errors.As(err, &queryFailedErr) {
+		return pollErrorTransient
+	}
+
+	// Fallback string check for edge cases
+	if strings.Contains(err.Error(), "workflow execution already completed") {
+		return pollErrorCompleted
+	}
+
+	return pollErrorFatal
 }

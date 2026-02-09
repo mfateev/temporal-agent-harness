@@ -8,7 +8,7 @@
 //
 //	cli -m "hello"                    Start new session with initial message
 //	cli                               Start new session, enter input immediately
-//	cli --workflow-id <id>            Resume existing session
+//	cli --session <id>               Resume existing session
 //	cli -m "hello" --model gpt-4o    Use a specific model
 package main
 
@@ -25,7 +25,8 @@ import (
 func main() {
 	message := flag.String("m", "", "Initial message (starts new workflow)")
 	message2 := flag.String("message", "", "Initial message (alias for -m)")
-	workflowID := flag.String("workflow-id", "", "Resume existing workflow")
+	session := flag.String("session", "", "Resume existing session")
+	workflowID := flag.String("workflow-id", "", "Resume existing session (alias for --session)")
 	model := flag.String("model", "gpt-4o-mini", "LLM model to use")
 	temporalHost := flag.String("temporal-host", client.DefaultHostPort, "Temporal server address")
 	noMarkdown := flag.Bool("no-markdown", false, "Disable markdown rendering")
@@ -40,9 +41,15 @@ func main() {
 		msg = *message2
 	}
 
+	// Support both --session and --workflow-id (backward compat)
+	sess := *session
+	if sess == "" {
+		sess = *workflowID
+	}
+
 	config := cli.Config{
 		TemporalHost: *temporalHost,
-		WorkflowID:   *workflowID,
+		Session:      sess,
 		Message:      msg,
 		Model:        *model,
 		NoMarkdown:   *noMarkdown,

@@ -354,19 +354,26 @@ func (s *SessionState) runAgenticTurn(ctx workflow.Context) (bool, error) {
 		err = workflow.ExecuteActivity(llmCtx, "ExecuteLLMCall", llmInput).Get(ctx, &llmResult)
 
 		if err != nil {
-			var activityErr *models.ActivityError
-			if errors.As(err, &activityErr) {
-				switch activityErr.Type {
-				case models.ErrorTypeContextOverflow:
-					logger.Warn("Context overflow, triggering ContinueAsNew")
+			var appErr *temporal.ApplicationError
+			if errors.As(err, &appErr) {
+				switch appErr.Type() {
+				case models.LLMErrTypeContextOverflow:
+					turnCount, _ := s.History.GetTurnCount()
+					keepTurns := turnCount / 2
+					if keepTurns < 2 {
+						keepTurns = 2
+					}
+					dropped, _ := s.History.DropOldestUserTurns(keepTurns)
+					logger.Warn("Context overflow, compacted history",
+						"dropped_items", dropped, "kept_turns", keepTurns)
 					return true, nil
 
-				case models.ErrorTypeAPILimit:
+				case models.LLMErrTypeAPILimit:
 					logger.Warn("API rate limit, sleeping for 1 minute")
 					workflow.Sleep(ctx, time.Minute)
 					continue
 
-				case models.ErrorTypeFatal:
+				case models.LLMErrTypeFatal:
 					return false, fmt.Errorf("fatal error: %w", err)
 				}
 			}

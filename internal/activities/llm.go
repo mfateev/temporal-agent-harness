@@ -5,6 +5,7 @@ package activities
 
 import (
 	"context"
+	"errors"
 
 	"github.com/mfateev/codex-temporal-go/internal/llm"
 	"github.com/mfateev/codex-temporal-go/internal/models"
@@ -61,6 +62,10 @@ func (a *LLMActivities) ExecuteLLMCall(ctx context.Context, input LLMActivityInp
 
 	response, err := a.client.Call(ctx, request)
 	if err != nil {
+		var activityErr *models.ActivityError
+		if errors.As(err, &activityErr) {
+			return LLMActivityOutput{}, models.WrapActivityError(activityErr)
+		}
 		return LLMActivityOutput{}, err
 	}
 
