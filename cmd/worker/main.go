@@ -12,6 +12,7 @@ import (
 
 	"github.com/mfateev/codex-temporal-go/internal/activities"
 	"github.com/mfateev/codex-temporal-go/internal/llm"
+	"github.com/mfateev/codex-temporal-go/internal/temporalclient"
 	"github.com/mfateev/codex-temporal-go/internal/tools"
 	"github.com/mfateev/codex-temporal-go/internal/tools/handlers"
 	"github.com/mfateev/codex-temporal-go/internal/workflow"
@@ -27,10 +28,10 @@ func main() {
 		log.Fatal("OPENAI_API_KEY environment variable is required")
 	}
 
-	// Create Temporal client
-	c, err := client.Dial(client.Options{
-		HostPort: client.DefaultHostPort, // localhost:7233
-	})
+	// Load Temporal client options via envconfig (supports env vars, config files, TLS)
+	opts := temporalclient.MustLoadClientOptions("", "")
+
+	c, err := client.Dial(opts)
 	if err != nil {
 		log.Fatalf("Failed to create Temporal client: %v", err)
 	}
@@ -71,7 +72,9 @@ func main() {
 
 	// Start worker
 	log.Printf("Starting worker on task queue: %s", TaskQueue)
-	log.Printf("Temporal server: %s", client.DefaultHostPort)
+	if opts.HostPort != "" {
+		log.Printf("Temporal server: %s", opts.HostPort)
+	}
 
 	err = w.Run(worker.InterruptCh())
 	if err != nil {

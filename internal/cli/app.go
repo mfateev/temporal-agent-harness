@@ -19,6 +19,7 @@ import (
 	"go.temporal.io/sdk/client"
 
 	"github.com/mfateev/codex-temporal-go/internal/models"
+	"github.com/mfateev/codex-temporal-go/internal/temporalclient"
 	"github.com/mfateev/codex-temporal-go/internal/workflow"
 )
 
@@ -111,10 +112,13 @@ func NewApp(config Config) *App {
 
 // Run is the main entry point.
 func (a *App) Run() error {
-	// Connect to Temporal
-	c, err := client.Dial(client.Options{
-		HostPort: a.config.TemporalHost,
-	})
+	// Connect to Temporal via envconfig (supports env vars, config files, TLS).
+	// The --temporal-host flag overrides the envconfig host if set.
+	clientOpts, err := temporalclient.LoadClientOptions(a.config.TemporalHost, "")
+	if err != nil {
+		return fmt.Errorf("failed to load Temporal client config: %w", err)
+	}
+	c, err := client.Dial(clientOpts)
 	if err != nil {
 		return fmt.Errorf("failed to connect to Temporal: %w", err)
 	}

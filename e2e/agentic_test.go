@@ -24,6 +24,7 @@ import (
 	"go.temporal.io/sdk/client"
 
 	"github.com/mfateev/codex-temporal-go/internal/models"
+	"github.com/mfateev/codex-temporal-go/internal/temporalclient"
 	"github.com/mfateev/codex-temporal-go/internal/workflow"
 )
 
@@ -56,7 +57,11 @@ func dialTemporal(t *testing.T) client.Client {
 	if os.Getenv("OPENAI_API_KEY") == "" {
 		t.Skip("OPENAI_API_KEY not set, skipping E2E test")
 	}
-	c, err := client.Dial(client.Options{HostPort: TemporalHostPort})
+	// Use envconfig for Temporal connection (supports env vars, config files, TLS).
+	// Falls back to TemporalHostPort constant for local dev.
+	opts, err := temporalclient.LoadClientOptions(TemporalHostPort, "")
+	require.NoError(t, err, "Failed to load Temporal client config")
+	c, err := client.Dial(opts)
 	require.NoError(t, err, "Failed to connect to Temporal server. Is it running?")
 	return c
 }

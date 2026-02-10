@@ -19,8 +19,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"go.temporal.io/sdk/client"
-
 	"github.com/mfateev/codex-temporal-go/internal/cli"
 	"github.com/mfateev/codex-temporal-go/internal/instructions"
 	"github.com/mfateev/codex-temporal-go/internal/models"
@@ -32,7 +30,7 @@ func main() {
 	session := flag.String("session", "", "Resume existing session")
 	workflowID := flag.String("workflow-id", "", "Resume existing session (alias for --session)")
 	model := flag.String("model", "gpt-4o-mini", "LLM model to use")
-	temporalHost := flag.String("temporal-host", client.DefaultHostPort, "Temporal server address")
+	temporalHost := flag.String("temporal-host", "", "Temporal server address (overrides envconfig/env vars)")
 	noMarkdown := flag.Bool("no-markdown", false, "Disable markdown rendering")
 	noColor := flag.Bool("no-color", false, "Disable colored output")
 	enableShell := flag.Bool("enable-shell", true, "Enable shell tool")
