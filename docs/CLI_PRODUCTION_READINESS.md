@@ -5,7 +5,7 @@ Last reviewed: 2026-02-09
 Compared against: Codex Rust CLI/TUI (`codex-rs/cli/`, `codex-rs/tui/`)
 
 This document tracks what must be fixed, added, and improved before the
-interactive CLI (`cmd/cli/`) can be considered production-ready.
+interactive CLI (`cmd/tcx/`) can be considered production-ready.
 
 ---
 
@@ -143,7 +143,7 @@ One-shot mode: start workflow, wait for completion, print result, exit.
 Essential for scripting, CI/CD, and programmatic use.
 
 ```
-cli exec -m "List all TODO comments" --json
+tcx exec -m "List all TODO comments" --json
 ```
 
 **Implementation:**
@@ -350,7 +350,7 @@ resume, users need to copy it. Add:
 
 - Print workflow ID after each turn in the status line
 - Add `/id` command
-- Print resume command on exit: `Resume with: cli --workflow-id codex-xxx`
+- Print resume command on exit: `Resume with: tcx --session codex-xxx`
 
 ---
 

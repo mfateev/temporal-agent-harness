@@ -32,6 +32,11 @@ type ContextManager interface {
 	// Maps to: codex-rs clone_history().drop_last_n_user_turns()
 	DropLastNUserTurns(n int) error
 
+	// DropOldestUserTurns keeps only the last keepN user turns and removes
+	// everything before them. Used for context compaction before ContinueAsNew.
+	// Returns the number of items dropped.
+	DropOldestUserTurns(keepN int) (int, error)
+
 	// GetRawItems returns raw conversation items for analysis
 	// Maps to: codex-rs clone_history().raw_items()
 	GetRawItems() ([]models.ConversationItem, error)

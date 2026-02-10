@@ -16,6 +16,7 @@ var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 type Spinner struct {
 	out     io.Writer
 	mu      sync.Mutex
+	wg      sync.WaitGroup // tracks run() goroutine lifetime
 	message string
 	active  bool
 	stopCh  chan struct{}
@@ -41,6 +42,7 @@ func (sp *Spinner) Start(message string) {
 	sp.active = true
 	sp.message = message
 	sp.stopCh = make(chan struct{})
+	sp.wg.Add(1)
 	sp.mu.Unlock()
 
 	go sp.run()
@@ -64,11 +66,14 @@ func (sp *Spinner) Stop() {
 	close(sp.stopCh)
 	sp.mu.Unlock()
 
+	sp.wg.Wait() // wait for run() goroutine to exit
+
 	// Clear the spinner line
 	fmt.Fprintf(sp.out, "\r\033[K")
 }
 
 func (sp *Spinner) run() {
+	defer sp.wg.Done()
 	ticker := time.NewTicker(80 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -98,6 +103,10 @@ func PhaseMessage(phase workflow.TurnPhase, toolsInFlight []string) string {
 			return fmt.Sprintf("Running %s...", toolsInFlight[0])
 		}
 		return "Running tool..."
+	case workflow.PhaseApprovalPending:
+		return "Waiting for approval..."
+	case workflow.PhaseEscalationPending:
+		return "Waiting for escalation decision..."
 	default:
 		return "Working..."
 	}

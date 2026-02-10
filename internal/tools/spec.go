@@ -61,6 +61,12 @@ func NewShellToolSpec() ToolSpec {
 				Description: "The timeout for the command in milliseconds. Defaults to 10000 (10s). Use longer timeouts for builds, installs, or test suites.",
 				Required:    false,
 			},
+			{
+				Name:        "working_directory",
+				Type:        "string",
+				Description: "Directory to execute the command in. Defaults to the session working directory.",
+				Required:    false,
+			},
 		},
 		DefaultTimeoutMs: DefaultShellTimeoutMs,
 	}

@@ -32,25 +32,36 @@ const (
 	// UpdateShutdown ends the session.
 	// Maps to: Codex Op::Shutdown
 	UpdateShutdown = "shutdown"
+
+	// UpdateApprovalResponse submits the user's tool approval decision.
+	// Maps to: Codex approval flow (AskForApproval)
+	UpdateApprovalResponse = "approval_response"
+
+	// UpdateEscalationResponse submits the user's escalation decision (on-failure mode).
+	UpdateEscalationResponse = "escalation_response"
 )
 
 // TurnPhase indicates the current phase of the workflow turn.
 type TurnPhase string
 
 const (
-	PhaseWaitingForInput TurnPhase = "waiting_for_input"
-	PhaseLLMCalling      TurnPhase = "llm_calling"
-	PhaseToolExecuting   TurnPhase = "tool_executing"
+	PhaseWaitingForInput    TurnPhase = "waiting_for_input"
+	PhaseLLMCalling         TurnPhase = "llm_calling"
+	PhaseToolExecuting      TurnPhase = "tool_executing"
+	PhaseApprovalPending    TurnPhase = "approval_pending"
+	PhaseEscalationPending  TurnPhase = "escalation_pending"
 )
 
 // TurnStatus is the response from the get_turn_status query.
 type TurnStatus struct {
-	Phase          TurnPhase `json:"phase"`
-	CurrentTurnID  string    `json:"current_turn_id"`
-	ToolsInFlight  []string  `json:"tools_in_flight,omitempty"`
-	IterationCount int       `json:"iteration_count"`
-	TotalTokens    int       `json:"total_tokens"`
-	TurnCount      int       `json:"turn_count"`
+	Phase               TurnPhase           `json:"phase"`
+	CurrentTurnID       string              `json:"current_turn_id"`
+	ToolsInFlight       []string            `json:"tools_in_flight,omitempty"`
+	PendingApprovals    []PendingApproval   `json:"pending_approvals,omitempty"`
+	PendingEscalations  []EscalationRequest `json:"pending_escalations,omitempty"`
+	IterationCount      int                 `json:"iteration_count"`
+	TotalTokens         int                 `json:"total_tokens"`
+	TurnCount           int                 `json:"turn_count"`
 }
 
 // WorkflowInput is the initial input to start a conversation.
@@ -96,6 +107,44 @@ type ShutdownResponse struct {
 	Acknowledged bool `json:"acknowledged"`
 }
 
+// PendingApproval describes a tool call awaiting user approval.
+// Maps to: Codex approval flow (tool call needing confirmation)
+type PendingApproval struct {
+	CallID    string `json:"call_id"`
+	ToolName  string `json:"tool_name"`
+	Arguments string `json:"arguments"` // Raw JSON string of arguments
+	Reason    string `json:"reason,omitempty"` // Why approval is needed (from policy justification or heuristic)
+}
+
+// ApprovalResponse is the user's decision on pending tool approvals.
+// Maps to: Codex approval flow response
+type ApprovalResponse struct {
+	Approved []string `json:"approved"` // CallIDs the user approved
+	Denied   []string `json:"denied"`   // CallIDs the user denied
+}
+
+// ApprovalResponseAck is returned by the approval_response Update after acceptance.
+type ApprovalResponseAck struct{}
+
+// EscalationRequest describes a failed sandboxed tool call awaiting user escalation.
+// Maps to: Codex on-failure mode escalation
+type EscalationRequest struct {
+	CallID    string `json:"call_id"`
+	ToolName  string `json:"tool_name"`
+	Arguments string `json:"arguments"`
+	Output    string `json:"output"`     // Failed output from sandboxed execution
+	Reason    string `json:"reason"`     // Why escalation is needed
+}
+
+// EscalationResponse is the user's decision on escalation.
+type EscalationResponse struct {
+	Approved []string `json:"approved"` // CallIDs to re-execute without sandbox
+	Denied   []string `json:"denied"`   // CallIDs to reject
+}
+
+// EscalationResponseAck is returned by the escalation_response Update.
+type EscalationResponseAck struct{}
+
 // SessionState is passed through ContinueAsNew.
 // Uses ContextManager interface to allow pluggable storage backends.
 //
@@ -118,8 +167,21 @@ type SessionState struct {
 	CurrentTurnID     string `json:"current_turn_id"`      // Active turn ID
 
 	// Turn phase tracking (for CLI polling)
-	Phase         TurnPhase `json:"phase"`
-	ToolsInFlight []string  `json:"tools_in_flight,omitempty"`
+	Phase            TurnPhase         `json:"phase"`
+	ToolsInFlight    []string          `json:"tools_in_flight,omitempty"`
+	PendingApprovals []PendingApproval `json:"pending_approvals,omitempty"`
+
+	// Approval transient state (not serialized — lost on ContinueAsNew)
+	ApprovalReceived bool              `json:"-"`
+	ApprovalResponse *ApprovalResponse `json:"-"`
+
+	// Escalation transient state (on-failure mode)
+	PendingEscalations  []EscalationRequest  `json:"pending_escalations,omitempty"`
+	EscalationReceived  bool                 `json:"-"`
+	EscalationResponse  *EscalationResponse  `json:"-"`
+
+	// Exec policy rules (serialized text, persists across ContinueAsNew)
+	ExecPolicyRules string `json:"exec_policy_rules,omitempty"`
 
 	// Cumulative stats (persist across ContinueAsNew)
 	TotalTokens       int      `json:"total_tokens"`

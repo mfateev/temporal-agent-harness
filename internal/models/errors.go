@@ -97,6 +97,39 @@ func NewFatalError(message string) *ActivityError {
 	}
 }
 
+// LLM error type strings for temporal.ApplicationError.Type().
+// Used across the activity boundary so the workflow can classify errors
+// without parsing messages.
+const (
+	// LLMErrTypeContextOverflow indicates the context window was exceeded.
+	// Non-retryable: the same input will fail again without compaction.
+	LLMErrTypeContextOverflow = "LLMContextOverflow"
+
+	// LLMErrTypeAPILimit indicates an API rate limit was hit.
+	// Retryable after a delay.
+	LLMErrTypeAPILimit = "LLMAPILimit"
+
+	// LLMErrTypeFatal indicates an unrecoverable LLM error.
+	// Non-retryable.
+	LLMErrTypeFatal = "LLMFatal"
+)
+
+// WrapActivityError converts an ActivityError into a temporal.ApplicationError
+// suitable for returning from a Temporal activity. This ensures the error type
+// survives serialization across the activity boundary.
+func WrapActivityError(ae *ActivityError) error {
+	switch ae.Type {
+	case ErrorTypeContextOverflow:
+		return temporal.NewNonRetryableApplicationError(ae.Message, LLMErrTypeContextOverflow, nil)
+	case ErrorTypeAPILimit:
+		return temporal.NewApplicationErrorWithCause(ae.Message, LLMErrTypeAPILimit, nil)
+	case ErrorTypeFatal:
+		return temporal.NewNonRetryableApplicationError(ae.Message, LLMErrTypeFatal, nil)
+	default:
+		return temporal.NewApplicationErrorWithCause(ae.Message, ae.Type.String(), nil)
+	}
+}
+
 // Tool error type strings for temporal.ApplicationError.Type().
 // Use these constants to match errors on the workflow side via appErr.Type().
 // Never parse error messages — use appErr.Details() for structured data.

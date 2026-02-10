@@ -90,6 +90,47 @@ func (h *InMemoryHistory) DropLastNUserTurns(n int) error {
 	return nil
 }
 
+// DropOldestUserTurns keeps only the last keepN user turns and their
+// associated items. Everything before the Nth-from-last user message is removed.
+// Returns the number of items dropped.
+func (h *InMemoryHistory) DropOldestUserTurns(keepN int) (int, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if keepN <= 0 {
+		return 0, nil
+	}
+
+	// Count backwards to find the start of the Nth-from-last user message
+	userCount := 0
+	cutIndex := 0
+	for i := len(h.items) - 1; i >= 0; i-- {
+		if h.items[i].Type == models.ItemTypeUserMessage {
+			userCount++
+			if userCount == keepN {
+				cutIndex = i
+				// Include the TurnStarted marker that precedes this user message
+				if cutIndex > 0 && h.items[cutIndex-1].Type == models.ItemTypeTurnStarted {
+					cutIndex = cutIndex - 1
+				}
+				break
+			}
+		}
+	}
+
+	if cutIndex == 0 {
+		return 0, nil // nothing to drop
+	}
+
+	dropped := cutIndex
+	h.items = h.items[cutIndex:]
+	// Re-assign Seq numbers
+	for i := range h.items {
+		h.items[i].Seq = i
+	}
+	return dropped, nil
+}
+
 // GetRawItems returns raw conversation items for analysis.
 func (h *InMemoryHistory) GetRawItems() ([]models.ConversationItem, error) {
 	h.mu.RLock()

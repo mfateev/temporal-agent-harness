@@ -33,12 +33,18 @@ func NewPoller(c client.Client, workflowID string, interval time.Duration) *Poll
 	}
 }
 
+// queryTimeout is the per-query timeout for individual workflow queries.
+const queryTimeout = 5 * time.Second
+
 // Poll performs a single poll cycle: queries items and turn status.
 func (p *Poller) Poll(ctx context.Context) PollResult {
 	var result PollResult
 
+	queryCtx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+
 	// Query conversation items
-	resp, err := p.client.QueryWorkflow(ctx, p.workflowID, "", workflow.QueryGetConversationItems)
+	resp, err := p.client.QueryWorkflow(queryCtx, p.workflowID, "", workflow.QueryGetConversationItems)
 	if err != nil {
 		result.Err = err
 		return result
@@ -49,7 +55,7 @@ func (p *Poller) Poll(ctx context.Context) PollResult {
 	}
 
 	// Query turn status
-	statusResp, err := p.client.QueryWorkflow(ctx, p.workflowID, "", workflow.QueryGetTurnStatus)
+	statusResp, err := p.client.QueryWorkflow(queryCtx, p.workflowID, "", workflow.QueryGetTurnStatus)
 	if err != nil {
 		result.Err = err
 		return result

@@ -4,9 +4,12 @@ package cli
 import (
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
+	"github.com/charmbracelet/glamour"
 	"github.com/mfateev/codex-temporal-go/internal/models"
+	"golang.org/x/term"
 )
 
 // ANSI color codes.
@@ -25,11 +28,26 @@ type Renderer struct {
 	out        io.Writer
 	noColor    bool
 	noMarkdown bool
+	mdRenderer *glamour.TermRenderer // nil if noMarkdown or init failed
 }
 
 // NewRenderer creates a renderer that writes to the given writer.
 func NewRenderer(out io.Writer, noColor, noMarkdown bool) *Renderer {
-	return &Renderer{out: out, noColor: noColor, noMarkdown: noMarkdown}
+	r := &Renderer{out: out, noColor: noColor, noMarkdown: noMarkdown}
+	if !noMarkdown {
+		width := 80
+		if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 0 {
+			width = w
+		}
+		md, err := glamour.NewTermRenderer(
+			glamour.WithStandardStyle("dark"),
+			glamour.WithWordWrap(width),
+		)
+		if err == nil {
+			r.mdRenderer = md
+		}
+	}
+	return r
 }
 
 // RenderItem renders a single conversation item to the terminal.
@@ -101,7 +119,14 @@ func (r *Renderer) renderAssistantMessage(item models.ConversationItem) {
 	if content == "" {
 		return
 	}
-	// Plain text output (glamour markdown rendering can be added later).
+	if r.mdRenderer != nil {
+		rendered, err := r.mdRenderer.Render(content)
+		if err == nil {
+			fmt.Fprint(r.out, rendered)
+			return
+		}
+	}
+	// Plain text fallback when markdown is disabled or rendering fails.
 	fmt.Fprintf(r.out, "\n%s\n\n", content)
 }
 

@@ -4,7 +4,8 @@
 .vscode/
 
 # Binaries
-worker
+/worker
+/tcx
 *.exe
 *.exe~
 *.dll
