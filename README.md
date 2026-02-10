@@ -100,15 +100,21 @@ tcx [flags]
 - `gpt-3.5-turbo` - GPT-3.5 Turbo
 
 **Anthropic:**
-- `claude-opus-4-6` - Claude Opus 4.6 (most capable)
+- `claude-opus-4-6` - Claude Opus 4.6 (most capable, 200K context)
+- `claude-opus-4-5` - Claude Opus 4.5
 - `claude-sonnet-4.5-20250929` - Claude Sonnet 4.5 (balanced, default for Anthropic)
+- `claude-sonnet-4-0` - Claude Sonnet 4.0
+- `claude-3-7-sonnet-20250219` - Claude 3.7 Sonnet
 - `claude-haiku-4.5-20251001` - Claude Haiku 4.5 (fastest, cheapest)
+- `claude-3-5-haiku-20241022` - Claude 3.5 Haiku
+- `claude-3-opus-20240229` - Claude 3 Opus (legacy)
+- `claude-3-haiku-20240307` - Claude 3 Haiku (legacy)
 
 ## Testing
 
 ```bash
 go test -short ./...                    # Unit tests (no services needed)
-go test -v ./e2e/...                    # E2E tests (requires Temporal + OpenAI)
+go test -v ./e2e/...                    # E2E tests (requires Temporal + OpenAI/Anthropic)
 go test -race -short ./...              # Race detector
 ```
 
