@@ -11,10 +11,15 @@ import (
 	"strings"
 )
 
-// AgentsFileNames lists the instruction file names in priority order.
+// AgentsFileNames lists the agent instruction file names in priority order.
 // At each directory level, the first file found wins.
 // AGENTS.override.md takes precedence over AGENTS.md and CLAUDE.md.
 var AgentsFileNames = []string{"AGENTS.override.md", "AGENTS.md", "CLAUDE.md"}
+
+// SupplementaryFileNames lists additional documentation files loaded alongside
+// the primary agent instruction file. These are always additive — they don't
+// compete with AgentsFileNames but are appended if found at the same directory level.
+var SupplementaryFileNames = []string{"CONTRIBUTING.md", "README.md"}
 
 // MaxProjectDocsBytes is the maximum total size of concatenated project docs.
 const MaxProjectDocsBytes = 512 * 1024 // 512KB
@@ -75,28 +80,56 @@ func LoadProjectDocs(rootDir, targetDir string) (string, error) {
 	totalSize := 0
 
 	for _, dir := range dirs {
+		// Load primary agent instruction file (first match wins)
 		content, filename, err := findInstructionFile(dir)
 		if err != nil {
 			return "", err
 		}
-		if content == "" {
-			continue
+		if content != "" {
+			relPath, _ := filepath.Rel(rootDir, filepath.Join(dir, filename))
+			if relPath == "" {
+				relPath = filename
+			}
+			separator := fmt.Sprintf("--- %s ---", relPath)
+			entrySize := len(separator) + 1 + len(content)
+
+			if totalSize+entrySize > MaxProjectDocsBytes {
+				break
+			}
+
+			parts = append(parts, separator+"\n"+content)
+			totalSize += entrySize
 		}
 
-		// Check size cap
-		relPath, _ := filepath.Rel(rootDir, filepath.Join(dir, filename))
-		if relPath == "" {
-			relPath = filename
-		}
-		separator := fmt.Sprintf("--- %s ---", relPath)
-		entrySize := len(separator) + 1 + len(content)
+		// Load supplementary files (additive, don't compete with agent instructions)
+		for _, name := range SupplementaryFileNames {
+			path := filepath.Join(dir, name)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				return "", fmt.Errorf("error reading %s: %w", path, err)
+			}
+			supContent := string(data)
+			if supContent == "" {
+				continue
+			}
 
-		if totalSize+entrySize > MaxProjectDocsBytes {
-			break
-		}
+			relPath, _ := filepath.Rel(rootDir, path)
+			if relPath == "" {
+				relPath = name
+			}
+			separator := fmt.Sprintf("--- %s ---", relPath)
+			entrySize := len(separator) + 1 + len(supContent)
 
-		parts = append(parts, separator+"\n"+content)
-		totalSize += entrySize
+			if totalSize+entrySize > MaxProjectDocsBytes {
+				break
+			}
+
+			parts = append(parts, separator+"\n"+supContent)
+			totalSize += entrySize
+		}
 	}
 
 	return strings.Join(parts, "\n\n"), nil
