@@ -166,8 +166,11 @@ func (m Model) Init() tea.Cmd {
 
 	if m.config.Session != "" {
 		cmds = append(cmds, resumeWorkflowCmd(m.client, m.config.Session))
-	} else {
+	} else if m.config.Message != "" {
 		cmds = append(cmds, startWorkflowCmd(m.client, m.config))
+	} else {
+		// No message yet — start in input mode, workflow starts on first submit
+		m.state = StateInput
 	}
 
 	return tea.Batch(cmds...)
@@ -352,6 +355,11 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 
 		m.textarea.SetWidth(m.width)
 		m.ready = true
+
+		// Focus textarea if starting in input mode
+		if m.state == StateInput {
+			return m, m.focusTextarea()
+		}
 	} else {
 		m.viewport.Width = m.width
 		m.viewport.Height = vpHeight
@@ -421,6 +429,12 @@ func (m *Model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.state = StateWatching
 		m.spinnerMsg = "Thinking..."
 		m.textarea.Blur()
+
+		// If no workflow yet, start one with this message
+		if m.workflowID == "" {
+			m.config.Message = line
+			return m, startWorkflowCmd(m.client, m.config)
+		}
 		return m, sendUserInputCmd(m.client, m.workflowID, line)
 	}
 
@@ -750,22 +764,6 @@ func Run(config Config) error {
 		return fmt.Errorf("failed to connect to Temporal: %w", err)
 	}
 	defer c.Close()
-
-	// If no initial message and not resuming, prompt before entering TUI
-	if config.Session == "" && config.Message == "" {
-		fmt.Fprintf(os.Stderr, "tcx (type /exit to disconnect, /end to terminate session)\n")
-		var line string
-		fmt.Print("> ")
-		_, err := fmt.Scanln(&line)
-		if err != nil {
-			return nil // User cancelled
-		}
-		line = strings.TrimSpace(line)
-		if line == "" || line == "/exit" || line == "/quit" {
-			return nil
-		}
-		config.Message = line
-	}
 
 	model := NewModel(config, c)
 
