@@ -782,7 +782,7 @@ func Run(config Config) error {
 	}
 
 	// Print resume hint after exiting TUI
-	fm := finalModel.(Model)
+	fm := finalModel.(*Model)
 	if fm.workflowID != "" && !fm.quitting {
 		fmt.Fprintf(os.Stderr, "\nSession suspended. Resume with:\n  tcx --session %s\n", fm.workflowID)
 	} else if fm.workflowID != "" && fm.err == nil {
