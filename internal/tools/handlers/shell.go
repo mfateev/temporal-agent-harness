@@ -6,10 +6,12 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"os"
 	"os/exec"
 
 	"github.com/mfateev/codex-temporal-go/internal/command_safety"
 	execpkg "github.com/mfateev/codex-temporal-go/internal/exec"
+	"github.com/mfateev/codex-temporal-go/internal/execenv"
 	"github.com/mfateev/codex-temporal-go/internal/sandbox"
 	"github.com/mfateev/codex-temporal-go/internal/tools"
 )
@@ -98,8 +100,18 @@ func (t *ShellTool) Handle(ctx context.Context, invocation *tools.ToolInvocation
 		cmd.Dir = execEnv.Cwd
 	}
 
-	// Apply sandbox environment variables
+	// Apply environment variable filtering if an env policy is set.
+	// When a policy is present, we clear the inherited env and use the filtered set.
+	if invocation.EnvPolicy != nil {
+		filteredEnv := resolveFilteredEnv(invocation.EnvPolicy)
+		cmd.Env = execenv.EnvMapToSlice(filteredEnv)
+	}
+
+	// Apply sandbox environment variables (merged on top of any filtered env)
 	if len(execEnv.Env) > 0 {
+		if cmd.Env == nil {
+			cmd.Env = os.Environ() // start from current env if not already filtered
+		}
 		cmd.Env = appendEnvMap(cmd.Env, execEnv.Env)
 	}
 
@@ -160,6 +172,21 @@ func sandboxPolicyRefToPolicy(ref *tools.SandboxPolicyRef) *sandbox.SandboxPolic
 		WritableRoots: roots,
 		NetworkAccess: ref.NetworkAccess,
 	}
+}
+
+// resolveFilteredEnv converts an EnvPolicyRef to a filtered environment map.
+func resolveFilteredEnv(ref *tools.EnvPolicyRef) map[string]string {
+	if ref == nil {
+		return nil
+	}
+	policy := &execenv.ShellEnvironmentPolicy{
+		Inherit:               execenv.Inherit(ref.Inherit),
+		IgnoreDefaultExcludes: ref.IgnoreDefaultExcludes,
+		Exclude:               ref.Exclude,
+		Set:                   ref.Set,
+		IncludeOnly:           ref.IncludeOnly,
+	}
+	return execenv.CreateEnv(policy)
 }
 
 // appendEnvMap appends key=value pairs from a map to an env slice.

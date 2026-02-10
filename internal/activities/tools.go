@@ -17,6 +17,7 @@ type ToolActivityInput struct {
 	Arguments     map[string]interface{} `json:"arguments"`
 	Cwd           string                 `json:"cwd,omitempty"`            // Working directory for tool execution
 	SandboxPolicy *tools.SandboxPolicyRef `json:"sandbox_policy,omitempty"` // Sandbox restrictions
+	EnvPolicy     *tools.EnvPolicyRef     `json:"env_policy,omitempty"`     // Environment variable filtering
 }
 
 // ToolActivityOutput is the output from tool execution.
@@ -62,6 +63,7 @@ func (a *ToolActivities) ExecuteTool(ctx context.Context, input ToolActivityInpu
 		Arguments:     input.Arguments,
 		Cwd:           input.Cwd,
 		SandboxPolicy: input.SandboxPolicy,
+		EnvPolicy:     input.EnvPolicy,
 	}
 
 	// Pass the activity context to the handler. Temporal manages timeouts
