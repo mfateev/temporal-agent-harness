@@ -11,6 +11,8 @@ import (
 	"github.com/mfateev/codex-temporal-go/internal/workflow"
 )
 
+// --- Poll error classification tests ---
+
 func TestClassifyPollError_NotFound(t *testing.T) {
 	err := serviceerror.NewNotFound("workflow not found")
 	assert.Equal(t, pollErrorCompleted, classifyPollError(err))
@@ -45,105 +47,87 @@ func TestClassifyPollError_WrappedNotFound(t *testing.T) {
 // --- Approval input handling tests ---
 
 func TestHandleApprovalInput_Yes(t *testing.T) {
-	app := &App{
-		pendingApprovals: []workflow.PendingApproval{
-			{CallID: "c1", ToolName: "shell"},
-			{CallID: "c2", ToolName: "write_file"},
-		},
+	pending := []workflow.PendingApproval{
+		{CallID: "c1", ToolName: "shell"},
+		{CallID: "c2", ToolName: "write_file"},
 	}
-	resp := app.handleApprovalInput("y")
+	resp, autoApprove := HandleApprovalInput("y", pending)
 	require.NotNil(t, resp)
 	assert.Equal(t, []string{"c1", "c2"}, resp.Approved)
 	assert.Nil(t, resp.Denied)
+	assert.False(t, autoApprove)
 }
 
 func TestHandleApprovalInput_YesFull(t *testing.T) {
-	app := &App{
-		pendingApprovals: []workflow.PendingApproval{
-			{CallID: "c1", ToolName: "shell"},
-		},
+	pending := []workflow.PendingApproval{
+		{CallID: "c1", ToolName: "shell"},
 	}
-	resp := app.handleApprovalInput("yes")
+	resp, _ := HandleApprovalInput("yes", pending)
 	require.NotNil(t, resp)
 	assert.Equal(t, []string{"c1"}, resp.Approved)
 }
 
 func TestHandleApprovalInput_No(t *testing.T) {
-	app := &App{
-		pendingApprovals: []workflow.PendingApproval{
-			{CallID: "c1", ToolName: "shell"},
-		},
+	pending := []workflow.PendingApproval{
+		{CallID: "c1", ToolName: "shell"},
 	}
-	resp := app.handleApprovalInput("n")
+	resp, _ := HandleApprovalInput("n", pending)
 	require.NotNil(t, resp)
 	assert.Nil(t, resp.Approved)
 	assert.Equal(t, []string{"c1"}, resp.Denied)
 }
 
 func TestHandleApprovalInput_NoFull(t *testing.T) {
-	app := &App{
-		pendingApprovals: []workflow.PendingApproval{
-			{CallID: "c1", ToolName: "shell"},
-		},
+	pending := []workflow.PendingApproval{
+		{CallID: "c1", ToolName: "shell"},
 	}
-	resp := app.handleApprovalInput("no")
+	resp, _ := HandleApprovalInput("no", pending)
 	require.NotNil(t, resp)
 	assert.Equal(t, []string{"c1"}, resp.Denied)
 }
 
 func TestHandleApprovalInput_Always(t *testing.T) {
-	app := &App{
-		pendingApprovals: []workflow.PendingApproval{
-			{CallID: "c1", ToolName: "shell"},
-		},
+	pending := []workflow.PendingApproval{
+		{CallID: "c1", ToolName: "shell"},
 	}
-	assert.False(t, app.autoApprove)
-	resp := app.handleApprovalInput("a")
+	resp, autoApprove := HandleApprovalInput("a", pending)
 	require.NotNil(t, resp)
 	assert.Equal(t, []string{"c1"}, resp.Approved)
-	assert.True(t, app.autoApprove, "autoApprove should be set after 'always'")
+	assert.True(t, autoApprove, "autoApprove should be set after 'always'")
 }
 
 func TestHandleApprovalInput_AlwaysFull(t *testing.T) {
-	app := &App{
-		pendingApprovals: []workflow.PendingApproval{
-			{CallID: "c1", ToolName: "shell"},
-		},
+	pending := []workflow.PendingApproval{
+		{CallID: "c1", ToolName: "shell"},
 	}
-	resp := app.handleApprovalInput("always")
+	resp, autoApprove := HandleApprovalInput("always", pending)
 	require.NotNil(t, resp)
 	assert.Equal(t, []string{"c1"}, resp.Approved)
-	assert.True(t, app.autoApprove)
+	assert.True(t, autoApprove)
 }
 
 func TestHandleApprovalInput_Invalid(t *testing.T) {
-	app := &App{
-		pendingApprovals: []workflow.PendingApproval{
-			{CallID: "c1", ToolName: "shell"},
-		},
+	pending := []workflow.PendingApproval{
+		{CallID: "c1", ToolName: "shell"},
 	}
-	resp := app.handleApprovalInput("maybe")
+	resp, _ := HandleApprovalInput("maybe", pending)
 	assert.Nil(t, resp)
 }
 
 func TestHandleApprovalInput_CaseInsensitive(t *testing.T) {
-	app := &App{
-		pendingApprovals: []workflow.PendingApproval{
-			{CallID: "c1", ToolName: "shell"},
-		},
+	pending := []workflow.PendingApproval{
+		{CallID: "c1", ToolName: "shell"},
 	}
-	resp := app.handleApprovalInput("YES")
+	resp, _ := HandleApprovalInput("YES", pending)
 	require.NotNil(t, resp)
 	assert.Equal(t, []string{"c1"}, resp.Approved)
 }
 
 func TestHandleApprovalInput_WithWhitespace(t *testing.T) {
-	app := &App{
-		pendingApprovals: []workflow.PendingApproval{
-			{CallID: "c1", ToolName: "shell"},
-		},
+	pending := []workflow.PendingApproval{
+		{CallID: "c1", ToolName: "shell"},
 	}
-	resp := app.handleApprovalInput("  y  ")
+	resp, _ := HandleApprovalInput("  y  ", pending)
 	require.NotNil(t, resp)
 	assert.Equal(t, []string{"c1"}, resp.Approved)
 }
@@ -186,63 +170,53 @@ func TestFormatApprovalDetail_LongArgs(t *testing.T) {
 // --- Index-based approval tests ---
 
 func TestHandleApprovalInput_IndexSingle(t *testing.T) {
-	app := &App{
-		pendingApprovals: []workflow.PendingApproval{
-			{CallID: "c1", ToolName: "shell"},
-			{CallID: "c2", ToolName: "write_file"},
-			{CallID: "c3", ToolName: "apply_patch"},
-		},
+	pending := []workflow.PendingApproval{
+		{CallID: "c1", ToolName: "shell"},
+		{CallID: "c2", ToolName: "write_file"},
+		{CallID: "c3", ToolName: "apply_patch"},
 	}
-	resp := app.handleApprovalInput("2")
+	resp, _ := HandleApprovalInput("2", pending)
 	require.NotNil(t, resp)
 	assert.Equal(t, []string{"c2"}, resp.Approved)
 	assert.Equal(t, []string{"c1", "c3"}, resp.Denied)
 }
 
 func TestHandleApprovalInput_IndexMultiple(t *testing.T) {
-	app := &App{
-		pendingApprovals: []workflow.PendingApproval{
-			{CallID: "c1", ToolName: "shell"},
-			{CallID: "c2", ToolName: "write_file"},
-			{CallID: "c3", ToolName: "apply_patch"},
-		},
+	pending := []workflow.PendingApproval{
+		{CallID: "c1", ToolName: "shell"},
+		{CallID: "c2", ToolName: "write_file"},
+		{CallID: "c3", ToolName: "apply_patch"},
 	}
-	resp := app.handleApprovalInput("1,3")
+	resp, _ := HandleApprovalInput("1,3", pending)
 	require.NotNil(t, resp)
 	assert.Equal(t, []string{"c1", "c3"}, resp.Approved)
 	assert.Equal(t, []string{"c2"}, resp.Denied)
 }
 
 func TestHandleApprovalInput_IndexWithSpaces(t *testing.T) {
-	app := &App{
-		pendingApprovals: []workflow.PendingApproval{
-			{CallID: "c1", ToolName: "shell"},
-			{CallID: "c2", ToolName: "write_file"},
-		},
+	pending := []workflow.PendingApproval{
+		{CallID: "c1", ToolName: "shell"},
+		{CallID: "c2", ToolName: "write_file"},
 	}
-	resp := app.handleApprovalInput("1, 2")
+	resp, _ := HandleApprovalInput("1, 2", pending)
 	require.NotNil(t, resp)
 	assert.Equal(t, []string{"c1", "c2"}, resp.Approved)
 	assert.Empty(t, resp.Denied)
 }
 
 func TestHandleApprovalInput_IndexOutOfRange(t *testing.T) {
-	app := &App{
-		pendingApprovals: []workflow.PendingApproval{
-			{CallID: "c1", ToolName: "shell"},
-		},
+	pending := []workflow.PendingApproval{
+		{CallID: "c1", ToolName: "shell"},
 	}
-	resp := app.handleApprovalInput("5")
+	resp, _ := HandleApprovalInput("5", pending)
 	assert.Nil(t, resp)
 }
 
 func TestHandleApprovalInput_IndexZero(t *testing.T) {
-	app := &App{
-		pendingApprovals: []workflow.PendingApproval{
-			{CallID: "c1", ToolName: "shell"},
-		},
+	pending := []workflow.PendingApproval{
+		{CallID: "c1", ToolName: "shell"},
 	}
-	resp := app.handleApprovalInput("0")
+	resp, _ := HandleApprovalInput("0", pending)
 	assert.Nil(t, resp)
 }
 
@@ -267,4 +241,32 @@ func TestParseApprovalIndices_Invalid(t *testing.T) {
 	assert.Nil(t, parseApprovalIndices("4", 3))
 	assert.Nil(t, parseApprovalIndices("", 3))
 	assert.Nil(t, parseApprovalIndices("-1", 3))
+}
+
+// --- Escalation input tests ---
+
+func TestHandleEscalationInput_Yes(t *testing.T) {
+	pending := []workflow.EscalationRequest{
+		{CallID: "c1", ToolName: "shell"},
+	}
+	resp := HandleEscalationInput("y", pending)
+	require.NotNil(t, resp)
+	assert.Equal(t, []string{"c1"}, resp.Approved)
+}
+
+func TestHandleEscalationInput_No(t *testing.T) {
+	pending := []workflow.EscalationRequest{
+		{CallID: "c1", ToolName: "shell"},
+	}
+	resp := HandleEscalationInput("n", pending)
+	require.NotNil(t, resp)
+	assert.Equal(t, []string{"c1"}, resp.Denied)
+}
+
+func TestHandleEscalationInput_Invalid(t *testing.T) {
+	pending := []workflow.EscalationRequest{
+		{CallID: "c1", ToolName: "shell"},
+	}
+	resp := HandleEscalationInput("maybe", pending)
+	assert.Nil(t, resp)
 }

@@ -1,0 +1,79 @@
+package cli
+
+import "github.com/charmbracelet/lipgloss"
+
+// Styles holds all lipgloss styles for the TUI.
+type Styles struct {
+	// Turn separator
+	TurnSeparator lipgloss.Style
+	// User message
+	UserMessage lipgloss.Style
+	// Function call name
+	FunctionCallName lipgloss.Style
+	// Function call arguments
+	FunctionCallArgs lipgloss.Style
+	// Function output success
+	OutputSuccess lipgloss.Style
+	// Function output failure
+	OutputFailure lipgloss.Style
+	// Status line
+	StatusLine lipgloss.Style
+	// Approval index
+	ApprovalIndex lipgloss.Style
+	// Approval tool label
+	ApprovalTool lipgloss.Style
+	// Approval reason
+	ApprovalReason lipgloss.Style
+	// Escalation header
+	EscalationHeader lipgloss.Style
+	// Escalation output
+	EscalationOutput lipgloss.Style
+	// Separator line between viewport and input
+	Separator lipgloss.Style
+	// Status bar
+	StatusBar lipgloss.Style
+	// Spinner message
+	SpinnerMessage lipgloss.Style
+}
+
+// DefaultStyles returns styles with colors enabled.
+func DefaultStyles() Styles {
+	return Styles{
+		TurnSeparator:    lipgloss.NewStyle().Faint(true),
+		UserMessage:      lipgloss.NewStyle().Bold(true),
+		FunctionCallName: lipgloss.NewStyle().Foreground(lipgloss.Color("3")), // yellow
+		FunctionCallArgs: lipgloss.NewStyle(),
+		OutputSuccess:    lipgloss.NewStyle().Foreground(lipgloss.Color("2")), // green
+		OutputFailure:    lipgloss.NewStyle().Foreground(lipgloss.Color("1")), // red
+		StatusLine:       lipgloss.NewStyle().Faint(true),
+		ApprovalIndex:    lipgloss.NewStyle().Foreground(lipgloss.Color("6")), // cyan
+		ApprovalTool:     lipgloss.NewStyle().Foreground(lipgloss.Color("3")), // yellow
+		ApprovalReason:   lipgloss.NewStyle().Faint(true),
+		EscalationHeader: lipgloss.NewStyle().Foreground(lipgloss.Color("3")),
+		EscalationOutput: lipgloss.NewStyle().Foreground(lipgloss.Color("1")),
+		Separator:        lipgloss.NewStyle().Faint(true),
+		StatusBar:        lipgloss.NewStyle().Faint(true),
+		SpinnerMessage:   lipgloss.NewStyle().Faint(true),
+	}
+}
+
+// NoColorStyles returns styles with no colors (plain text).
+func NoColorStyles() Styles {
+	return Styles{
+		TurnSeparator:    lipgloss.NewStyle(),
+		UserMessage:      lipgloss.NewStyle(),
+		FunctionCallName: lipgloss.NewStyle(),
+		FunctionCallArgs: lipgloss.NewStyle(),
+		OutputSuccess:    lipgloss.NewStyle(),
+		OutputFailure:    lipgloss.NewStyle(),
+		StatusLine:       lipgloss.NewStyle(),
+		ApprovalIndex:    lipgloss.NewStyle(),
+		ApprovalTool:     lipgloss.NewStyle(),
+		ApprovalReason:   lipgloss.NewStyle(),
+		EscalationHeader: lipgloss.NewStyle(),
+		EscalationOutput: lipgloss.NewStyle(),
+		Separator:        lipgloss.NewStyle(),
+		StatusBar:        lipgloss.NewStyle(),
+		SpinnerMessage:   lipgloss.NewStyle(),
+	}
+}
