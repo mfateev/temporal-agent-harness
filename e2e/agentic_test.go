@@ -586,3 +586,106 @@ func TestAgenticWorkflow_Shutdown(t *testing.T) {
 
 	t.Logf("Total tokens: %d, EndReason: %s", result.TotalTokens, result.EndReason)
 }
+
+// TestAgenticWorkflow_AnthropicProvider tests using Anthropic Claude models
+func TestAgenticWorkflow_AnthropicProvider(t *testing.T) {
+	c := dialTemporal(t)
+	defer c.Close()
+
+	if os.Getenv("ANTHROPIC_API_KEY") == "" {
+		t.Skip("ANTHROPIC_API_KEY not set, skipping Anthropic E2E test")
+	}
+
+	workflowID := "test-anthropic-" + uuid.New().String()[:8]
+	input := workflow.WorkflowInput{
+		ConversationID: workflowID,
+		UserMessage:    "Say hello in exactly 3 words. Do not use any tools.",
+		Config: models.SessionConfiguration{
+			Model: models.ModelConfig{
+				Provider:      "anthropic",
+				Model:         "claude-sonnet-4.5-20250929",
+				Temperature:   0,
+				MaxTokens:     100,
+				ContextWindow: 200000,
+			},
+			Tools: models.ToolsConfig{
+				EnableShell:    false,
+				EnableReadFile: false,
+			},
+		},
+	}
+
+	t.Logf("Starting Anthropic workflow: %s", workflowID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), WorkflowTimeout)
+	defer cancel()
+
+	startWorkflow(t, ctx, c, input)
+
+	// Wait for the first turn to complete
+	waitForTurnComplete(t, ctx, c, workflowID, 1)
+
+	// Send shutdown and get result
+	result := shutdownWorkflow(t, ctx, c, workflowID)
+
+	assert.Equal(t, workflowID, result.ConversationID)
+	assert.Greater(t, result.TotalTokens, 0, "Should have consumed tokens")
+	assert.Empty(t, result.ToolCallsExecuted, "Should not have called any tools")
+	assert.Equal(t, "shutdown", result.EndReason)
+
+	t.Logf("Anthropic - Total tokens: %d, Iterations: %d", result.TotalTokens, result.TotalIterations)
+}
+
+// TestAgenticWorkflow_AnthropicWithTools tests Anthropic with tool calling
+func TestAgenticWorkflow_AnthropicWithTools(t *testing.T) {
+	c := dialTemporal(t)
+	defer c.Close()
+
+	if os.Getenv("ANTHROPIC_API_KEY") == "" {
+		t.Skip("ANTHROPIC_API_KEY not set, skipping Anthropic E2E test")
+	}
+
+	workflowID := "test-anthropic-tools-" + uuid.New().String()[:8]
+	input := workflow.WorkflowInput{
+		ConversationID: workflowID,
+		UserMessage:    "Run 'echo hello world' using the shell tool and tell me the output.",
+		Config: models.SessionConfiguration{
+			Model: models.ModelConfig{
+				Provider:      "anthropic",
+				Model:         "claude-haiku-4.5-20251001", // Use cheaper Haiku model for tool testing
+				Temperature:   0,
+				MaxTokens:     1000,
+				ContextWindow: 200000,
+			},
+			Tools: models.ToolsConfig{
+				EnableShell:      true,
+				EnableReadFile:   false,
+				EnableWriteFile:  false,
+				EnableListDir:    false,
+				EnableGrepFiles:  false,
+				EnableApplyPatch: false,
+			},
+		},
+	}
+
+	t.Logf("Starting Anthropic workflow with tools: %s", workflowID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), WorkflowTimeout)
+	defer cancel()
+
+	startWorkflow(t, ctx, c, input)
+
+	// Wait for the turn to complete (LLM -> tool -> LLM)
+	waitForTurnComplete(t, ctx, c, workflowID, 1)
+
+	// Send shutdown and get result
+	result := shutdownWorkflow(t, ctx, c, workflowID)
+
+	assert.Equal(t, workflowID, result.ConversationID)
+	assert.Greater(t, result.TotalTokens, 0, "Should have consumed tokens")
+	assert.Contains(t, result.ToolCallsExecuted, "shell", "Should have called shell tool")
+	assert.Equal(t, "shutdown", result.EndReason)
+
+	t.Logf("Anthropic with tools - Total tokens: %d, Iterations: %d, Tools: %v",
+		result.TotalTokens, result.TotalIterations, result.ToolCallsExecuted)
+}

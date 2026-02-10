@@ -4,7 +4,8 @@ package models
 //
 // Maps to: codex-rs/core/src/codex.rs SessionConfiguration (model config part)
 type ModelConfig struct {
-	Model         string  `json:"model"`          // e.g., "gpt-3.5-turbo", "gpt-4"
+	Provider      string  `json:"provider"`       // "openai" or "anthropic"
+	Model         string  `json:"model"`          // e.g., "gpt-4o", "claude-sonnet-4.5-20250929"
 	Temperature   float64 `json:"temperature"`    // 0.0 to 2.0
 	MaxTokens     int     `json:"max_tokens"`     // Max tokens to generate
 	ContextWindow int     `json:"context_window"` // Max context window size
@@ -13,6 +14,7 @@ type ModelConfig struct {
 // DefaultModelConfig returns a sensible default configuration
 func DefaultModelConfig() ModelConfig {
 	return ModelConfig{
+		Provider:      "openai", // Default to OpenAI for backward compatibility
 		Model:         "gpt-4o-mini",
 		Temperature:   0.7,
 		MaxTokens:     4096,

@@ -23,9 +23,19 @@ const (
 )
 
 func main() {
-	// Check for OpenAI API key
-	if os.Getenv("OPENAI_API_KEY") == "" {
-		log.Fatal("OPENAI_API_KEY environment variable is required")
+	// Check for at least one LLM provider API key
+	hasOpenAI := os.Getenv("OPENAI_API_KEY") != ""
+	hasAnthropic := os.Getenv("ANTHROPIC_API_KEY") != ""
+
+	if !hasOpenAI && !hasAnthropic {
+		log.Fatal("At least one LLM provider API key is required: OPENAI_API_KEY or ANTHROPIC_API_KEY")
+	}
+
+	if hasOpenAI {
+		log.Println("OpenAI provider available")
+	}
+	if hasAnthropic {
+		log.Println("Anthropic provider available")
 	}
 
 	// Load Temporal client options via envconfig (supports env vars, config files, TLS)
@@ -56,8 +66,8 @@ func main() {
 
 	log.Printf("Registered %d tools", toolRegistry.ToolCount())
 
-	// Create LLM client
-	llmClient := llm.NewOpenAIClient()
+	// Create multi-provider LLM client (supports both OpenAI and Anthropic)
+	llmClient := llm.NewMultiProviderClient()
 
 	// Register activities
 	llmActivities := activities.NewLLMActivities(llmClient)
