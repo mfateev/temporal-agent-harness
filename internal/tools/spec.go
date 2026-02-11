@@ -35,10 +35,11 @@ type ToolSpec struct {
 
 // ToolParameter defines a parameter for a tool.
 type ToolParameter struct {
-	Name        string `json:"name"`
-	Type        string `json:"type"`
-	Description string `json:"description"`
-	Required    bool   `json:"required"`
+	Name        string                 `json:"name"`
+	Type        string                 `json:"type"`
+	Description string                 `json:"description"`
+	Required    bool                   `json:"required"`
+	Items       map[string]interface{} `json:"items,omitempty"` // For array types: JSON schema of array items
 }
 
 // NewShellToolSpec creates the specification for the shell tool.
@@ -255,6 +256,57 @@ func NewListDirToolSpec() ToolSpec {
 			},
 		},
 		DefaultTimeoutMs: DefaultListDirTimeoutMs,
+	}
+}
+
+// NewRequestUserInputToolSpec creates the specification for the request_user_input tool.
+// This tool is intercepted by the workflow (not dispatched as an activity).
+//
+// Maps to: codex-rs/protocol/src/request_user_input.rs
+func NewRequestUserInputToolSpec() ToolSpec {
+	return ToolSpec{
+		Name:        "request_user_input",
+		Description: "Ask the user one or more multi-choice questions. Each question has a list of options with label and description. Use this when you need clarification or a decision from the user.",
+		Parameters: []ToolParameter{
+			{
+				Name:        "questions",
+				Type:        "array",
+				Description: "Array of questions. Max 4 questions.",
+				Required:    true,
+				Items: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"id": map[string]interface{}{
+							"type":        "string",
+							"description": "Unique identifier for this question",
+						},
+						"question": map[string]interface{}{
+							"type":        "string",
+							"description": "The question text to display to the user",
+						},
+						"options": map[string]interface{}{
+							"type":        "array",
+							"description": "Available choices for this question",
+							"items": map[string]interface{}{
+								"type": "object",
+								"properties": map[string]interface{}{
+									"label": map[string]interface{}{
+										"type":        "string",
+										"description": "Short display text for this option",
+									},
+									"description": map[string]interface{}{
+										"type":        "string",
+										"description": "Explanation of what this option means",
+									},
+								},
+								"required": []string{"label"},
+							},
+						},
+					},
+					"required": []string{"id", "question", "options"},
+				},
+			},
+		},
 	}
 }
 

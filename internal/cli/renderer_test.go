@@ -497,6 +497,100 @@ func TestTruncateMiddle(t *testing.T) {
 	}
 }
 
+func TestItemRenderer_RenderUserInputQuestionPrompt_SingleQuestion(t *testing.T) {
+	r := newTestRenderer()
+	req := &workflow.PendingUserInputRequest{
+		CallID: "call-1",
+		Questions: []workflow.RequestUserInputQuestion{
+			{
+				ID:       "q1",
+				Question: "Which approach should I use?",
+				Options: []workflow.RequestUserInputQuestionOption{
+					{Label: "Option A", Description: "Description of A"},
+					{Label: "Option B", Description: "Description of B"},
+				},
+			},
+		},
+	}
+	result := r.RenderUserInputQuestionPrompt(req)
+
+	assert.Contains(t, result, "Which approach should I use?")
+	assert.Contains(t, result, "Option A")
+	assert.Contains(t, result, "Description of A")
+	assert.Contains(t, result, "Option B")
+	assert.Contains(t, result, "Description of B")
+	// Single question should NOT have "Q1." prefix
+	assert.NotContains(t, result, "Q1.")
+}
+
+func TestItemRenderer_RenderUserInputQuestionPrompt_MultipleQuestions(t *testing.T) {
+	r := newTestRenderer()
+	req := &workflow.PendingUserInputRequest{
+		CallID: "call-1",
+		Questions: []workflow.RequestUserInputQuestion{
+			{
+				ID:       "q1",
+				Question: "Which library?",
+				Options: []workflow.RequestUserInputQuestionOption{
+					{Label: "React"},
+					{Label: "Vue"},
+				},
+			},
+			{
+				ID:       "q2",
+				Question: "Which language?",
+				Options: []workflow.RequestUserInputQuestionOption{
+					{Label: "TypeScript"},
+					{Label: "JavaScript"},
+				},
+			},
+		},
+	}
+	result := r.RenderUserInputQuestionPrompt(req)
+
+	assert.Contains(t, result, "Q1.")
+	assert.Contains(t, result, "Q2.")
+	assert.Contains(t, result, "Which library?")
+	assert.Contains(t, result, "Which language?")
+	assert.Contains(t, result, "React")
+	assert.Contains(t, result, "TypeScript")
+}
+
+func TestItemRenderer_RenderUserInputQuestionPrompt_OptionsWithDescriptions(t *testing.T) {
+	r := newTestRenderer()
+	req := &workflow.PendingUserInputRequest{
+		CallID: "call-1",
+		Questions: []workflow.RequestUserInputQuestion{
+			{
+				ID:       "q1",
+				Question: "Pick one",
+				Options: []workflow.RequestUserInputQuestionOption{
+					{Label: "Fast", Description: "Optimized for speed"},
+					{Label: "Safe", Description: "Optimized for safety"},
+					{Label: "Bare"},
+				},
+			},
+		},
+	}
+	result := r.RenderUserInputQuestionPrompt(req)
+
+	assert.Contains(t, result, "Fast - Optimized for speed")
+	assert.Contains(t, result, "Safe - Optimized for safety")
+	assert.Contains(t, result, "Bare")
+	assert.NotContains(t, result, "Bare -")
+}
+
+func TestFormatToolCall_RequestUserInput(t *testing.T) {
+	verb, detail := formatToolCall("request_user_input", `{"questions": []}`)
+	assert.Equal(t, "Asked", verb)
+	assert.Equal(t, "user a question", detail)
+}
+
+func TestPhaseMessage_UserInputPending(t *testing.T) {
+	result := PhaseMessage(workflow.PhaseUserInputPending, nil)
+	assert.Equal(t, "Waiting for your answer...", result)
+}
+
 func TestFormatToolCall(t *testing.T) {
 	tests := []struct {
 		name       string

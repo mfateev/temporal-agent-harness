@@ -2004,5 +2004,433 @@ func (s *AgenticWorkflowTestSuite) TestMultiTurn_FatalLLMError_TurnContinuesAfte
 	assert.Equal(s.T(), 40, result.TotalTokens)
 }
 
+// --- request_user_input tests ---
+
+// mockLLMRequestUserInputResponse returns a response with a request_user_input tool call.
+func mockLLMRequestUserInputResponse(callID string, questionsJSON string, tokens int) activities.LLMActivityOutput {
+	return activities.LLMActivityOutput{
+		Items: []models.ConversationItem{
+			{
+				Type:      models.ItemTypeFunctionCall,
+				CallID:    callID,
+				Name:      "request_user_input",
+				Arguments: questionsJSON,
+			},
+		},
+		FinishReason: models.FinishReasonToolCalls,
+		TokenUsage:   models.TokenUsage{TotalTokens: tokens},
+	}
+}
+
+// validQuestionArgs returns valid request_user_input arguments JSON.
+func validQuestionArgs() string {
+	return `{"questions": [{"id": "q1", "question": "Which approach?", "options": [{"label": "Option A", "description": "Desc A"}, {"label": "Option B"}]}]}`
+}
+
+// TestRequestUserInput_HappyPath verifies the LLM calls request_user_input,
+// user responds, and the LLM gets the answer and produces a final message.
+func (s *AgenticWorkflowTestSuite) TestRequestUserInput_HappyPath() {
+	// First LLM call: request_user_input
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(mockLLMRequestUserInputResponse("call-q1", validQuestionArgs(), 30), nil).Once()
+
+	// Second LLM call: final response after getting user's answer
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(mockLLMStopResponse("Using Option A as you chose.", 40), nil).Once()
+
+	// User answers the question
+	s.env.RegisterDelayedCallback(func() {
+		s.env.UpdateWorkflow(UpdateUserInputQuestionResponse, "uiq-1", noopCallback(),
+			UserInputQuestionResponse{
+				Answers: map[string]UserInputQuestionAnswer{
+					"q1": {Answers: []string{"Option A"}},
+				},
+			})
+	}, time.Second*2)
+
+	s.sendShutdown(time.Second * 4)
+
+	s.env.ExecuteWorkflow(AgenticWorkflow, testInput("Help me decide"))
+
+	require.True(s.T(), s.env.IsWorkflowCompleted())
+	var result WorkflowResult
+	require.NoError(s.T(), s.env.GetWorkflowResult(&result))
+	assert.Equal(s.T(), "shutdown", result.EndReason)
+	assert.Equal(s.T(), 70, result.TotalTokens) // 30 + 40
+
+	// Verify history contains the user input response
+	histResult, err := s.env.QueryWorkflow(QueryGetConversationItems)
+	require.NoError(s.T(), err)
+	var items []models.ConversationItem
+	require.NoError(s.T(), histResult.Get(&items))
+
+	// Find the FunctionCallOutput for the request_user_input call
+	var foundOutput bool
+	for _, item := range items {
+		if item.Type == models.ItemTypeFunctionCallOutput && item.CallID == "call-q1" {
+			foundOutput = true
+			require.NotNil(s.T(), item.Output)
+			assert.True(s.T(), *item.Output.Success)
+			assert.Contains(s.T(), item.Output.Content, "Option A")
+		}
+	}
+	assert.True(s.T(), foundOutput, "Should have FunctionCallOutput for request_user_input")
+}
+
+// TestRequestUserInput_InvalidArgs verifies malformed JSON returns an error
+// as tool output instead of crashing the workflow.
+func (s *AgenticWorkflowTestSuite) TestRequestUserInput_InvalidArgs() {
+	// LLM sends invalid args
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(mockLLMRequestUserInputResponse("call-bad", `{invalid json`, 20), nil).Once()
+
+	// LLM gets the error and responds
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(mockLLMStopResponse("I see, let me try differently.", 25), nil).Once()
+
+	s.sendShutdown(time.Second * 3)
+
+	s.env.ExecuteWorkflow(AgenticWorkflow, testInput("Help"))
+
+	require.True(s.T(), s.env.IsWorkflowCompleted())
+	var result WorkflowResult
+	require.NoError(s.T(), s.env.GetWorkflowResult(&result))
+	assert.Equal(s.T(), "shutdown", result.EndReason)
+
+	// Verify error output was added to history
+	histResult, err := s.env.QueryWorkflow(QueryGetConversationItems)
+	require.NoError(s.T(), err)
+	var items []models.ConversationItem
+	require.NoError(s.T(), histResult.Get(&items))
+
+	var foundError bool
+	for _, item := range items {
+		if item.Type == models.ItemTypeFunctionCallOutput && item.CallID == "call-bad" {
+			foundError = true
+			require.NotNil(s.T(), item.Output)
+			assert.False(s.T(), *item.Output.Success)
+			assert.Contains(s.T(), item.Output.Content, "Invalid request_user_input arguments")
+		}
+	}
+	assert.True(s.T(), foundError, "Should have error FunctionCallOutput for invalid args")
+}
+
+// TestRequestUserInput_InterruptDuring verifies that interrupting during a pending
+// request_user_input ends the turn cleanly.
+func (s *AgenticWorkflowTestSuite) TestRequestUserInput_InterruptDuring() {
+	// LLM sends request_user_input
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(mockLLMRequestUserInputResponse("call-q1", validQuestionArgs(), 30), nil).Once()
+
+	// Second turn after interrupt + new input
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(mockLLMStopResponse("OK, starting fresh.", 20), nil).Once()
+
+	// Interrupt while waiting for user input question response
+	s.env.RegisterDelayedCallback(func() {
+		s.env.UpdateWorkflow(UpdateInterrupt, "interrupt-1", noopCallback(), InterruptRequest{})
+	}, time.Second*2)
+
+	// New user input after interrupt
+	s.env.RegisterDelayedCallback(func() {
+		s.env.UpdateWorkflow(UpdateUserInput, "input-2", noopCallback(),
+			UserInput{Content: "Never mind, let's start over"})
+	}, time.Second*3)
+
+	s.sendShutdown(time.Second * 5)
+
+	s.env.ExecuteWorkflow(AgenticWorkflow, testInput("Help me decide"))
+
+	require.True(s.T(), s.env.IsWorkflowCompleted())
+	var result WorkflowResult
+	require.NoError(s.T(), s.env.GetWorkflowResult(&result))
+	assert.Equal(s.T(), "shutdown", result.EndReason)
+}
+
+// TestRequestUserInput_WithNormalTools verifies that request_user_input and
+// normal tool calls in the same response are handled correctly.
+func (s *AgenticWorkflowTestSuite) TestRequestUserInput_WithNormalTools() {
+	// LLM returns both request_user_input AND a shell call
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(activities.LLMActivityOutput{
+			Items: []models.ConversationItem{
+				{
+					Type:      models.ItemTypeFunctionCall,
+					CallID:    "call-q1",
+					Name:      "request_user_input",
+					Arguments: validQuestionArgs(),
+				},
+				{
+					Type:      models.ItemTypeFunctionCall,
+					CallID:    "call-shell",
+					Name:      "shell",
+					Arguments: `{"command": "echo hello"}`,
+				},
+			},
+			FinishReason: models.FinishReasonToolCalls,
+			TokenUsage:   models.TokenUsage{TotalTokens: 40},
+		}, nil).Once()
+
+	// User answers the question
+	s.env.RegisterDelayedCallback(func() {
+		s.env.UpdateWorkflow(UpdateUserInputQuestionResponse, "uiq-1", noopCallback(),
+			UserInputQuestionResponse{
+				Answers: map[string]UserInputQuestionAnswer{
+					"q1": {Answers: []string{"Option B"}},
+				},
+			})
+	}, time.Second*1)
+
+	// Tool execution for shell
+	trueVal := true
+	s.env.OnActivity("ExecuteTool", mock.Anything, mock.Anything).
+		Return(activities.ToolActivityOutput{
+			CallID:  "call-shell",
+			Content: "hello\n",
+			Success: &trueVal,
+		}, nil).Once()
+
+	// Final LLM response
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(mockLLMStopResponse("Done! Used Option B.", 30), nil).Once()
+
+	s.sendShutdown(time.Second * 5)
+
+	s.env.ExecuteWorkflow(AgenticWorkflow, testInput("Do something and ask me"))
+
+	require.True(s.T(), s.env.IsWorkflowCompleted())
+	var result WorkflowResult
+	require.NoError(s.T(), s.env.GetWorkflowResult(&result))
+	assert.Equal(s.T(), "shutdown", result.EndReason)
+	assert.Contains(s.T(), result.ToolCallsExecuted, "shell")
+}
+
+// TestRequestUserInput_ValidatorRejectsWhenNotPending verifies that sending a
+// response when not in user_input_pending phase is rejected.
+func (s *AgenticWorkflowTestSuite) TestRequestUserInput_ValidatorRejectsWhenNotPending() {
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(mockLLMStopResponse("Hello!", 20), nil).Once()
+
+	var rejected bool
+	s.env.RegisterDelayedCallback(func() {
+		s.env.UpdateWorkflow(UpdateUserInputQuestionResponse, "uiq-bad", &testsuite.TestUpdateCallback{
+			OnAccept: func() {
+				s.Fail("should not be accepted when not pending")
+			},
+			OnReject: func(err error) {
+				assert.Contains(s.T(), err.Error(), "no user input question pending")
+				rejected = true
+			},
+			OnComplete: func(interface{}, error) {},
+		}, UserInputQuestionResponse{
+			Answers: map[string]UserInputQuestionAnswer{
+				"q1": {Answers: []string{"Option A"}},
+			},
+		})
+	}, time.Second*2)
+
+	s.sendShutdown(time.Second * 3)
+
+	s.env.ExecuteWorkflow(AgenticWorkflow, testInput("Hello"))
+	require.True(s.T(), s.env.IsWorkflowCompleted())
+	assert.True(s.T(), rejected, "Response should be rejected when no question is pending")
+}
+
+// TestRequestUserInput_QueryStatusShowsPending verifies that TurnStatus
+// includes the pending request when awaiting user response.
+func (s *AgenticWorkflowTestSuite) TestRequestUserInput_QueryStatusShowsPending() {
+	// LLM sends request_user_input
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(mockLLMRequestUserInputResponse("call-q1", validQuestionArgs(), 30), nil).Once()
+
+	// Second LLM response (after user answers)
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(mockLLMStopResponse("Thanks for the answer.", 20), nil).Once()
+
+	// Query status while waiting — should show user_input_pending
+	s.env.RegisterDelayedCallback(func() {
+		result, err := s.env.QueryWorkflow(QueryGetTurnStatus)
+		require.NoError(s.T(), err)
+
+		var status TurnStatus
+		require.NoError(s.T(), result.Get(&status))
+
+		assert.Equal(s.T(), PhaseUserInputPending, status.Phase)
+		require.NotNil(s.T(), status.PendingUserInputRequest)
+		assert.Equal(s.T(), "call-q1", status.PendingUserInputRequest.CallID)
+		require.Len(s.T(), status.PendingUserInputRequest.Questions, 1)
+		assert.Equal(s.T(), "q1", status.PendingUserInputRequest.Questions[0].ID)
+		assert.Equal(s.T(), "Which approach?", status.PendingUserInputRequest.Questions[0].Question)
+		require.Len(s.T(), status.PendingUserInputRequest.Questions[0].Options, 2)
+	}, time.Second*1)
+
+	// User answers
+	s.env.RegisterDelayedCallback(func() {
+		s.env.UpdateWorkflow(UpdateUserInputQuestionResponse, "uiq-1", noopCallback(),
+			UserInputQuestionResponse{
+				Answers: map[string]UserInputQuestionAnswer{
+					"q1": {Answers: []string{"Option A"}},
+				},
+			})
+	}, time.Second*2)
+
+	s.sendShutdown(time.Second * 4)
+
+	s.env.ExecuteWorkflow(AgenticWorkflow, testInput("Decide for me"))
+	require.True(s.T(), s.env.IsWorkflowCompleted())
+}
+
+// TestRequestUserInput_EmptyQuestions verifies that empty questions array
+// returns an error as tool output.
+func (s *AgenticWorkflowTestSuite) TestRequestUserInput_EmptyQuestions() {
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(mockLLMRequestUserInputResponse("call-empty", `{"questions": []}`, 15), nil).Once()
+
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(mockLLMStopResponse("OK", 10), nil).Once()
+
+	s.sendShutdown(time.Second * 3)
+
+	s.env.ExecuteWorkflow(AgenticWorkflow, testInput("Test"))
+
+	require.True(s.T(), s.env.IsWorkflowCompleted())
+
+	histResult, err := s.env.QueryWorkflow(QueryGetConversationItems)
+	require.NoError(s.T(), err)
+	var items []models.ConversationItem
+	require.NoError(s.T(), histResult.Get(&items))
+
+	var foundError bool
+	for _, item := range items {
+		if item.Type == models.ItemTypeFunctionCallOutput && item.CallID == "call-empty" {
+			foundError = true
+			require.NotNil(s.T(), item.Output)
+			assert.False(s.T(), *item.Output.Success)
+			assert.Contains(s.T(), item.Output.Content, "questions array must not be empty")
+		}
+	}
+	assert.True(s.T(), foundError)
+}
+
+// TestRequestUserInput_TooManyQuestions verifies that >4 questions returns
+// an error as tool output.
+func (s *AgenticWorkflowTestSuite) TestRequestUserInput_TooManyQuestions() {
+	fiveQuestions := `{"questions": [
+		{"id": "q1", "question": "Q1?", "options": [{"label": "A"}]},
+		{"id": "q2", "question": "Q2?", "options": [{"label": "A"}]},
+		{"id": "q3", "question": "Q3?", "options": [{"label": "A"}]},
+		{"id": "q4", "question": "Q4?", "options": [{"label": "A"}]},
+		{"id": "q5", "question": "Q5?", "options": [{"label": "A"}]}
+	]}`
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(mockLLMRequestUserInputResponse("call-many", fiveQuestions, 15), nil).Once()
+
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(mockLLMStopResponse("OK", 10), nil).Once()
+
+	s.sendShutdown(time.Second * 3)
+
+	s.env.ExecuteWorkflow(AgenticWorkflow, testInput("Test"))
+
+	require.True(s.T(), s.env.IsWorkflowCompleted())
+
+	histResult, err := s.env.QueryWorkflow(QueryGetConversationItems)
+	require.NoError(s.T(), err)
+	var items []models.ConversationItem
+	require.NoError(s.T(), histResult.Get(&items))
+
+	var foundError bool
+	for _, item := range items {
+		if item.Type == models.ItemTypeFunctionCallOutput && item.CallID == "call-many" {
+			foundError = true
+			require.NotNil(s.T(), item.Output)
+			assert.False(s.T(), *item.Output.Success)
+			assert.Contains(s.T(), item.Output.Content, "at most 4 questions")
+		}
+	}
+	assert.True(s.T(), foundError)
+}
+
+// --- parseRequestUserInputArgs unit tests ---
+
+func TestParseRequestUserInputArgs_Valid(t *testing.T) {
+	questions, err := parseRequestUserInputArgs(validQuestionArgs())
+	require.NoError(t, err)
+	require.Len(t, questions, 1)
+	assert.Equal(t, "q1", questions[0].ID)
+	assert.Equal(t, "Which approach?", questions[0].Question)
+	require.Len(t, questions[0].Options, 2)
+	assert.Equal(t, "Option A", questions[0].Options[0].Label)
+	assert.Equal(t, "Desc A", questions[0].Options[0].Description)
+	assert.Equal(t, "Option B", questions[0].Options[1].Label)
+}
+
+func TestParseRequestUserInputArgs_InvalidJSON(t *testing.T) {
+	_, err := parseRequestUserInputArgs(`{invalid}`)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid JSON")
+}
+
+func TestParseRequestUserInputArgs_EmptyQuestions(t *testing.T) {
+	_, err := parseRequestUserInputArgs(`{"questions": []}`)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be empty")
+}
+
+func TestParseRequestUserInputArgs_TooManyQuestions(t *testing.T) {
+	args := `{"questions": [
+		{"id":"q1","question":"Q1?","options":[{"label":"A"}]},
+		{"id":"q2","question":"Q2?","options":[{"label":"A"}]},
+		{"id":"q3","question":"Q3?","options":[{"label":"A"}]},
+		{"id":"q4","question":"Q4?","options":[{"label":"A"}]},
+		{"id":"q5","question":"Q5?","options":[{"label":"A"}]}
+	]}`
+	_, err := parseRequestUserInputArgs(args)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "at most 4")
+}
+
+func TestParseRequestUserInputArgs_MissingID(t *testing.T) {
+	args := `{"questions": [{"question": "Q?", "options": [{"label": "A"}]}]}`
+	_, err := parseRequestUserInputArgs(args)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "id is required")
+}
+
+func TestParseRequestUserInputArgs_MissingQuestion(t *testing.T) {
+	args := `{"questions": [{"id": "q1", "options": [{"label": "A"}]}]}`
+	_, err := parseRequestUserInputArgs(args)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "question text is required")
+}
+
+func TestParseRequestUserInputArgs_MissingOptions(t *testing.T) {
+	args := `{"questions": [{"id": "q1", "question": "Q?"}]}`
+	_, err := parseRequestUserInputArgs(args)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "options must not be empty")
+}
+
+func TestParseRequestUserInputArgs_MissingOptionLabel(t *testing.T) {
+	args := `{"questions": [{"id": "q1", "question": "Q?", "options": [{"description": "no label"}]}]}`
+	_, err := parseRequestUserInputArgs(args)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "label is required")
+}
+
+func TestParseRequestUserInputArgs_MultipleQuestions(t *testing.T) {
+	args := `{"questions": [
+		{"id":"q1","question":"Q1?","options":[{"label":"A"},{"label":"B"}]},
+		{"id":"q2","question":"Q2?","header":"H2","options":[{"label":"X","description":"Desc X"}]}
+	]}`
+	questions, err := parseRequestUserInputArgs(args)
+	require.NoError(t, err)
+	require.Len(t, questions, 2)
+	assert.Equal(t, "q1", questions[0].ID)
+	assert.Equal(t, "q2", questions[1].ID)
+	assert.Equal(t, "H2", questions[1].Header)
+	assert.Equal(t, "Desc X", questions[1].Options[0].Description)
+}
+
 // Ensure we reference workflow.Context (suppress unused import warning)
 var _ workflow.Context

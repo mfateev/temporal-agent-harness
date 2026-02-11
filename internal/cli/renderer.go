@@ -195,6 +195,33 @@ func (r *ItemRenderer) RenderEscalationPrompt(escalations []workflow.EscalationR
 	return b.String()
 }
 
+// RenderUserInputQuestionPrompt renders the question prompt for a request_user_input call.
+func (r *ItemRenderer) RenderUserInputQuestionPrompt(req *workflow.PendingUserInputRequest) string {
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(r.styles.EscalationHeader.Render("The assistant has a question for you:") + "\n\n")
+
+	for i, q := range req.Questions {
+		if len(req.Questions) > 1 {
+			b.WriteString(fmt.Sprintf("  Q%d. %s\n", i+1, q.Question))
+		} else {
+			b.WriteString(fmt.Sprintf("  %s\n", q.Question))
+		}
+		for j, opt := range q.Options {
+			idx := r.styles.ApprovalIndex.Render(fmt.Sprintf("[%d]", j+1))
+			label := opt.Label
+			if opt.Description != "" {
+				label += " - " + opt.Description
+			}
+			b.WriteString(fmt.Sprintf("    %s %s\n", idx, label))
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString("Enter option number (or type your answer): ")
+	return b.String()
+}
+
 // RenderStatusLine renders a summary status after a turn completes.
 func (r *ItemRenderer) RenderStatusLine(model string, totalTokens, turnCount int) string {
 	line := fmt.Sprintf("[%s · %s tokens · turn %d]",
@@ -216,6 +243,8 @@ func PhaseMessage(phase workflow.TurnPhase, toolsInFlight []string) string {
 		return "Waiting for approval..."
 	case workflow.PhaseEscalationPending:
 		return "Waiting for escalation decision..."
+	case workflow.PhaseUserInputPending:
+		return "Waiting for your answer..."
 	default:
 		return "Working..."
 	}
@@ -273,6 +302,8 @@ func formatToolCall(name, argsJSON string) (verb, detail string) {
 			return "Searched", strings.Join(parts, " ")
 		}
 		return "Searched", ""
+	case "request_user_input":
+		return "Asked", "user a question"
 	default:
 		detail := name + "(" + truncateString(argsJSON, 80) + ")"
 		return "Ran", detail

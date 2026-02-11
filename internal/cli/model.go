@@ -29,11 +29,12 @@ const (
 type State int
 
 const (
-	StateStartup    State = iota
+	StateStartup            State = iota
 	StateInput
 	StateWatching
 	StateApproval
 	StateEscalation
+	StateUserInputQuestion
 	StateShutdown
 )
 
@@ -104,6 +105,9 @@ type Model struct {
 	pendingApprovals   []workflow.PendingApproval
 	autoApprove        bool
 	pendingEscalations []workflow.EscalationRequest
+
+	// User input question state
+	pendingUserInputReq *workflow.PendingUserInputRequest
 
 	// Ctrl+C tracking
 	lastInterruptTime time.Time
@@ -251,6 +255,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case EscalationErrorMsg:
 		m.appendToViewport(fmt.Sprintf("Error sending escalation response: %v\n", msg.Err))
 
+	case UserInputQuestionSentMsg:
+		m.pendingUserInputReq = nil
+		m.state = StateWatching
+		m.spinnerMsg = "Processing answer..."
+		cmds = append(cmds, m.startPolling())
+
+	case UserInputQuestionErrorMsg:
+		m.appendToViewport(fmt.Sprintf("Error sending user input response: %v\n", msg.Err))
+
 	case SessionCompletedMsg:
 		m.stopPolling()
 		if msg.Result != nil {
@@ -299,6 +312,8 @@ func (m Model) View() string {
 		inputView = m.textarea.View()
 	case StateEscalation:
 		inputView = m.textarea.View()
+	case StateUserInputQuestion:
+		inputView = m.textarea.View()
 	default:
 		// Watching/Startup: show spinner
 		inputView = m.spinner.View() + " " + m.styles.SpinnerMessage.Render(m.spinnerMsg)
@@ -331,6 +346,8 @@ func (m Model) renderStatusBar() string {
 		stateLabel = "approval"
 	case StateEscalation:
 		stateLabel = "escalation"
+	case StateUserInputQuestion:
+		stateLabel = "question"
 	case StateStartup:
 		stateLabel = "connecting"
 	default:
@@ -400,6 +417,8 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleApprovalKey(msg)
 	case StateEscalation:
 		return m.handleEscalationKey(msg)
+	case StateUserInputQuestion:
+		return m.handleUserInputQuestionKey(msg)
 	}
 
 	return m, nil
@@ -543,6 +562,33 @@ func (m *Model) handleEscalationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m *Model) handleUserInputQuestionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.Type == tea.KeyEnter {
+		line := strings.TrimSpace(m.textarea.Value())
+		m.textarea.Reset()
+
+		response := HandleUserInputQuestionInput(line, m.pendingUserInputReq)
+		if response != nil {
+			m.textarea.Blur()
+			return m, sendUserInputQuestionResponseCmd(m.client, m.workflowID, *response)
+		}
+		// Invalid input, re-prompt
+		m.appendToViewport("Please enter a valid option number:\n")
+		return m, nil
+	}
+
+	// Route scroll keys to viewport
+	if m.isScrollKey(msg) {
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		return m, cmd
+	}
+
+	var cmd tea.Cmd
+	m.textarea, cmd = m.textarea.Update(msg)
+	return m, cmd
+}
+
 // isScrollKey returns true if the key should be routed to the viewport
 // for scrolling rather than to the textarea.
 func (m *Model) isScrollKey(msg tea.KeyMsg) bool {
@@ -599,6 +645,19 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 
+	case StateUserInputQuestion:
+		m.lastInterruptTime = now
+		m.appendToViewport("\nInterrupting...\n")
+		m.pendingUserInputReq = nil
+		m.state = StateWatching
+		m.spinnerMsg = "Interrupting..."
+		m.textarea.Blur()
+		cmds := []tea.Cmd{
+			sendInterruptCmd(m.client, m.workflowID),
+			m.startPolling(),
+		}
+		return m, tea.Batch(cmds...)
+
 	case StateInput:
 		// Ctrl+C during input — disconnect
 		m.quitting = true
@@ -644,6 +703,14 @@ func (m *Model) handleWorkflowStarted(msg WorkflowStartedMsg) (tea.Model, tea.Cm
 			m.appendToViewport(m.renderer.RenderEscalationPrompt(msg.Status.PendingEscalations))
 			m.pendingEscalations = msg.Status.PendingEscalations
 			return m, m.focusTextarea()
+		case workflow.PhaseUserInputPending:
+			if msg.Status.PendingUserInputRequest != nil {
+				m.state = StateUserInputQuestion
+				m.pendingUserInputReq = msg.Status.PendingUserInputRequest
+				m.appendToViewport(m.renderer.RenderUserInputQuestionPrompt(msg.Status.PendingUserInputRequest))
+				return m, m.focusTextarea()
+			}
+			fallthrough
 		default:
 			m.state = StateWatching
 			m.spinnerMsg = "Thinking..."
@@ -720,6 +787,16 @@ func (m *Model) handlePollResult(msg PollResultMsg) (tea.Model, tea.Cmd) {
 		m.state = StateEscalation
 		m.pendingEscalations = result.Status.PendingEscalations
 		m.appendToViewport(m.renderer.RenderEscalationPrompt(result.Status.PendingEscalations))
+		return m, m.focusTextarea()
+	}
+
+	// Check for user input question pending
+	if result.Status.Phase == workflow.PhaseUserInputPending &&
+		result.Status.PendingUserInputRequest != nil && m.state == StateWatching {
+		m.stopPolling()
+		m.state = StateUserInputQuestion
+		m.pendingUserInputReq = result.Status.PendingUserInputRequest
+		m.appendToViewport(m.renderer.RenderUserInputQuestionPrompt(result.Status.PendingUserInputRequest))
 		return m, m.focusTextarea()
 	}
 

@@ -302,10 +302,14 @@ func (c *AnthropicClient) buildToolDefinitions(specs []tools.ToolSpec) []anthrop
 		required := make([]string, 0)
 
 		for _, param := range spec.Parameters {
-			properties[param.Name] = map[string]interface{}{
+			prop := map[string]interface{}{
 				"type":        param.Type,
 				"description": param.Description,
 			}
+			if param.Items != nil {
+				prop["items"] = param.Items
+			}
+			properties[param.Name] = prop
 			if param.Required {
 				required = append(required, param.Name)
 			}

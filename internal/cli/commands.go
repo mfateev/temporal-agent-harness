@@ -208,6 +208,31 @@ func sendEscalationResponseCmd(c client.Client, workflowID string, resp workflow
 	}
 }
 
+// sendUserInputQuestionResponseCmd sends a user input question response to the workflow.
+func sendUserInputQuestionResponseCmd(c client.Client, workflowID string, resp workflow.UserInputQuestionResponse) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		updateHandle, err := c.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
+			WorkflowID:   workflowID,
+			UpdateName:   workflow.UpdateUserInputQuestionResponse,
+			Args:         []interface{}{resp},
+			WaitForStage: client.WorkflowUpdateStageCompleted,
+		})
+		if err != nil {
+			return UserInputQuestionErrorMsg{Err: err}
+		}
+
+		var ack workflow.UserInputQuestionResponseAck
+		if err := updateHandle.Get(ctx, &ack); err != nil {
+			return UserInputQuestionErrorMsg{Err: err}
+		}
+
+		return UserInputQuestionSentMsg{}
+	}
+}
+
 // waitForCompletionCmd waits for a workflow to complete after shutdown.
 func waitForCompletionCmd(c client.Client, workflowID string) tea.Cmd {
 	return func() tea.Msg {

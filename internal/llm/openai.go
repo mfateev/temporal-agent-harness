@@ -238,10 +238,14 @@ func (c *OpenAIClient) buildToolDefinitions(specs []tools.ToolSpec) []openai.Cha
 		required := make([]string, 0)
 
 		for _, p := range spec.Parameters {
-			properties[p.Name] = map[string]interface{}{
+			prop := map[string]interface{}{
 				"type":        p.Type,
 				"description": p.Description,
 			}
+			if p.Items != nil {
+				prop["items"] = p.Items
+			}
+			properties[p.Name] = prop
 			if p.Required {
 				required = append(required, p.Name)
 			}

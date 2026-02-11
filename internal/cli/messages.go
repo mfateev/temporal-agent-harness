@@ -74,3 +74,11 @@ type SessionCompletedMsg struct {
 type SessionErrorMsg struct {
 	Err error
 }
+
+// UserInputQuestionSentMsg is sent after a user input question response has been sent.
+type UserInputQuestionSentMsg struct{}
+
+// UserInputQuestionErrorMsg is sent when sending a user input question response fails.
+type UserInputQuestionErrorMsg struct {
+	Err error
+}

@@ -39,6 +39,10 @@ const (
 
 	// UpdateEscalationResponse submits the user's escalation decision (on-failure mode).
 	UpdateEscalationResponse = "escalation_response"
+
+	// UpdateUserInputQuestionResponse submits the user's answers to request_user_input questions.
+	// Maps to: codex-rs/protocol/src/request_user_input.rs
+	UpdateUserInputQuestionResponse = "user_input_question_response"
 )
 
 // TurnPhase indicates the current phase of the workflow turn.
@@ -50,18 +54,20 @@ const (
 	PhaseToolExecuting      TurnPhase = "tool_executing"
 	PhaseApprovalPending    TurnPhase = "approval_pending"
 	PhaseEscalationPending  TurnPhase = "escalation_pending"
+	PhaseUserInputPending   TurnPhase = "user_input_pending"
 )
 
 // TurnStatus is the response from the get_turn_status query.
 type TurnStatus struct {
-	Phase               TurnPhase           `json:"phase"`
-	CurrentTurnID       string              `json:"current_turn_id"`
-	ToolsInFlight       []string            `json:"tools_in_flight,omitempty"`
-	PendingApprovals    []PendingApproval   `json:"pending_approvals,omitempty"`
-	PendingEscalations  []EscalationRequest `json:"pending_escalations,omitempty"`
-	IterationCount      int                 `json:"iteration_count"`
-	TotalTokens         int                 `json:"total_tokens"`
-	TurnCount           int                 `json:"turn_count"`
+	Phase                   TurnPhase                `json:"phase"`
+	CurrentTurnID           string                   `json:"current_turn_id"`
+	ToolsInFlight           []string                 `json:"tools_in_flight,omitempty"`
+	PendingApprovals        []PendingApproval        `json:"pending_approvals,omitempty"`
+	PendingEscalations      []EscalationRequest      `json:"pending_escalations,omitempty"`
+	PendingUserInputRequest *PendingUserInputRequest `json:"pending_user_input_request,omitempty"`
+	IterationCount          int                      `json:"iteration_count"`
+	TotalTokens             int                      `json:"total_tokens"`
+	TurnCount               int                      `json:"turn_count"`
 }
 
 // WorkflowInput is the initial input to start a conversation.
@@ -145,6 +151,42 @@ type EscalationResponse struct {
 // EscalationResponseAck is returned by the escalation_response Update.
 type EscalationResponseAck struct{}
 
+// RequestUserInputQuestionOption describes a single option for a user input question.
+// Maps to: codex-rs/protocol/src/request_user_input.rs QuestionOption
+type RequestUserInputQuestionOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
+// RequestUserInputQuestion describes a single question for the user.
+// Maps to: codex-rs/protocol/src/request_user_input.rs Question
+type RequestUserInputQuestion struct {
+	ID       string                           `json:"id"`
+	Header   string                           `json:"header,omitempty"`
+	Question string                           `json:"question"`
+	IsOther  bool                             `json:"is_other,omitempty"`
+	Options  []RequestUserInputQuestionOption `json:"options"`
+}
+
+// PendingUserInputRequest describes a request_user_input call awaiting user response.
+type PendingUserInputRequest struct {
+	CallID    string                     `json:"call_id"`
+	Questions []RequestUserInputQuestion `json:"questions"`
+}
+
+// UserInputQuestionAnswer holds the selected answers for a single question.
+type UserInputQuestionAnswer struct {
+	Answers []string `json:"answers"`
+}
+
+// UserInputQuestionResponse is the user's response to a request_user_input call.
+type UserInputQuestionResponse struct {
+	Answers map[string]UserInputQuestionAnswer `json:"answers"`
+}
+
+// UserInputQuestionResponseAck is returned by the user_input_question_response Update.
+type UserInputQuestionResponseAck struct{}
+
 // SessionState is passed through ContinueAsNew.
 // Uses ContextManager interface to allow pluggable storage backends.
 //
@@ -179,6 +221,11 @@ type SessionState struct {
 	PendingEscalations  []EscalationRequest  `json:"pending_escalations,omitempty"`
 	EscalationReceived  bool                 `json:"-"`
 	EscalationResponse  *EscalationResponse  `json:"-"`
+
+	// User input question transient state (request_user_input interception)
+	PendingUserInputReq   *PendingUserInputRequest   `json:"pending_user_input_request,omitempty"`
+	UserInputQReceived    bool                       `json:"-"`
+	UserInputQResponse    *UserInputQuestionResponse `json:"-"`
 
 	// Exec policy rules (serialized text, persists across ContinueAsNew)
 	ExecPolicyRules string `json:"exec_policy_rules,omitempty"`
