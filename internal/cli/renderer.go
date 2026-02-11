@@ -2,6 +2,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -99,34 +100,52 @@ func (r *ItemRenderer) RenderAssistantMessage(item models.ConversationItem) stri
 	return "\n" + content + "\n\n"
 }
 
-// RenderFunctionCall renders a function call invocation.
+// RenderFunctionCall renders a function call invocation in Codex style.
+// Example: "• Ran echo hello"
 func (r *ItemRenderer) RenderFunctionCall(item models.ConversationItem) string {
-	args := item.Arguments
-	if len(args) > 200 {
-		args = args[:200] + "..."
+	verb, detail := formatToolCall(item.Name, item.Arguments)
+	bullet := r.styles.ToolBullet.Render("•")
+	styledVerb := r.styles.ToolVerb.Render(verb)
+	if detail != "" {
+		return bullet + " " + styledVerb + " " + detail + "\n"
 	}
-	name := r.styles.FunctionCallName.Render("⚡ " + item.Name)
-	return name + " " + args + "\n"
+	return bullet + " " + styledVerb + "\n"
 }
 
-// RenderFunctionCallOutput renders function call output.
+// RenderFunctionCallOutput renders function call output in Codex style.
+// Uses 5-line limit with middle truncation and tree-style prefixes.
 func (r *ItemRenderer) RenderFunctionCallOutput(item models.ConversationItem) string {
 	if item.Output == nil {
 		return ""
 	}
 
-	content := item.Output.Content
+	isFailure := item.Output.Success != nil && !*item.Output.Success
+	content := strings.TrimRight(item.Output.Content, "\n")
+
+	if content == "" {
+		line := r.styles.OutputPrefix.Render("  └ ") + r.styles.OutputDim.Render("(no output)")
+		return line + "\n"
+	}
+
 	lines := strings.Split(content, "\n")
-	if len(lines) > 20 {
-		content = strings.Join(lines[:20], "\n") + fmt.Sprintf("\n... (%d more lines)", len(lines)-20)
+	displayed, _ := truncateMiddle(lines, 5)
+
+	var b strings.Builder
+	for i, line := range displayed {
+		var prefix string
+		if i == 0 {
+			prefix = r.styles.OutputPrefix.Render("  └ ")
+		} else {
+			prefix = r.styles.OutputPrefix.Render("    ")
+		}
+		if isFailure {
+			b.WriteString(prefix + r.styles.OutputFailure.Render(line) + "\n")
+		} else {
+			b.WriteString(prefix + r.styles.OutputDim.Render(line) + "\n")
+		}
 	}
 
-	style := r.styles.OutputSuccess
-	if item.Output.Success != nil && !*item.Output.Success {
-		style = r.styles.OutputFailure
-	}
-
-	return style.Render("  "+indent(content, "  ")) + "\n"
+	return b.String()
 }
 
 // RenderApprovalPrompt renders the approval prompt for pending tool calls.
@@ -200,6 +219,89 @@ func PhaseMessage(phase workflow.TurnPhase, toolsInFlight []string) string {
 	default:
 		return "Working..."
 	}
+}
+
+// formatToolCall parses the tool name and JSON arguments, returning a
+// human-readable verb and detail string matching the Codex output style.
+//
+//	shell        → ("Ran", "echo hello")
+//	read_file    → ("Read", "/tmp/foo.txt")
+//	write_file   → ("Wrote", "/tmp/bar.txt")
+//	apply_patch  → ("Patched", "")
+//	list_dir     → ("Listed", "/tmp")
+//	grep_files   → ("Searched", `"TODO" in src/`)
+//	unknown      → ("Ran", "unknown_tool(…)")
+func formatToolCall(name, argsJSON string) (verb, detail string) {
+	var args map[string]interface{}
+	_ = json.Unmarshal([]byte(argsJSON), &args)
+
+	switch name {
+	case "shell":
+		if cmd, ok := args["command"].(string); ok {
+			return "Ran", truncateString(cmd, 120)
+		}
+		return "Ran", truncateString(argsJSON, 120)
+	case "read_file":
+		if fp, ok := args["file_path"].(string); ok {
+			return "Read", fp
+		}
+		return "Read", ""
+	case "write_file":
+		if fp, ok := args["file_path"].(string); ok {
+			return "Wrote", fp
+		}
+		return "Wrote", ""
+	case "apply_patch":
+		return "Patched", ""
+	case "list_dir":
+		if dp, ok := args["dir_path"].(string); ok {
+			return "Listed", dp
+		}
+		if dp, ok := args["path"].(string); ok {
+			return "Listed", dp
+		}
+		return "Listed", ""
+	case "grep_files":
+		var parts []string
+		if pat, ok := args["pattern"].(string); ok {
+			parts = append(parts, fmt.Sprintf("%q", pat))
+		}
+		if dir, ok := args["path"].(string); ok {
+			parts = append(parts, "in "+dir)
+		}
+		if len(parts) > 0 {
+			return "Searched", strings.Join(parts, " ")
+		}
+		return "Searched", ""
+	default:
+		detail := name + "(" + truncateString(argsJSON, 80) + ")"
+		return "Ran", detail
+	}
+}
+
+// truncateMiddle returns at most limit lines. When the input exceeds the limit,
+// it keeps the first 2 and last 2 lines with a "… +N lines" placeholder in between.
+// The returned omitted count reflects lines replaced by the placeholder.
+func truncateMiddle(lines []string, limit int) (result []string, omitted int) {
+	if len(lines) <= limit {
+		return lines, 0
+	}
+	head := 2
+	tail := 2
+	omitted = len(lines) - head - tail
+	result = make([]string, 0, head+1+tail)
+	result = append(result, lines[:head]...)
+	result = append(result, fmt.Sprintf("… +%d lines", omitted))
+	result = append(result, lines[len(lines)-tail:]...)
+	return result, omitted
+}
+
+// truncateString truncates s to maxLen characters, appending "…" if truncated.
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "…"
 }
 
 func indent(s, prefix string) string {

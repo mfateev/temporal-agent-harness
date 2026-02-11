@@ -16,6 +16,14 @@ type Styles struct {
 	OutputSuccess lipgloss.Style
 	// Function output failure
 	OutputFailure lipgloss.Style
+	// Tool call bullet (• character)
+	ToolBullet lipgloss.Style
+	// Tool call verb (bold "Ran", "Read", etc.)
+	ToolVerb lipgloss.Style
+	// Dimmed output text
+	OutputDim lipgloss.Style
+	// Dimmed output prefix (└, │)
+	OutputPrefix lipgloss.Style
 	// Status line
 	StatusLine lipgloss.Style
 	// Approval index
@@ -45,6 +53,10 @@ func DefaultStyles() Styles {
 		FunctionCallArgs: lipgloss.NewStyle(),
 		OutputSuccess:    lipgloss.NewStyle().Foreground(lipgloss.Color("2")), // green
 		OutputFailure:    lipgloss.NewStyle().Foreground(lipgloss.Color("1")), // red
+		ToolBullet:       lipgloss.NewStyle().Foreground(lipgloss.Color("2")), // green
+		ToolVerb:         lipgloss.NewStyle().Bold(true),
+		OutputDim:        lipgloss.NewStyle().Faint(true),
+		OutputPrefix:     lipgloss.NewStyle().Faint(true),
 		StatusLine:       lipgloss.NewStyle().Faint(true),
 		ApprovalIndex:    lipgloss.NewStyle().Foreground(lipgloss.Color("6")), // cyan
 		ApprovalTool:     lipgloss.NewStyle().Foreground(lipgloss.Color("3")), // yellow
@@ -66,6 +78,10 @@ func NoColorStyles() Styles {
 		FunctionCallArgs: lipgloss.NewStyle(),
 		OutputSuccess:    lipgloss.NewStyle(),
 		OutputFailure:    lipgloss.NewStyle(),
+		ToolBullet:       lipgloss.NewStyle(),
+		ToolVerb:         lipgloss.NewStyle(),
+		OutputDim:        lipgloss.NewStyle(),
+		OutputPrefix:     lipgloss.NewStyle(),
 		StatusLine:       lipgloss.NewStyle(),
 		ApprovalIndex:    lipgloss.NewStyle(),
 		ApprovalTool:     lipgloss.NewStyle(),

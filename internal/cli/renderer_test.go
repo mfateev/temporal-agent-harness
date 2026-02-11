@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"fmt"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -41,8 +43,9 @@ func TestItemRenderer_RenderFunctionCall(t *testing.T) {
 	}, false)
 
 	assert.NotEmpty(t, result)
-	assert.Contains(t, result, "shell")
+	assert.Contains(t, result, "Ran")
 	assert.Contains(t, result, "echo hello")
+	assert.Contains(t, result, "•")
 }
 
 func TestItemRenderer_RenderFunctionCallOutput_Success(t *testing.T) {
@@ -59,6 +62,7 @@ func TestItemRenderer_RenderFunctionCallOutput_Success(t *testing.T) {
 
 	assert.NotEmpty(t, result)
 	assert.Contains(t, result, "hello")
+	assert.Contains(t, result, "└")
 }
 
 func TestItemRenderer_RenderFunctionCallOutput_Failure(t *testing.T) {
@@ -133,7 +137,7 @@ func TestItemRenderer_LongOutputTruncated(t *testing.T) {
 
 	longContent := ""
 	for i := 0; i < 25; i++ {
-		longContent += "line\n"
+		longContent += fmt.Sprintf("line %d\n", i+1)
 	}
 
 	success := true
@@ -146,7 +150,13 @@ func TestItemRenderer_LongOutputTruncated(t *testing.T) {
 		},
 	}, false)
 
-	assert.Contains(t, result, "more lines")
+	// Middle truncation: first 2 lines + ellipsis + last 2 lines
+	assert.Contains(t, result, "line 1")
+	assert.Contains(t, result, "line 2")
+	assert.Contains(t, result, "… +21 lines")
+	assert.Contains(t, result, "line 24")
+	assert.Contains(t, result, "line 25")
+	assert.NotContains(t, result, "line 10")
 }
 
 func TestItemRenderer_ColorDisabled(t *testing.T) {
@@ -169,9 +179,10 @@ func TestItemRenderer_ColorEnabled(t *testing.T) {
 		Arguments: `{"command": "ls"}`,
 	}, false)
 
-	// Verify the content is present (lipgloss may not emit ANSI in non-TTY test env)
-	assert.Contains(t, result, "shell")
-	assert.Contains(t, result, "ls")
+	plain := stripANSI(result)
+	// Verify the content is present in Codex format
+	assert.Contains(t, plain, "Ran")
+	assert.Contains(t, plain, "ls")
 }
 
 func TestItemRenderer_MarkdownRendersFormattedOutput(t *testing.T) {
@@ -291,4 +302,223 @@ func TestItemRenderer_RenderEscalationPrompt(t *testing.T) {
 	assert.Contains(t, result, "Sandbox failure")
 	assert.Contains(t, result, "shell")
 	assert.Contains(t, result, "permission denied")
+}
+
+func TestItemRenderer_RenderFunctionCall_ReadFile(t *testing.T) {
+	r := newTestRenderer()
+	result := r.RenderItem(models.ConversationItem{
+		Type:      models.ItemTypeFunctionCall,
+		Name:      "read_file",
+		Arguments: `{"file_path": "/tmp/foo.txt"}`,
+	}, false)
+
+	assert.Contains(t, result, "•")
+	assert.Contains(t, result, "Read")
+	assert.Contains(t, result, "/tmp/foo.txt")
+}
+
+func TestItemRenderer_RenderFunctionCall_WriteFile(t *testing.T) {
+	r := newTestRenderer()
+	result := r.RenderItem(models.ConversationItem{
+		Type:      models.ItemTypeFunctionCall,
+		Name:      "write_file",
+		Arguments: `{"file_path": "/tmp/bar.txt", "content": "hello"}`,
+	}, false)
+
+	assert.Contains(t, result, "•")
+	assert.Contains(t, result, "Wrote")
+	assert.Contains(t, result, "/tmp/bar.txt")
+}
+
+func TestItemRenderer_RenderFunctionCall_ApplyPatch(t *testing.T) {
+	r := newTestRenderer()
+	result := r.RenderItem(models.ConversationItem{
+		Type:      models.ItemTypeFunctionCall,
+		Name:      "apply_patch",
+		Arguments: `{"file_path": "/tmp/foo.go", "patch": "..."}`,
+	}, false)
+
+	assert.Contains(t, result, "•")
+	assert.Contains(t, result, "Patched")
+}
+
+func TestItemRenderer_RenderFunctionCall_ListDir(t *testing.T) {
+	r := newTestRenderer()
+	result := r.RenderItem(models.ConversationItem{
+		Type:      models.ItemTypeFunctionCall,
+		Name:      "list_dir",
+		Arguments: `{"dir_path": "/tmp"}`,
+	}, false)
+
+	assert.Contains(t, result, "•")
+	assert.Contains(t, result, "Listed")
+	assert.Contains(t, result, "/tmp")
+}
+
+func TestItemRenderer_RenderFunctionCall_GrepFiles(t *testing.T) {
+	r := newTestRenderer()
+	result := r.RenderItem(models.ConversationItem{
+		Type:      models.ItemTypeFunctionCall,
+		Name:      "grep_files",
+		Arguments: `{"pattern": "TODO", "path": "src/"}`,
+	}, false)
+
+	assert.Contains(t, result, "•")
+	assert.Contains(t, result, "Searched")
+	assert.Contains(t, result, `"TODO"`)
+	assert.Contains(t, result, "in src/")
+}
+
+func TestItemRenderer_RenderFunctionCall_Unknown(t *testing.T) {
+	r := newTestRenderer()
+	result := r.RenderItem(models.ConversationItem{
+		Type:      models.ItemTypeFunctionCall,
+		Name:      "custom_tool",
+		Arguments: `{"foo": "bar"}`,
+	}, false)
+
+	assert.Contains(t, result, "•")
+	assert.Contains(t, result, "Ran")
+	assert.Contains(t, result, "custom_tool")
+}
+
+func TestItemRenderer_RenderFunctionCallOutput_Empty(t *testing.T) {
+	r := newTestRenderer()
+	success := true
+	result := r.RenderItem(models.ConversationItem{
+		Type:   models.ItemTypeFunctionCallOutput,
+		CallID: "call-1",
+		Output: &models.FunctionCallOutputPayload{
+			Content: "",
+			Success: &success,
+		},
+	}, false)
+
+	assert.Contains(t, result, "└")
+	assert.Contains(t, result, "(no output)")
+}
+
+func TestItemRenderer_MiddleTruncation(t *testing.T) {
+	r := newTestRenderer()
+
+	// Build 10 distinct lines
+	var lines []string
+	for i := 1; i <= 10; i++ {
+		lines = append(lines, fmt.Sprintf("output line %d", i))
+	}
+
+	success := true
+	result := r.RenderItem(models.ConversationItem{
+		Type:   models.ItemTypeFunctionCallOutput,
+		CallID: "call-1",
+		Output: &models.FunctionCallOutputPayload{
+			Content: strings.Join(lines, "\n"),
+			Success: &success,
+		},
+	}, false)
+
+	// Should show first 2 lines
+	assert.Contains(t, result, "output line 1")
+	assert.Contains(t, result, "output line 2")
+	// Should show ellipsis with count
+	assert.Contains(t, result, "… +6 lines")
+	// Should show last 2 lines
+	assert.Contains(t, result, "output line 9")
+	assert.Contains(t, result, "output line 10")
+	// Should NOT show middle lines
+	assert.NotContains(t, result, "output line 5")
+}
+
+func TestItemRenderer_OutputExactly5Lines(t *testing.T) {
+	r := newTestRenderer()
+
+	var lines []string
+	for i := 1; i <= 5; i++ {
+		lines = append(lines, fmt.Sprintf("line %d", i))
+	}
+
+	success := true
+	result := r.RenderItem(models.ConversationItem{
+		Type:   models.ItemTypeFunctionCallOutput,
+		CallID: "call-1",
+		Output: &models.FunctionCallOutputPayload{
+			Content: strings.Join(lines, "\n"),
+			Success: &success,
+		},
+	}, false)
+
+	// All 5 lines should be shown without truncation
+	for i := 1; i <= 5; i++ {
+		assert.Contains(t, result, fmt.Sprintf("line %d", i))
+	}
+	assert.NotContains(t, result, "… +")
+}
+
+func TestTruncateMiddle(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       []string
+		limit       int
+		wantLen     int
+		wantOmitted int
+	}{
+		{
+			name:        "under limit",
+			input:       []string{"a", "b", "c"},
+			limit:       5,
+			wantLen:     3,
+			wantOmitted: 0,
+		},
+		{
+			name:        "at limit",
+			input:       []string{"a", "b", "c", "d", "e"},
+			limit:       5,
+			wantLen:     5,
+			wantOmitted: 0,
+		},
+		{
+			name:        "over limit",
+			input:       []string{"a", "b", "c", "d", "e", "f", "g", "h"},
+			limit:       5,
+			wantLen:     5, // 2 head + 1 ellipsis + 2 tail
+			wantOmitted: 4,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, omitted := truncateMiddle(tt.input, tt.limit)
+			assert.Equal(t, tt.wantLen, len(result))
+			assert.Equal(t, tt.wantOmitted, omitted)
+			if omitted > 0 {
+				assert.Contains(t, result[2], "… +")
+			}
+		})
+	}
+}
+
+func TestFormatToolCall(t *testing.T) {
+	tests := []struct {
+		name       string
+		toolName   string
+		argsJSON   string
+		wantVerb   string
+		wantDetail string
+	}{
+		{"shell", "shell", `{"command": "echo hello"}`, "Ran", "echo hello"},
+		{"read_file", "read_file", `{"file_path": "/tmp/foo.txt"}`, "Read", "/tmp/foo.txt"},
+		{"write_file", "write_file", `{"file_path": "/tmp/bar.txt"}`, "Wrote", "/tmp/bar.txt"},
+		{"apply_patch", "apply_patch", `{"file_path": "/tmp/x.go"}`, "Patched", ""},
+		{"list_dir", "list_dir", `{"dir_path": "/tmp"}`, "Listed", "/tmp"},
+		{"grep_files", "grep_files", `{"pattern": "TODO", "path": "src/"}`, "Searched", `"TODO" in src/`},
+		{"unknown", "my_tool", `{"x": 1}`, "Ran", `my_tool({"x": 1})`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			verb, detail := formatToolCall(tt.toolName, tt.argsJSON)
+			assert.Equal(t, tt.wantVerb, verb)
+			assert.Equal(t, tt.wantDetail, detail)
+		})
+	}
 }

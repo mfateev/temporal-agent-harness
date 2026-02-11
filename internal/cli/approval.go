@@ -144,6 +144,25 @@ func formatApprovalDetail(toolName, arguments string) string {
 			if path, ok := args["file_path"].(string); ok {
 				return "Path: " + path
 			}
+		case "read_file":
+			if path, ok := args["file_path"].(string); ok {
+				return "Path: " + path
+			}
+		case "list_dir":
+			if path, ok := args["dir_path"].(string); ok {
+				return "Path: " + path
+			}
+			if path, ok := args["path"].(string); ok {
+				return "Path: " + path
+			}
+		case "grep_files":
+			if pat, ok := args["pattern"].(string); ok {
+				detail := "Pattern: " + pat
+				if dir, ok := args["path"].(string); ok {
+					detail += " in " + dir
+				}
+				return detail
+			}
 		}
 	}
 	display := arguments
