@@ -127,6 +127,46 @@ func parseApprovalIndices(input string, maxIndex int) []int {
 	return indices
 }
 
+// ApprovalSelectionToResponse maps a selector index to an ApprovalResponse.
+// Options: 0=approve all, 1=deny all, 2=always approve, 3=select individually (returns nil).
+func ApprovalSelectionToResponse(selected int, pending []workflow.PendingApproval) (*workflow.ApprovalResponse, bool) {
+	allCallIDs := make([]string, len(pending))
+	for i, ap := range pending {
+		allCallIDs[i] = ap.CallID
+	}
+
+	switch selected {
+	case 0: // Yes, allow
+		return &workflow.ApprovalResponse{Approved: allCallIDs}, false
+	case 1: // No, deny
+		return &workflow.ApprovalResponse{Denied: allCallIDs}, false
+	case 2: // Always allow
+		return &workflow.ApprovalResponse{Approved: allCallIDs}, true
+	case 3: // Select individually (multi-tool only) - fall back to textarea
+		return nil, false
+	default:
+		return nil, false
+	}
+}
+
+// EscalationSelectionToResponse maps a selector index to an EscalationResponse.
+// Options: 0=approve (re-run without sandbox), 1=deny.
+func EscalationSelectionToResponse(selected int, pending []workflow.EscalationRequest) *workflow.EscalationResponse {
+	allCallIDs := make([]string, len(pending))
+	for i, esc := range pending {
+		allCallIDs[i] = esc.CallID
+	}
+
+	switch selected {
+	case 0: // Yes, re-run
+		return &workflow.EscalationResponse{Approved: allCallIDs}
+	case 1: // No, deny
+		return &workflow.EscalationResponse{Denied: allCallIDs}
+	default:
+		return nil
+	}
+}
+
 // formatApprovalDetail extracts a human-readable detail string from tool arguments.
 func formatApprovalDetail(toolName, arguments string) string {
 	var args map[string]interface{}

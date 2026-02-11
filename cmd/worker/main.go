@@ -15,6 +15,7 @@ import (
 	"github.com/mfateev/codex-temporal-go/internal/temporalclient"
 	"github.com/mfateev/codex-temporal-go/internal/tools"
 	"github.com/mfateev/codex-temporal-go/internal/tools/handlers"
+	"github.com/mfateev/codex-temporal-go/internal/version"
 	"github.com/mfateev/codex-temporal-go/internal/workflow"
 )
 
@@ -81,6 +82,7 @@ func main() {
 	w.RegisterActivity(instructionActivities.LoadExecPolicy)
 
 	// Start worker
+	log.Printf("Worker version: %s", version.GitCommit)
 	log.Printf("Starting worker on task queue: %s", TaskQueue)
 	if opts.HostPort != "" {
 		log.Printf("Temporal server: %s", opts.HostPort)

@@ -222,6 +222,67 @@ func (r *ItemRenderer) RenderUserInputQuestionPrompt(req *workflow.PendingUserIn
 	return b.String()
 }
 
+// RenderApprovalContext renders the approval details for the viewport without
+// the prompt line (selector handles the options). Used when selector is active.
+func (r *ItemRenderer) RenderApprovalContext(approvals []workflow.PendingApproval) string {
+	var b strings.Builder
+	b.WriteString("\n")
+	for i, ap := range approvals {
+		idx := r.styles.ApprovalIndex.Render(fmt.Sprintf("[%d]", i+1))
+		tool := r.styles.ApprovalTool.Render("Tool:") + " " + ap.ToolName
+		b.WriteString(fmt.Sprintf("  %s %s\n", idx, tool))
+		b.WriteString(fmt.Sprintf("      %s\n", formatApprovalDetail(ap.ToolName, ap.Arguments)))
+		if ap.Reason != "" {
+			reason := r.styles.ApprovalReason.Render("Reason:") + " " + ap.Reason
+			b.WriteString(fmt.Sprintf("      %s\n", reason))
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// RenderEscalationContext renders escalation details for the viewport without
+// the prompt line (selector handles the options). Used when selector is active.
+func (r *ItemRenderer) RenderEscalationContext(escalations []workflow.EscalationRequest) string {
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(r.styles.EscalationHeader.Render("Sandbox failure — escalation needed:") + "\n\n")
+	for i, esc := range escalations {
+		idx := r.styles.ApprovalIndex.Render(fmt.Sprintf("[%d]", i+1))
+		tool := r.styles.ApprovalTool.Render("Tool:") + " " + esc.ToolName
+		b.WriteString(fmt.Sprintf("  %s %s\n", idx, tool))
+		b.WriteString(fmt.Sprintf("      %s\n", formatApprovalDetail(esc.ToolName, esc.Arguments)))
+		if esc.Output != "" {
+			outputPreview := esc.Output
+			if len(outputPreview) > 200 {
+				outputPreview = outputPreview[:200] + "..."
+			}
+			label := r.styles.EscalationOutput.Render("Output:")
+			b.WriteString(fmt.Sprintf("      %s %s\n", label, outputPreview))
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// RenderUserInputQuestionContext renders the question details for the viewport
+// without the prompt line (selector handles the options).
+func (r *ItemRenderer) RenderUserInputQuestionContext(req *workflow.PendingUserInputRequest) string {
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(r.styles.EscalationHeader.Render("The assistant has a question for you:") + "\n\n")
+
+	for i, q := range req.Questions {
+		if len(req.Questions) > 1 {
+			b.WriteString(fmt.Sprintf("  Q%d. %s\n", i+1, q.Question))
+		} else {
+			b.WriteString(fmt.Sprintf("  %s\n", q.Question))
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
 // RenderStatusLine renders a summary status after a turn completes.
 func (r *ItemRenderer) RenderStatusLine(model string, totalTokens, turnCount int) string {
 	line := fmt.Sprintf("[%s · %s tokens · turn %d]",

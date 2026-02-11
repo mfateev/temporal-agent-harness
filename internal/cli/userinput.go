@@ -7,6 +7,27 @@ import (
 	"github.com/mfateev/codex-temporal-go/internal/workflow"
 )
 
+// UserInputSelectionToResponse maps a selector index to a UserInputQuestionResponse.
+// Returns nil if "Other" is selected (last option), meaning fall back to textarea.
+// Only handles single-question requests.
+func UserInputSelectionToResponse(selected int, req *workflow.PendingUserInputRequest) *workflow.UserInputQuestionResponse {
+	if req == nil || len(req.Questions) != 1 {
+		return nil
+	}
+	q := req.Questions[0]
+
+	// Last option is always "Other (type your answer)..."
+	if selected >= len(q.Options) {
+		return nil
+	}
+
+	return &workflow.UserInputQuestionResponse{
+		Answers: map[string]workflow.UserInputQuestionAnswer{
+			q.ID: {Answers: []string{q.Options[selected].Label}},
+		},
+	}
+}
+
 // HandleUserInputQuestionInput parses the user's response to a request_user_input prompt.
 // For single-question requests, typing a number selects that option and auto-submits.
 // For multi-question requests, the same numeric selection applies to each question

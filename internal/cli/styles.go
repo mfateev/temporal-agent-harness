@@ -42,6 +42,12 @@ type Styles struct {
 	StatusBar lipgloss.Style
 	// Spinner message
 	SpinnerMessage lipgloss.Style
+	// Selector chevron indicator
+	SelectorChevron lipgloss.Style
+	// Selector highlighted item
+	SelectorSelected lipgloss.Style
+	// Selector shortcut hint
+	SelectorShortcut lipgloss.Style
 }
 
 // DefaultStyles returns styles with colors enabled.
@@ -66,6 +72,9 @@ func DefaultStyles() Styles {
 		Separator:        lipgloss.NewStyle().Faint(true),
 		StatusBar:        lipgloss.NewStyle().Faint(true),
 		SpinnerMessage:   lipgloss.NewStyle().Faint(true),
+		SelectorChevron:  lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Bold(true),
+		SelectorSelected: lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Bold(true),
+		SelectorShortcut: lipgloss.NewStyle().Faint(true),
 	}
 }
 
@@ -91,5 +100,8 @@ func NoColorStyles() Styles {
 		Separator:        lipgloss.NewStyle(),
 		StatusBar:        lipgloss.NewStyle(),
 		SpinnerMessage:   lipgloss.NewStyle(),
+		SelectorChevron:  lipgloss.NewStyle(),
+		SelectorSelected: lipgloss.NewStyle(),
+		SelectorShortcut: lipgloss.NewStyle(),
 	}
 }

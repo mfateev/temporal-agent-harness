@@ -16,6 +16,7 @@ import (
 
 	"github.com/mfateev/codex-temporal-go/internal/models"
 	"github.com/mfateev/codex-temporal-go/internal/temporalclient"
+	"github.com/mfateev/codex-temporal-go/internal/version"
 	"github.com/mfateev/codex-temporal-go/internal/workflow"
 )
 
@@ -108,6 +109,9 @@ type Model struct {
 
 	// User input question state
 	pendingUserInputReq *workflow.PendingUserInputRequest
+
+	// Selector (replaces textarea for approval/escalation/user-input states)
+	selector *SelectorModel
 
 	// Ctrl+C tracking
 	lastInterruptTime time.Time
@@ -239,6 +243,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ApprovalSentMsg:
 		m.pendingApprovals = nil
+		m.selector = nil
 		m.state = StateWatching
 		m.spinnerMsg = "Running tools..."
 		cmds = append(cmds, m.startPolling())
@@ -248,6 +253,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case EscalationSentMsg:
 		m.pendingEscalations = nil
+		m.selector = nil
 		m.state = StateWatching
 		m.spinnerMsg = "Re-running tools..."
 		cmds = append(cmds, m.startPolling())
@@ -257,6 +263,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case UserInputQuestionSentMsg:
 		m.pendingUserInputReq = nil
+		m.selector = nil
 		m.state = StateWatching
 		m.spinnerMsg = "Processing answer..."
 		cmds = append(cmds, m.startPolling())
@@ -308,12 +315,12 @@ func (m Model) View() string {
 	switch m.state {
 	case StateInput:
 		inputView = m.textarea.View()
-	case StateApproval:
-		inputView = m.textarea.View()
-	case StateEscalation:
-		inputView = m.textarea.View()
-	case StateUserInputQuestion:
-		inputView = m.textarea.View()
+	case StateApproval, StateEscalation, StateUserInputQuestion:
+		if m.selector != nil {
+			inputView = m.selector.View()
+		} else {
+			inputView = m.textarea.View()
+		}
 	default:
 		// Watching/Startup: show spinner
 		inputView = m.spinner.View() + " " + m.styles.SpinnerMessage.Render(m.spinnerMsg)
@@ -354,7 +361,7 @@ func (m Model) renderStatusBar() string {
 		stateLabel = ""
 	}
 
-	bar := fmt.Sprintf(" %s · %s tokens · %s · %s", model, tokens, turn, stateLabel)
+	bar := fmt.Sprintf(" %s · %s tokens · %s · %s · cli:%s", model, tokens, turn, stateLabel, version.GitCommit)
 	return m.styles.StatusBar.Render(bar)
 }
 
@@ -363,8 +370,7 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.height = msg.Height
 
 	// Reserve space: separator(1) + status(1) + input(variable) = variable lines
-	// Calculate current textarea height
-	taHeight := m.calculateTextareaHeight()
+	taHeight := m.inputAreaHeight()
 	vpHeight := m.height - taHeight - 2 // 2 for separator + status
 	if vpHeight < 1 {
 		vpHeight = 1
@@ -507,6 +513,50 @@ func (m *Model) handleWatchingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleApprovalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// When selector is active, delegate to it
+	if m.selector != nil {
+		if m.isViewportScrollKey(msg) {
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		}
+
+		done := m.selector.Update(msg)
+		if done {
+			if m.selector.Confirmed() {
+				selected := m.selector.Selected()
+				if len(m.pendingApprovals) > 1 && selected == 3 {
+					m.selector = nil
+					m.textarea.SetValue("")
+					return m, m.focusTextarea()
+				}
+				response, setAutoApprove := ApprovalSelectionToResponse(selected, m.pendingApprovals)
+				if response != nil {
+					if setAutoApprove {
+						m.autoApprove = true
+					}
+					m.selector = nil
+					return m, sendApprovalResponseCmd(m.client, m.workflowID, *response)
+				}
+			}
+			if m.selector.Cancelled() {
+				allCallIDs := make([]string, len(m.pendingApprovals))
+				for i, ap := range m.pendingApprovals {
+					allCallIDs[i] = ap.CallID
+				}
+				m.selector = nil
+				return m, sendApprovalResponseCmd(m.client, m.workflowID, workflow.ApprovalResponse{Denied: allCallIDs})
+			}
+		}
+		vpHeight := m.height - m.inputAreaHeight() - 2
+		if vpHeight < 1 {
+			vpHeight = 1
+		}
+		m.viewport.Height = vpHeight
+		return m, nil
+	}
+
+	// Textarea fallback (for "Select individually..." mode)
 	if msg.Type == tea.KeyEnter {
 		line := strings.TrimSpace(m.textarea.Value())
 		m.textarea.Reset()
@@ -519,12 +569,10 @@ func (m *Model) handleApprovalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.textarea.Blur()
 			return m, sendApprovalResponseCmd(m.client, m.workflowID, *response)
 		}
-		// Invalid input, re-prompt
 		m.appendToViewport("Please enter y(es), n(o), a(lways), or indices (e.g. 1,3):\n")
 		return m, nil
 	}
 
-	// Route scroll keys to viewport
 	if m.isScrollKey(msg) {
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
@@ -537,6 +585,34 @@ func (m *Model) handleApprovalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleEscalationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.selector != nil {
+		if m.isViewportScrollKey(msg) {
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		}
+
+		done := m.selector.Update(msg)
+		if done {
+			if m.selector.Confirmed() {
+				response := EscalationSelectionToResponse(m.selector.Selected(), m.pendingEscalations)
+				if response != nil {
+					m.selector = nil
+					return m, sendEscalationResponseCmd(m.client, m.workflowID, *response)
+				}
+			}
+			if m.selector.Cancelled() {
+				allCallIDs := make([]string, len(m.pendingEscalations))
+				for i, esc := range m.pendingEscalations {
+					allCallIDs[i] = esc.CallID
+				}
+				m.selector = nil
+				return m, sendEscalationResponseCmd(m.client, m.workflowID, workflow.EscalationResponse{Denied: allCallIDs})
+			}
+		}
+		return m, nil
+	}
+
 	if msg.Type == tea.KeyEnter {
 		line := strings.TrimSpace(m.textarea.Value())
 		m.textarea.Reset()
@@ -550,7 +626,6 @@ func (m *Model) handleEscalationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Route scroll keys to viewport
 	if m.isScrollKey(msg) {
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
@@ -563,6 +638,38 @@ func (m *Model) handleEscalationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleUserInputQuestionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.selector != nil {
+		if m.isViewportScrollKey(msg) {
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		}
+
+		done := m.selector.Update(msg)
+		if done {
+			if m.selector.Confirmed() {
+				selected := m.selector.Selected()
+				response := UserInputSelectionToResponse(selected, m.pendingUserInputReq)
+				if response != nil {
+					m.selector = nil
+					return m, sendUserInputQuestionResponseCmd(m.client, m.workflowID, *response)
+				}
+				// "Other" selected — fall back to textarea
+				m.selector = nil
+				m.textarea.SetValue("")
+				return m, m.focusTextarea()
+			}
+			if m.selector.Cancelled() {
+				// Esc = fall back to textarea for freeform
+				m.selector = nil
+				m.textarea.SetValue("")
+				return m, m.focusTextarea()
+			}
+		}
+		return m, nil
+	}
+
+	// Textarea fallback
 	if msg.Type == tea.KeyEnter {
 		line := strings.TrimSpace(m.textarea.Value())
 		m.textarea.Reset()
@@ -572,12 +679,10 @@ func (m *Model) handleUserInputQuestionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 			m.textarea.Blur()
 			return m, sendUserInputQuestionResponseCmd(m.client, m.workflowID, *response)
 		}
-		// Invalid input, re-prompt
 		m.appendToViewport("Please enter a valid option number:\n")
 		return m, nil
 	}
 
-	// Route scroll keys to viewport
 	if m.isScrollKey(msg) {
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
@@ -623,6 +728,7 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.lastInterruptTime = now
 		m.appendToViewport("\nInterrupting...\n")
 		m.pendingApprovals = nil
+		m.selector = nil
 		m.state = StateWatching
 		m.spinnerMsg = "Interrupting..."
 		m.textarea.Blur()
@@ -636,6 +742,7 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.lastInterruptTime = now
 		m.appendToViewport("\nInterrupting...\n")
 		m.pendingEscalations = nil
+		m.selector = nil
 		m.state = StateWatching
 		m.spinnerMsg = "Interrupting..."
 		m.textarea.Blur()
@@ -649,6 +756,7 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.lastInterruptTime = now
 		m.appendToViewport("\nInterrupting...\n")
 		m.pendingUserInputReq = nil
+		m.selector = nil
 		m.state = StateWatching
 		m.spinnerMsg = "Interrupting..."
 		m.textarea.Blur()
@@ -695,18 +803,26 @@ func (m *Model) handleWorkflowStarted(msg WorkflowStartedMsg) (tea.Model, tea.Cm
 			return m, m.focusTextarea()
 		case workflow.PhaseApprovalPending:
 			m.state = StateApproval
-			m.appendToViewport(m.renderer.RenderApprovalPrompt(msg.Status.PendingApprovals))
 			m.pendingApprovals = msg.Status.PendingApprovals
-			return m, m.focusTextarea()
+			m.appendToViewport(m.renderer.RenderApprovalContext(msg.Status.PendingApprovals))
+			m.selector = m.buildApprovalSelector(msg.Status.PendingApprovals)
+			return m, nil
 		case workflow.PhaseEscalationPending:
 			m.state = StateEscalation
-			m.appendToViewport(m.renderer.RenderEscalationPrompt(msg.Status.PendingEscalations))
 			m.pendingEscalations = msg.Status.PendingEscalations
-			return m, m.focusTextarea()
+			m.appendToViewport(m.renderer.RenderEscalationContext(msg.Status.PendingEscalations))
+			m.selector = m.buildEscalationSelector()
+			return m, nil
 		case workflow.PhaseUserInputPending:
 			if msg.Status.PendingUserInputRequest != nil {
 				m.state = StateUserInputQuestion
 				m.pendingUserInputReq = msg.Status.PendingUserInputRequest
+				sel := m.buildUserInputSelector(msg.Status.PendingUserInputRequest)
+				if sel != nil {
+					m.appendToViewport(m.renderer.RenderUserInputQuestionContext(msg.Status.PendingUserInputRequest))
+					m.selector = sel
+					return m, nil
+				}
 				m.appendToViewport(m.renderer.RenderUserInputQuestionPrompt(msg.Status.PendingUserInputRequest))
 				return m, m.focusTextarea()
 			}
@@ -776,8 +892,9 @@ func (m *Model) handlePollResult(msg PollResultMsg) (tea.Model, tea.Cmd) {
 		m.stopPolling()
 		m.state = StateApproval
 		m.pendingApprovals = result.Status.PendingApprovals
-		m.appendToViewport(m.renderer.RenderApprovalPrompt(result.Status.PendingApprovals))
-		return m, m.focusTextarea()
+		m.appendToViewport(m.renderer.RenderApprovalContext(result.Status.PendingApprovals))
+		m.selector = m.buildApprovalSelector(result.Status.PendingApprovals)
+		return m, nil
 	}
 
 	// Check for escalation pending
@@ -786,8 +903,9 @@ func (m *Model) handlePollResult(msg PollResultMsg) (tea.Model, tea.Cmd) {
 		m.stopPolling()
 		m.state = StateEscalation
 		m.pendingEscalations = result.Status.PendingEscalations
-		m.appendToViewport(m.renderer.RenderEscalationPrompt(result.Status.PendingEscalations))
-		return m, m.focusTextarea()
+		m.appendToViewport(m.renderer.RenderEscalationContext(result.Status.PendingEscalations))
+		m.selector = m.buildEscalationSelector()
+		return m, nil
 	}
 
 	// Check for user input question pending
@@ -796,6 +914,13 @@ func (m *Model) handlePollResult(msg PollResultMsg) (tea.Model, tea.Cmd) {
 		m.stopPolling()
 		m.state = StateUserInputQuestion
 		m.pendingUserInputReq = result.Status.PendingUserInputRequest
+		sel := m.buildUserInputSelector(result.Status.PendingUserInputRequest)
+		if sel != nil {
+			m.appendToViewport(m.renderer.RenderUserInputQuestionContext(result.Status.PendingUserInputRequest))
+			m.selector = sel
+			return m, nil
+		}
+		// Multi-question: fall back to textarea
 		m.appendToViewport(m.renderer.RenderUserInputQuestionPrompt(result.Status.PendingUserInputRequest))
 		return m, m.focusTextarea()
 	}
@@ -909,6 +1034,77 @@ func (m *Model) calculateTextareaHeight() int {
 	}
 	
 	return lines
+}
+
+// buildApprovalSelector creates a selector for approval prompts.
+func (m *Model) buildApprovalSelector(approvals []workflow.PendingApproval) *SelectorModel {
+	options := []SelectorOption{
+		{Label: "Yes, allow", Shortcut: "y", ShortcutKey: 'y'},
+		{Label: "No, deny", Shortcut: "n", ShortcutKey: 'n'},
+		{Label: "Always allow for this session", Shortcut: "a", ShortcutKey: 'a'},
+	}
+	if len(approvals) > 1 {
+		options = append(options, SelectorOption{
+			Label:       "Select individually...",
+			Shortcut:    "s",
+			ShortcutKey: 's',
+		})
+	}
+	sel := NewSelectorModel(options, m.styles)
+	sel.SetWidth(m.width)
+	return sel
+}
+
+// buildEscalationSelector creates a selector for escalation prompts.
+func (m *Model) buildEscalationSelector() *SelectorModel {
+	options := []SelectorOption{
+		{Label: "Yes, re-run without sandbox", Shortcut: "y", ShortcutKey: 'y'},
+		{Label: "No, deny", Shortcut: "n", ShortcutKey: 'n'},
+	}
+	sel := NewSelectorModel(options, m.styles)
+	sel.SetWidth(m.width)
+	return sel
+}
+
+// buildUserInputSelector creates a selector for single-question user input prompts.
+// Returns nil for multi-question requests (fall back to textarea).
+func (m *Model) buildUserInputSelector(req *workflow.PendingUserInputRequest) *SelectorModel {
+	if req == nil || len(req.Questions) != 1 {
+		return nil
+	}
+	q := req.Questions[0]
+	var options []SelectorOption
+	for _, opt := range q.Options {
+		options = append(options, SelectorOption{
+			Label: opt.Label,
+		})
+	}
+	options = append(options, SelectorOption{
+		Label:       "Other (type your answer)...",
+		Shortcut:    "o",
+		ShortcutKey: 'o',
+	})
+	sel := NewSelectorModel(options, m.styles)
+	sel.SetWidth(m.width)
+	return sel
+}
+
+// isViewportScrollKey returns true for keys that should scroll the viewport
+// even when the selector is active. Only page/home/end keys, not up/down/j/k.
+func (m *Model) isViewportScrollKey(msg tea.KeyMsg) bool {
+	switch msg.Type {
+	case tea.KeyPgUp, tea.KeyPgDown, tea.KeyHome, tea.KeyEnd:
+		return true
+	}
+	return false
+}
+
+// inputAreaHeight returns the height of the current input area (selector or textarea).
+func (m *Model) inputAreaHeight() int {
+	if m.selector != nil {
+		return m.selector.Height()
+	}
+	return m.calculateTextareaHeight()
 }
 
 // Run is the main entry point for the CLI.
