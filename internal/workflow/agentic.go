@@ -248,6 +248,10 @@ func (s *SessionState) registerHandlers(ctx workflow.Context) {
 		func(ctx workflow.Context, resp ApprovalResponse) (ApprovalResponseAck, error) {
 			s.ApprovalResponse = &resp
 			s.ApprovalReceived = true
+			// Clear PendingApprovals immediately so the query handler reflects
+			// the response before the main coroutine wakes from Await.
+			// Without this, the CLI may poll and re-enter the approval prompt.
+			s.PendingApprovals = nil
 			return ApprovalResponseAck{}, nil
 		},
 		workflow.UpdateHandlerOptions{
@@ -271,6 +275,7 @@ func (s *SessionState) registerHandlers(ctx workflow.Context) {
 		func(ctx workflow.Context, resp EscalationResponse) (EscalationResponseAck, error) {
 			s.EscalationResponse = &resp
 			s.EscalationReceived = true
+			s.PendingEscalations = nil
 			return EscalationResponseAck{}, nil
 		},
 		workflow.UpdateHandlerOptions{
@@ -294,6 +299,7 @@ func (s *SessionState) registerHandlers(ctx workflow.Context) {
 		func(ctx workflow.Context, resp UserInputQuestionResponse) (UserInputQuestionResponseAck, error) {
 			s.UserInputQResponse = &resp
 			s.UserInputQReceived = true
+			s.PendingUserInputReq = nil
 			return UserInputQuestionResponseAck{}, nil
 		},
 		workflow.UpdateHandlerOptions{
