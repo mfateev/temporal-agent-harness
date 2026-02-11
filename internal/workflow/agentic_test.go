@@ -736,7 +736,8 @@ func (s *AgenticWorkflowTestSuite) TestMultiTurn_ApprovalGate_Approve() {
 }
 
 // TestMultiTurn_ApprovalGate_Deny verifies that denying a tool call
-// sends a denial result to the LLM and does not execute the tool.
+// ends the turn and waits for user input, rather than immediately
+// calling the LLM again. The user should be able to provide guidance.
 func (s *AgenticWorkflowTestSuite) TestMultiTurn_ApprovalGate_Deny() {
 	// LLM returns a mutating shell command
 	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
@@ -753,7 +754,7 @@ func (s *AgenticWorkflowTestSuite) TestMultiTurn_ApprovalGate_Deny() {
 			TokenUsage:   models.TokenUsage{TotalTokens: 30},
 		}, nil).Once()
 
-	// After denial, LLM sees the denial message and responds
+	// After user provides new input, LLM responds
 	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
 		Return(mockLLMStopResponse("OK, I won't delete those files.", 25), nil).Once()
 
@@ -765,7 +766,14 @@ func (s *AgenticWorkflowTestSuite) TestMultiTurn_ApprovalGate_Deny() {
 			ApprovalResponse{Denied: []string{"call-rm"}})
 	}, time.Second*2)
 
-	s.sendShutdown(time.Second * 4)
+	// After denial, the turn ends and waits for user input.
+	// User provides guidance on what to do instead.
+	s.env.RegisterDelayedCallback(func() {
+		s.env.UpdateWorkflow(UpdateUserInput, "input-2", noopCallback(),
+			UserInput{Content: "Don't delete files, just list them instead"})
+	}, time.Second*3)
+
+	s.sendShutdown(time.Second * 5)
 
 	s.env.ExecuteWorkflow(AgenticWorkflow, testInputWithApproval("Delete /tmp/test", models.ApprovalUnlessTrusted))
 

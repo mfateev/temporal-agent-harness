@@ -700,10 +700,10 @@ func (s *SessionState) runAgenticTurn(ctx workflow.Context) (bool, error) {
 					}
 				}
 
-				// If all tools were denied, continue loop for next LLM iteration
+				// If all tools were denied, end the turn so the user can
+				// provide guidance on what to do instead.
 				if len(functionCalls) == 0 {
-					s.IterationCount++
-					continue
+					return false, nil
 				}
 			}
 
