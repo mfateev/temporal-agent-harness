@@ -518,12 +518,12 @@ func TestModel_ScrollKeysDuringEscalation(t *testing.T) {
 func TestModel_CalculateTextareaHeight(t *testing.T) {
 	m := newTestModel()
 
-	// Empty or single line should return minimum (3)
+	// Empty or single line should return minimum (1)
 	m.textarea.SetValue("")
-	assert.Equal(t, 3, m.calculateTextareaHeight())
+	assert.Equal(t, 1, m.calculateTextareaHeight())
 
 	m.textarea.SetValue("single line")
-	assert.Equal(t, 3, m.calculateTextareaHeight())
+	assert.Equal(t, 1, m.calculateTextareaHeight())
 
 	// Multiple lines
 	m.textarea.SetValue("line 1\nline 2\nline 3\nline 4")

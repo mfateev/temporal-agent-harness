@@ -144,7 +144,7 @@ func NewModel(config Config, c client.Client) Model {
 	ta.Placeholder = "Type a message..."
 	ta.Prompt = "> "
 	ta.CharLimit = 0
-	ta.SetHeight(3) // Start with 3 lines for better visibility
+	ta.SetHeight(1) // Single line until Shift+Enter adds a newline
 	ta.ShowLineNumbers = false
 	ta.KeyMap.InsertNewline.SetEnabled(true) // Enable multi-line input
 	// Override the default newline key to Shift+Enter
@@ -448,9 +448,9 @@ func (m *Model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.textarea.Reset()
 		
 		// Reset textarea to initial height after submit
-		m.textarea.SetHeight(3)
+		m.textarea.SetHeight(1)
 		// Recalculate viewport
-		vpHeight := m.height - 3 - 2
+		vpHeight := m.height - 1 - 2
 		if vpHeight < 1 {
 			vpHeight = 1
 		}
@@ -1037,8 +1037,8 @@ func (m *Model) calculateTextareaHeight() int {
 	lines := strings.Count(value, "\n") + 1
 	
 	// Minimum 3 lines for initial display, maximum MaxTextareaHeight
-	if lines < 3 {
-		lines = 3
+	if lines < 1 {
+		lines = 1
 	}
 	if lines > MaxTextareaHeight {
 		lines = MaxTextareaHeight
