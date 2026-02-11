@@ -1894,5 +1894,115 @@ func (s *AgenticWorkflowTestSuite) TestHandleOnFailureEscalation_MixedFailures()
 	assert.Equal(s.T(), "shutdown", result.EndReason)
 }
 
+// --- LLM error handling tests ---
+
+// TestMultiTurn_FatalLLMError_SurfacesErrorToUser verifies that a fatal LLM
+// error does NOT fail the workflow. Instead, the error is added as a
+// conversation item so the user can see it, and the turn ends gracefully.
+func (s *AgenticWorkflowTestSuite) TestMultiTurn_FatalLLMError_SurfacesErrorToUser() {
+	// LLM returns a fatal error
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(activities.LLMActivityOutput{}, temporal.NewNonRetryableApplicationError(
+			"invalid API key", models.LLMErrTypeFatal, nil)).Once()
+
+	// Verify the error appears in conversation history
+	s.env.RegisterDelayedCallback(func() {
+		result, err := s.env.QueryWorkflow(QueryGetConversationItems)
+		require.NoError(s.T(), err)
+
+		var items []models.ConversationItem
+		require.NoError(s.T(), result.Get(&items))
+
+		// Find the error message in history
+		found := false
+		for _, item := range items {
+			if item.Type == models.ItemTypeAssistantMessage &&
+				assert.ObjectsAreEqual("[Error: invalid API key]", item.Content) {
+				found = true
+				break
+			}
+		}
+		assert.True(s.T(), found, "Fatal LLM error should appear as conversation item")
+	}, time.Second*2)
+
+	s.sendShutdown(time.Second * 3)
+
+	s.env.ExecuteWorkflow(AgenticWorkflow, testInput("Hello"))
+
+	require.True(s.T(), s.env.IsWorkflowCompleted())
+	var result WorkflowResult
+	require.NoError(s.T(), s.env.GetWorkflowResult(&result))
+	// Workflow should complete with shutdown, NOT fail
+	assert.Equal(s.T(), "shutdown", result.EndReason)
+}
+
+// TestMultiTurn_GeneralLLMError_SurfacesErrorToUser verifies that a general
+// (non-classified) LLM activity error does NOT fail the workflow. The error
+// is surfaced to the user as a conversation item.
+func (s *AgenticWorkflowTestSuite) TestMultiTurn_GeneralLLMError_SurfacesErrorToUser() {
+	// LLM returns a generic ApplicationError (no recognized type)
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(activities.LLMActivityOutput{}, temporal.NewNonRetryableApplicationError(
+			"unexpected server error", "UnknownType", nil)).Once()
+
+	// Verify the error appears in conversation history
+	s.env.RegisterDelayedCallback(func() {
+		result, err := s.env.QueryWorkflow(QueryGetConversationItems)
+		require.NoError(s.T(), err)
+
+		var items []models.ConversationItem
+		require.NoError(s.T(), result.Get(&items))
+
+		found := false
+		for _, item := range items {
+			if item.Type == models.ItemTypeAssistantMessage &&
+				item.Content != "" &&
+				len(item.Content) > 7 && item.Content[:7] == "[Error:" {
+				found = true
+				break
+			}
+		}
+		assert.True(s.T(), found, "General LLM error should appear as conversation item")
+	}, time.Second*2)
+
+	s.sendShutdown(time.Second * 3)
+
+	s.env.ExecuteWorkflow(AgenticWorkflow, testInput("Hello"))
+
+	require.True(s.T(), s.env.IsWorkflowCompleted())
+	var result WorkflowResult
+	require.NoError(s.T(), s.env.GetWorkflowResult(&result))
+	assert.Equal(s.T(), "shutdown", result.EndReason)
+}
+
+// TestMultiTurn_FatalLLMError_TurnContinuesAfterError verifies that after a
+// fatal LLM error, the user can send new input and get a normal response.
+func (s *AgenticWorkflowTestSuite) TestMultiTurn_FatalLLMError_TurnContinuesAfterError() {
+	// First LLM call: fatal error
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(activities.LLMActivityOutput{}, temporal.NewNonRetryableApplicationError(
+			"bad request: tool_use_id invalid", models.LLMErrTypeFatal, nil)).Once()
+
+	// Second LLM call (after user retries): success
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(mockLLMStopResponse("Here's the answer.", 40), nil).Once()
+
+	// Send new user input after the error
+	s.env.RegisterDelayedCallback(func() {
+		s.env.UpdateWorkflow(UpdateUserInput, "input-2", noopCallback(),
+			UserInput{Content: "Try again"})
+	}, time.Second*2)
+
+	s.sendShutdown(time.Second * 4)
+
+	s.env.ExecuteWorkflow(AgenticWorkflow, testInput("Hello"))
+
+	require.True(s.T(), s.env.IsWorkflowCompleted())
+	var result WorkflowResult
+	require.NoError(s.T(), s.env.GetWorkflowResult(&result))
+	assert.Equal(s.T(), "shutdown", result.EndReason)
+	assert.Equal(s.T(), 40, result.TotalTokens)
+}
+
 // Ensure we reference workflow.Context (suppress unused import warning)
 var _ workflow.Context

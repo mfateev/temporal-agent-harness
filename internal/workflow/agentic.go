@@ -513,10 +513,23 @@ func (s *SessionState) runAgenticTurn(ctx workflow.Context) (bool, error) {
 					continue
 
 				case models.LLMErrTypeFatal:
-					return false, fmt.Errorf("fatal error: %w", err)
+					logger.Error("Fatal LLM error, ending turn", "error", err)
+					_ = s.History.AddItem(models.ConversationItem{
+						Type:    models.ItemTypeAssistantMessage,
+						Content: fmt.Sprintf("[Error: %s]", appErr.Message()),
+						TurnID:  s.CurrentTurnID,
+					})
+					return false, nil
 				}
 			}
-			return false, fmt.Errorf("LLM activity failed: %w", err)
+			// General activity error (timeout, unknown, etc.) — surface to user
+			logger.Error("LLM activity failed, ending turn", "error", err)
+			_ = s.History.AddItem(models.ConversationItem{
+				Type:    models.ItemTypeAssistantMessage,
+				Content: fmt.Sprintf("[Error: LLM call failed: %v]", err),
+				TurnID:  s.CurrentTurnID,
+			})
+			return false, nil
 		}
 
 		// Check for interrupt after LLM call
@@ -647,7 +660,12 @@ func (s *SessionState) runAgenticTurn(ctx workflow.Context) (bool, error) {
 
 			toolResults, err := executeToolsInParallel(ctx, functionCalls, s.ToolSpecs, s.Config.Cwd, s.Config.SessionTaskQueue)
 			if err != nil {
-				return false, fmt.Errorf("failed to execute tools: %w", err)
+				_ = s.History.AddItem(models.ConversationItem{
+					Type:    models.ItemTypeAssistantMessage,
+					Content: fmt.Sprintf("[Error: tool execution failed: %v]", err),
+					TurnID:  s.CurrentTurnID,
+				})
+				return false, nil
 			}
 
 			// Clear tools in flight

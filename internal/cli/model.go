@@ -22,6 +22,7 @@ import (
 const (
 	TaskQueue    = "codex-temporal"
 	PollInterval = 200 * time.Millisecond
+	MaxTextareaHeight = 10 // Maximum height for multi-line input
 )
 
 // State represents the CLI state machine state.
@@ -134,9 +135,11 @@ func NewModel(config Config, c client.Client) Model {
 	ta.Placeholder = "Type a message..."
 	ta.Prompt = "> "
 	ta.CharLimit = 0
-	ta.SetHeight(1)
+	ta.SetHeight(3) // Start with 3 lines for better visibility
 	ta.ShowLineNumbers = false
-	ta.KeyMap.InsertNewline.SetEnabled(false) // Enter submits, not newline
+	ta.KeyMap.InsertNewline.SetEnabled(true) // Enable multi-line input
+	// Override the default newline key to Shift+Enter
+	ta.KeyMap.InsertNewline.SetKeys("shift+enter")
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
@@ -342,8 +345,10 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.width = msg.Width
 	m.height = msg.Height
 
-	// Reserve space: separator(1) + status(1) + input(1) = 3 lines
-	vpHeight := m.height - 3
+	// Reserve space: separator(1) + status(1) + input(variable) = variable lines
+	// Calculate current textarea height
+	taHeight := m.calculateTextareaHeight()
+	vpHeight := m.height - taHeight - 2 // 2 for separator + status
 	if vpHeight < 1 {
 		vpHeight = 1
 	}
@@ -401,9 +406,19 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Handle Enter for submit
 	if msg.Type == tea.KeyEnter {
 		line := strings.TrimSpace(m.textarea.Value())
 		m.textarea.Reset()
+		
+		// Reset textarea to initial height after submit
+		m.textarea.SetHeight(3)
+		// Recalculate viewport
+		vpHeight := m.height - 3 - 2
+		if vpHeight < 1 {
+			vpHeight = 1
+		}
+		m.viewport.Height = vpHeight
 
 		if line == "" {
 			return m, nil
@@ -439,15 +454,29 @@ func (m *Model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, sendUserInputCmd(m.client, m.workflowID, line)
 	}
 
-	// Route scroll keys to viewport (textarea is single-line, doesn't need them)
-	if m.isScrollKey(msg) {
-		var cmd tea.Cmd
-		m.viewport, cmd = m.viewport.Update(msg)
-		return m, cmd
-	}
-
+	// Handle Shift+Enter and other input (textarea handles newlines automatically)
 	var cmd tea.Cmd
 	m.textarea, cmd = m.textarea.Update(msg)
+	
+	// Dynamically adjust textarea height based on content
+	newHeight := m.calculateTextareaHeight()
+	if newHeight != m.textarea.Height() {
+		m.textarea.SetHeight(newHeight)
+		// Recalculate viewport height
+		vpHeight := m.height - newHeight - 2
+		if vpHeight < 1 {
+			vpHeight = 1
+		}
+		m.viewport.Height = vpHeight
+	}
+	
+	// Route scroll keys to viewport (textarea is single-line, doesn't need them)
+	if m.isScrollKey(msg) {
+		var vpCmd tea.Cmd
+		m.viewport, vpCmd = m.viewport.Update(msg)
+		return m, vpCmd
+	}
+
 	return m, cmd
 }
 
@@ -786,6 +815,23 @@ func (m *Model) stopPolling() {
 		m.pollCancel()
 		m.pollCancel = nil
 	}
+}
+
+// calculateTextareaHeight returns the appropriate height for the textarea
+// based on the number of lines in the current content.
+func (m *Model) calculateTextareaHeight() int {
+	value := m.textarea.Value()
+	lines := strings.Count(value, "\n") + 1
+	
+	// Minimum 3 lines for initial display, maximum MaxTextareaHeight
+	if lines < 3 {
+		lines = 3
+	}
+	if lines > MaxTextareaHeight {
+		lines = MaxTextareaHeight
+	}
+	
+	return lines
 }
 
 // Run is the main entry point for the CLI.

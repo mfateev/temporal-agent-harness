@@ -5,6 +5,7 @@ import "github.com/charmbracelet/bubbles/key"
 // KeyMap defines the key bindings for the TUI.
 type KeyMap struct {
 	Submit    key.Binding
+	Newline   key.Binding
 	Quit      key.Binding
 	ScrollUp  key.Binding
 	ScrollDn  key.Binding
@@ -20,6 +21,10 @@ func DefaultKeyMap() KeyMap {
 		Submit: key.NewBinding(
 			key.WithKeys("enter"),
 			key.WithHelp("enter", "submit"),
+		),
+		Newline: key.NewBinding(
+			key.WithKeys("shift+enter"),
+			key.WithHelp("shift+enter", "new line"),
 		),
 		Quit: key.NewBinding(
 			key.WithKeys("ctrl+c"),

@@ -56,6 +56,20 @@ Or start an interactive session:
 ./tcx
 ```
 
+## Interactive Mode
+
+The TUI supports multi-line input for composing longer messages:
+
+- **Enter** - Submit message
+- **Shift+Enter** - Insert new line
+- **Ctrl+C** - Interrupt (twice to disconnect)
+- **Ctrl+D** - Disconnect
+- **↑/↓, PgUp/PgDn** - Scroll viewport
+- **/exit, /quit** - Exit session
+- **/end** - End session gracefully
+
+The input area automatically expands up to 10 lines as you type.
+
 ## Connection
 
 Temporal connection is configured via [envconfig](https://github.com/temporalio/samples-go/tree/main/external-env-conf):

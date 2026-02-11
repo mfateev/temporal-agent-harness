@@ -1,19 +1,19 @@
 // E2E tests for codex-temporal-go
 //
-// CRITICAL: These tests use REAL services:
-// - Real OpenAI API (requires OPENAI_API_KEY)
-// - Real Temporal server (requires 'temporal server start-dev')
-// - Real worker (must be running)
+// These tests are self-contained: TestMain starts a Temporal dev server on a
+// non-standard port (17233) and an in-process worker. No external services
+// need to be running except an LLM provider (OPENAI_API_KEY or ANTHROPIC_API_KEY).
 //
-// Prerequisites:
-// 1. Terminal 1: temporal server start-dev
-// 2. Terminal 2: export OPENAI_API_KEY=sk-... && go run cmd/worker/main.go
-// 3. Terminal 3: export OPENAI_API_KEY=sk-... && go test -v ./e2e/...
+// The non-standard port avoids collisions with a dev server on the default 7233.
 package e2e
 
 import (
 	"context"
+	"fmt"
+	"log"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -22,18 +22,171 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/worker"
 
+	"github.com/mfateev/codex-temporal-go/internal/activities"
+	"github.com/mfateev/codex-temporal-go/internal/llm"
 	"github.com/mfateev/codex-temporal-go/internal/models"
-	"github.com/mfateev/codex-temporal-go/internal/temporalclient"
+	"github.com/mfateev/codex-temporal-go/internal/tools"
+	"github.com/mfateev/codex-temporal-go/internal/tools/handlers"
 	"github.com/mfateev/codex-temporal-go/internal/workflow"
 )
 
 const (
-	TaskQueue        = "codex-temporal"
-	TemporalHostPort = "localhost:7233"
-	WorkflowTimeout  = 3 * time.Minute
-	CheapModel       = "gpt-4o-mini"
+	TaskQueue       = "codex-temporal"
+	TestHostPort    = "localhost:17233" // Non-standard port to avoid collisions
+	TestUIPort      = "17234"          // UI port (also non-standard)
+	WorkflowTimeout = 3 * time.Minute
+	CheapModel      = "gpt-4o-mini"
 )
+
+// Package-level state managed by TestMain.
+var (
+	temporalCmd    *exec.Cmd
+	testWorker     worker.Worker
+	temporalClient client.Client
+)
+
+func TestMain(m *testing.M) {
+	// Skip everything if no LLM provider key is set.
+	if os.Getenv("OPENAI_API_KEY") == "" && os.Getenv("ANTHROPIC_API_KEY") == "" {
+		log.Println("E2E: No LLM provider key set (OPENAI_API_KEY or ANTHROPIC_API_KEY), skipping E2E tests")
+		os.Exit(0)
+	}
+
+	// 1. Find temporal CLI
+	temporalBin := findTemporalBin()
+	if temporalBin == "" {
+		log.Fatal("E2E: temporal CLI not found. Install it or set PATH.")
+	}
+	log.Printf("E2E: Using temporal CLI: %s", temporalBin)
+
+	// 2. Start Temporal dev server on non-standard port
+	temporalCmd = exec.Command(temporalBin, "server", "start-dev",
+		"--port", "17233",
+		"--ui-port", TestUIPort,
+		"--headless",
+		"--log-format", "pretty",
+	)
+	temporalCmd.Stdout = os.Stderr // Send server logs to stderr so they don't interfere with test output
+	temporalCmd.Stderr = os.Stderr
+	if err := temporalCmd.Start(); err != nil {
+		log.Fatalf("E2E: Failed to start Temporal server: %v", err)
+	}
+	log.Printf("E2E: Temporal server starting (pid %d) on %s", temporalCmd.Process.Pid, TestHostPort)
+
+	// 3. Wait for Temporal server to be ready
+	if err := waitForPort("localhost", "17233", 30*time.Second); err != nil {
+		temporalCmd.Process.Kill()
+		log.Fatalf("E2E: Temporal server failed to start: %v", err)
+	}
+	log.Println("E2E: Temporal server is ready")
+
+	// 4. Create Temporal client
+	var err error
+	temporalClient, err = client.Dial(client.Options{HostPort: TestHostPort})
+	if err != nil {
+		temporalCmd.Process.Kill()
+		log.Fatalf("E2E: Failed to create Temporal client: %v", err)
+	}
+
+	// 5. Start in-process worker
+	testWorker = createWorker(temporalClient)
+	go func() {
+		if err := testWorker.Run(nil); err != nil {
+			log.Printf("E2E: Worker stopped with error: %v", err)
+		}
+	}()
+	// Give the worker a moment to register with the server
+	time.Sleep(time.Second)
+	log.Println("E2E: Worker started")
+
+	// 6. Run tests
+	code := m.Run()
+
+	// 7. Tear down
+	log.Println("E2E: Tearing down...")
+	testWorker.Stop()
+	temporalClient.Close()
+	temporalCmd.Process.Kill()
+	temporalCmd.Wait()
+	log.Println("E2E: Done")
+
+	os.Exit(code)
+}
+
+// findTemporalBin locates the temporal CLI binary.
+func findTemporalBin() string {
+	// Check well-known install location
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		candidate := filepath.Join(home, ".temporalio", "bin", "temporal")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	// Fall back to PATH
+	if p, err := exec.LookPath("temporal"); err == nil {
+		return p
+	}
+	return ""
+}
+
+// waitForPort polls a TCP port until it accepts connections or the timeout expires.
+func waitForPort(host, port string, timeout time.Duration) error {
+	deadline := time.After(timeout)
+	addr := net.JoinHostPort(host, port)
+	for {
+		select {
+		case <-deadline:
+			return fmt.Errorf("timed out waiting for %s", addr)
+		default:
+			conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+			if err == nil {
+				conn.Close()
+				return nil
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+	}
+}
+
+// createWorker builds a Temporal worker with all workflows and activities
+// registered, matching the setup in cmd/worker/main.go.
+func createWorker(c client.Client) worker.Worker {
+	w := worker.New(c, TaskQueue, worker.Options{})
+
+	// Register workflows
+	w.RegisterWorkflow(workflow.AgenticWorkflow)
+	w.RegisterWorkflow(workflow.AgenticWorkflowContinued)
+
+	// Create tool registry with all built-in tools
+	toolRegistry := tools.NewToolRegistry()
+	toolRegistry.Register(handlers.NewShellTool())
+	toolRegistry.Register(handlers.NewReadFileTool())
+	toolRegistry.Register(handlers.NewWriteFileTool())
+	toolRegistry.Register(handlers.NewListDirTool())
+	toolRegistry.Register(handlers.NewGrepFilesTool())
+	toolRegistry.Register(handlers.NewApplyPatchTool())
+
+	// Create multi-provider LLM client
+	llmClient := llm.NewMultiProviderClient()
+
+	// Register activities
+	llmActivities := activities.NewLLMActivities(llmClient)
+	w.RegisterActivity(llmActivities.ExecuteLLMCall)
+
+	toolActivities := activities.NewToolActivities(toolRegistry)
+	w.RegisterActivity(toolActivities.ExecuteTool)
+
+	instructionActivities := activities.NewInstructionActivities()
+	w.RegisterActivity(instructionActivities.LoadWorkerInstructions)
+	w.RegisterActivity(instructionActivities.LoadExecPolicy)
+
+	return w
+}
+
+// --- Test helpers ---
 
 // testSessionConfig returns a deterministic session configuration for testing.
 // Temperature 0 makes LLM responses reproducible.
@@ -49,6 +202,8 @@ func testSessionConfig(maxTokens int, tools models.ToolsConfig) models.SessionCo
 	}
 }
 
+// dialTemporal returns the shared Temporal client, skipping the test if
+// prerequisites are missing.
 func dialTemporal(t *testing.T) client.Client {
 	t.Helper()
 	if testing.Short() {
@@ -57,13 +212,7 @@ func dialTemporal(t *testing.T) client.Client {
 	if os.Getenv("OPENAI_API_KEY") == "" {
 		t.Skip("OPENAI_API_KEY not set, skipping E2E test")
 	}
-	// Use envconfig for Temporal connection (supports env vars, config files, TLS).
-	// Falls back to TemporalHostPort constant for local dev.
-	opts, err := temporalclient.LoadClientOptions(TemporalHostPort, "")
-	require.NoError(t, err, "Failed to load Temporal client config")
-	c, err := client.Dial(opts)
-	require.NoError(t, err, "Failed to connect to Temporal server. Is it running?")
-	return c
+	return temporalClient
 }
 
 // waitForTurnComplete polls the get_conversation_items query until the expected
@@ -142,10 +291,11 @@ func startWorkflow(t *testing.T, ctx context.Context, c client.Client, input wor
 	return workflowID
 }
 
+// --- Tests ---
+
 // TestAgenticWorkflow_SingleTurn tests a simple conversation without tools
 func TestAgenticWorkflow_SingleTurn(t *testing.T) {
 	c := dialTemporal(t)
-	defer c.Close()
 
 	workflowID := "test-single-turn-" + uuid.New().String()[:8]
 	input := workflow.WorkflowInput{
@@ -181,7 +331,6 @@ func TestAgenticWorkflow_SingleTurn(t *testing.T) {
 // TestAgenticWorkflow_WithShellTool tests LLM calling the shell tool
 func TestAgenticWorkflow_WithShellTool(t *testing.T) {
 	c := dialTemporal(t)
-	defer c.Close()
 
 	workflowID := "test-shell-tool-" + uuid.New().String()[:8]
 	input := workflow.WorkflowInput{
@@ -214,7 +363,6 @@ func TestAgenticWorkflow_WithShellTool(t *testing.T) {
 // TestAgenticWorkflow_MultiTurn tests a multi-turn conversation with tools
 func TestAgenticWorkflow_MultiTurn(t *testing.T) {
 	c := dialTemporal(t)
-	defer c.Close()
 
 	workflowID := "test-multi-turn-" + uuid.New().String()[:8]
 	testFile := "/tmp/codex-test-" + uuid.New().String()[:8] + ".txt"
@@ -254,7 +402,6 @@ func TestAgenticWorkflow_MultiTurn(t *testing.T) {
 // TestAgenticWorkflow_ReadFile tests the read_file tool specifically
 func TestAgenticWorkflow_ReadFile(t *testing.T) {
 	c := dialTemporal(t)
-	defer c.Close()
 
 	testFile := "/tmp/codex-read-test-" + uuid.New().String()[:8] + ".txt"
 	testContent := "Line 1: Hello\nLine 2: World\nLine 3: Test\n"
@@ -294,7 +441,6 @@ func TestAgenticWorkflow_ReadFile(t *testing.T) {
 // TestAgenticWorkflow_ListDir tests the list_dir tool
 func TestAgenticWorkflow_ListDir(t *testing.T) {
 	c := dialTemporal(t)
-	defer c.Close()
 
 	testDir := "/tmp/codex-listdir-test-" + uuid.New().String()[:8]
 	require.NoError(t, os.MkdirAll(filepath.Join(testDir, "subdir"), 0o755))
@@ -335,7 +481,6 @@ func TestAgenticWorkflow_ListDir(t *testing.T) {
 // TestAgenticWorkflow_GrepFiles tests the grep_files tool
 func TestAgenticWorkflow_GrepFiles(t *testing.T) {
 	c := dialTemporal(t)
-	defer c.Close()
 
 	testDir := "/tmp/codex-grep-test-" + uuid.New().String()[:8]
 	require.NoError(t, os.MkdirAll(testDir, 0o755))
@@ -376,7 +521,6 @@ func TestAgenticWorkflow_GrepFiles(t *testing.T) {
 // TestAgenticWorkflow_WriteFile tests the write_file tool
 func TestAgenticWorkflow_WriteFile(t *testing.T) {
 	c := dialTemporal(t)
-	defer c.Close()
 
 	testFile := "/tmp/codex-write-test-" + uuid.New().String()[:8] + ".txt"
 	defer os.Remove(testFile)
@@ -424,7 +568,6 @@ func TestAgenticWorkflow_WriteFile(t *testing.T) {
 // TestAgenticWorkflow_ApplyPatch tests the apply_patch tool
 func TestAgenticWorkflow_ApplyPatch(t *testing.T) {
 	c := dialTemporal(t)
-	defer c.Close()
 
 	testFile := "/tmp/codex-patch-test-" + uuid.New().String()[:8] + ".txt"
 	defer os.Remove(testFile)
@@ -471,7 +614,6 @@ func TestAgenticWorkflow_ApplyPatch(t *testing.T) {
 // TestAgenticWorkflow_QueryHistory tests the get_conversation_items query handler
 func TestAgenticWorkflow_QueryHistory(t *testing.T) {
 	c := dialTemporal(t)
-	defer c.Close()
 
 	workflowID := "test-query-history-" + uuid.New().String()[:8]
 	input := workflow.WorkflowInput{
@@ -514,7 +656,6 @@ func TestAgenticWorkflow_QueryHistory(t *testing.T) {
 // TestAgenticWorkflow_MultiTurnInteractive tests sending a second user message
 func TestAgenticWorkflow_MultiTurnInteractive(t *testing.T) {
 	c := dialTemporal(t)
-	defer c.Close()
 
 	workflowID := "test-multi-interactive-" + uuid.New().String()[:8]
 	input := workflow.WorkflowInput{
@@ -561,7 +702,6 @@ func TestAgenticWorkflow_MultiTurnInteractive(t *testing.T) {
 // TestAgenticWorkflow_Shutdown tests clean shutdown
 func TestAgenticWorkflow_Shutdown(t *testing.T) {
 	c := dialTemporal(t)
-	defer c.Close()
 
 	workflowID := "test-shutdown-" + uuid.New().String()[:8]
 	input := workflow.WorkflowInput{
@@ -590,7 +730,6 @@ func TestAgenticWorkflow_Shutdown(t *testing.T) {
 // TestAgenticWorkflow_AnthropicProvider tests using Anthropic Claude models
 func TestAgenticWorkflow_AnthropicProvider(t *testing.T) {
 	c := dialTemporal(t)
-	defer c.Close()
 
 	if os.Getenv("ANTHROPIC_API_KEY") == "" {
 		t.Skip("ANTHROPIC_API_KEY not set, skipping Anthropic E2E test")
@@ -639,7 +778,6 @@ func TestAgenticWorkflow_AnthropicProvider(t *testing.T) {
 // TestAgenticWorkflow_AnthropicWithTools tests Anthropic with tool calling
 func TestAgenticWorkflow_AnthropicWithTools(t *testing.T) {
 	c := dialTemporal(t)
-	defer c.Close()
 
 	if os.Getenv("ANTHROPIC_API_KEY") == "" {
 		t.Skip("ANTHROPIC_API_KEY not set, skipping Anthropic E2E test")

@@ -514,3 +514,45 @@ func TestModel_ScrollKeysDuringEscalation(t *testing.T) {
 	rm := result.(*Model)
 	assert.Equal(t, StateEscalation, rm.state, "state should remain StateEscalation")
 }
+
+func TestModel_CalculateTextareaHeight(t *testing.T) {
+	m := newTestModel()
+
+	// Empty or single line should return minimum (3)
+	m.textarea.SetValue("")
+	assert.Equal(t, 3, m.calculateTextareaHeight())
+
+	m.textarea.SetValue("single line")
+	assert.Equal(t, 3, m.calculateTextareaHeight())
+
+	// Multiple lines
+	m.textarea.SetValue("line 1\nline 2\nline 3\nline 4")
+	assert.Equal(t, 4, m.calculateTextareaHeight())
+
+	// More than max should cap at MaxTextareaHeight
+	longText := strings.Repeat("line\n", 15)
+	m.textarea.SetValue(longText)
+	assert.Equal(t, MaxTextareaHeight, m.calculateTextareaHeight())
+}
+
+func TestModel_MultiLineInput(t *testing.T) {
+	m := newTestModel()
+	m.state = StateInput
+	m.workflowID = "test-wf"
+
+	// Simulate typing multi-line input
+	multiLineText := "This is line 1\nThis is line 2\nThis is line 3"
+	m.textarea.SetValue(multiLineText)
+
+	// Verify textarea accepts multi-line content
+	assert.Contains(t, m.textarea.Value(), "line 1")
+	assert.Contains(t, m.textarea.Value(), "line 2")
+	assert.Contains(t, m.textarea.Value(), "line 3")
+
+	// Enter should submit
+	result, _ := m.handleInputKey(tea.KeyMsg{Type: tea.KeyEnter})
+	rm := result.(*Model)
+	assert.Equal(t, StateWatching, rm.state)
+	assert.Empty(t, rm.textarea.Value(), "textarea should be cleared after submit")
+	assert.Contains(t, rm.viewportContent, "line 1")
+}

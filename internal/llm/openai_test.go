@@ -1,13 +1,18 @@
 package llm
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/mfateev/codex-temporal-go/internal/models"
+	"github.com/mfateev/codex-temporal-go/internal/tools"
 	"github.com/openai/openai-go"
+	"github.com/openai/openai-go/option"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -428,4 +433,239 @@ func TestClassifyError_NetworkError_Transient(t *testing.T) {
 	require.ErrorAs(t, result, &actErr)
 	assert.Equal(t, models.ErrorTypeTransient, actErr.Type)
 	assert.True(t, actErr.Retryable)
+}
+
+// --- Tests for Call() request construction ---
+
+// fakeCompletionResponse returns a minimal valid chat completion JSON response.
+func fakeCompletionResponse() string {
+	return `{
+		"id": "chatcmpl-test",
+		"object": "chat.completion",
+		"created": 1700000000,
+		"model": "gpt-4o-mini",
+		"choices": [{
+			"index": 0,
+			"message": {"role": "assistant", "content": "Hello!"},
+			"finish_reason": "stop"
+		}],
+		"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+	}`
+}
+
+// TestCall_ModelParameterSent verifies that the model parameter from ModelConfig
+// is included in the HTTP request body sent to the OpenAI API.
+// This is a regression test: an empty model field causes a 400 "you must provide
+// a model parameter" error from OpenAI.
+func TestCall_ModelParameterSent(t *testing.T) {
+	var capturedBody map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &capturedBody))
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, fakeCompletionResponse())
+	}))
+	defer server.Close()
+
+	client := &OpenAIClient{
+		client: openai.NewClient(
+			option.WithBaseURL(server.URL),
+			option.WithAPIKey("test-key"),
+		),
+	}
+
+	request := LLMRequest{
+		History: []models.ConversationItem{
+			{Type: models.ItemTypeUserMessage, Content: "hello"},
+		},
+		ModelConfig: models.ModelConfig{
+			Model:       "gpt-4o-mini",
+			Temperature: 0.7,
+			MaxTokens:   4096,
+		},
+	}
+
+	_, err := client.Call(context.Background(), request)
+	require.NoError(t, err)
+
+	// Verify model was sent in request body
+	assert.Equal(t, "gpt-4o-mini", capturedBody["model"], "model parameter must be present in API request")
+}
+
+// TestCall_EmptyModelOmitted verifies that when ModelConfig.Model is empty,
+// the model field is missing from the request body (which would cause a 400 error).
+// This documents the failure mode so we can guard against it.
+func TestCall_EmptyModelOmitted(t *testing.T) {
+	var capturedBody map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &capturedBody))
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, fakeCompletionResponse())
+	}))
+	defer server.Close()
+
+	client := &OpenAIClient{
+		client: openai.NewClient(
+			option.WithBaseURL(server.URL),
+			option.WithAPIKey("test-key"),
+		),
+	}
+
+	request := LLMRequest{
+		History: []models.ConversationItem{
+			{Type: models.ItemTypeUserMessage, Content: "hello"},
+		},
+		ModelConfig: models.ModelConfig{
+			Model: "", // empty — this is the bug scenario
+		},
+	}
+
+	_, _ = client.Call(context.Background(), request)
+
+	// Confirm that empty model is NOT sent (omitzero in openai-go SDK)
+	_, hasModel := capturedBody["model"]
+	assert.False(t, hasModel, "empty model string should be omitted by SDK (omitzero), causing 400 from OpenAI")
+}
+
+// TestCall_TemperatureAndMaxTokensSent verifies that Temperature and MaxTokens
+// from ModelConfig are included in the HTTP request body.
+// Regression test for commit dccc3d6 which fixed these being ignored.
+func TestCall_TemperatureAndMaxTokensSent(t *testing.T) {
+	var capturedBody map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &capturedBody))
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, fakeCompletionResponse())
+	}))
+	defer server.Close()
+
+	client := &OpenAIClient{
+		client: openai.NewClient(
+			option.WithBaseURL(server.URL),
+			option.WithAPIKey("test-key"),
+		),
+	}
+
+	request := LLMRequest{
+		History: []models.ConversationItem{
+			{Type: models.ItemTypeUserMessage, Content: "hello"},
+		},
+		ModelConfig: models.ModelConfig{
+			Model:       "gpt-4o-mini",
+			Temperature: 0.7,
+			MaxTokens:   4096,
+		},
+	}
+
+	_, err := client.Call(context.Background(), request)
+	require.NoError(t, err)
+
+	assert.InDelta(t, 0.7, capturedBody["temperature"], 0.01, "temperature must be sent")
+	assert.EqualValues(t, 4096, capturedBody["max_tokens"], "max_tokens must be sent")
+}
+
+// TestCall_ZeroTemperatureAndMaxTokensOmitted verifies that zero values
+// for Temperature and MaxTokens are not sent to the API.
+func TestCall_ZeroTemperatureAndMaxTokensOmitted(t *testing.T) {
+	var capturedBody map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &capturedBody))
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, fakeCompletionResponse())
+	}))
+	defer server.Close()
+
+	client := &OpenAIClient{
+		client: openai.NewClient(
+			option.WithBaseURL(server.URL),
+			option.WithAPIKey("test-key"),
+		),
+	}
+
+	request := LLMRequest{
+		History: []models.ConversationItem{
+			{Type: models.ItemTypeUserMessage, Content: "hello"},
+		},
+		ModelConfig: models.ModelConfig{
+			Model:       "gpt-4o-mini",
+			Temperature: 0,
+			MaxTokens:   0,
+		},
+	}
+
+	_, err := client.Call(context.Background(), request)
+	require.NoError(t, err)
+
+	_, hasTemp := capturedBody["temperature"]
+	_, hasMax := capturedBody["max_tokens"]
+	assert.False(t, hasTemp, "zero temperature should not be sent")
+	assert.False(t, hasMax, "zero max_tokens should not be sent")
+}
+
+// TestCall_ToolDefinitionsSent verifies that tool specs are included
+// in the HTTP request body when provided.
+func TestCall_ToolDefinitionsSent(t *testing.T) {
+	var capturedBody map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &capturedBody))
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, fakeCompletionResponse())
+	}))
+	defer server.Close()
+
+	client := &OpenAIClient{
+		client: openai.NewClient(
+			option.WithBaseURL(server.URL),
+			option.WithAPIKey("test-key"),
+		),
+	}
+
+	request := LLMRequest{
+		History: []models.ConversationItem{
+			{Type: models.ItemTypeUserMessage, Content: "hello"},
+		},
+		ModelConfig: models.DefaultModelConfig(),
+		ToolSpecs: []tools.ToolSpec{
+			{
+				Name:        "shell",
+				Description: "Execute a shell command",
+				Parameters: []tools.ToolParameter{
+					{Name: "command", Type: "string", Description: "The command to run", Required: true},
+				},
+			},
+		},
+	}
+
+	_, err := client.Call(context.Background(), request)
+	require.NoError(t, err)
+
+	toolsRaw, hasTools := capturedBody["tools"]
+	assert.True(t, hasTools, "tools must be present when tool specs are provided")
+	toolsList, ok := toolsRaw.([]interface{})
+	require.True(t, ok)
+	assert.Len(t, toolsList, 1)
 }
