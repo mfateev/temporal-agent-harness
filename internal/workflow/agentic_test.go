@@ -1641,5 +1641,258 @@ func TestTotalIterationsForCAN_Persists(t *testing.T) {
 	assert.Equal(t, 50, state.TotalIterationsForCAN)
 }
 
+// --- Sandbox denial detection tests ---
+
+// TestIsLikelySandboxDenial verifies keyword-based sandbox detection.
+func TestIsLikelySandboxDenial(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		want   bool
+	}{
+		// Positive cases — should be detected as sandbox denial
+		{"permission denied", "bash: /usr/bin/rm: Permission denied", true},
+		{"operation not permitted", "cp: cannot create regular file: Operation not permitted", true},
+		{"read-only file system", "touch: cannot touch '/foo': Read-only file system", true},
+		{"seccomp", "seccomp: blocked syscall 59", true},
+		{"sandbox keyword", "error: sandbox prevented access", true},
+		{"landlock", "landlock: access denied", true},
+		{"failed to write file", "failed to write file /tmp/out.txt", true},
+		{"mixed case", "PERMISSION DENIED by policy", true},
+
+		// Negative cases — normal failures, not sandbox
+		{"file not found", "no such file or directory", false},
+		{"invalid argument", "invalid argument: --foo", false},
+		{"empty string", "", false},
+		{"command not found", "bash: jq: command not found", false},
+		{"syntax error", "syntax error near unexpected token", false},
+		{"exit code", "exit status 1", false},
+		{"generic error", "error: something went wrong", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isLikelySandboxDenial(tt.output))
+		})
+	}
+}
+
+// TestTruncate verifies the truncate helper.
+func TestTruncate(t *testing.T) {
+	assert.Equal(t, "hello", truncate("hello", 10))
+	assert.Equal(t, "hello", truncate("hello", 5))
+	assert.Equal(t, "hel...", truncate("hello", 3))
+	assert.Equal(t, "", truncate("", 5))
+}
+
+// TestHandleOnFailureEscalation_NonSandboxFailure verifies that a normal
+// tool failure (e.g., file not found) does NOT trigger escalation.
+func (s *AgenticWorkflowTestSuite) TestHandleOnFailureEscalation_NonSandboxFailure() {
+	// LLM returns a read_file call
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(activities.LLMActivityOutput{
+			Items: []models.ConversationItem{
+				{
+					Type:      models.ItemTypeFunctionCall,
+					CallID:    "call-read",
+					Name:      "read_file",
+					Arguments: `{"file_path": "/tmp/nonexistent.txt"}`,
+				},
+			},
+			FinishReason: models.FinishReasonToolCalls,
+			TokenUsage:   models.TokenUsage{TotalTokens: 30},
+		}, nil).Once()
+
+	// Tool fails with "no such file" — normal failure, not sandbox
+	falseVal := false
+	s.env.OnActivity("ExecuteTool", mock.Anything, mock.Anything).
+		Return(activities.ToolActivityOutput{
+			CallID:  "call-read",
+			Content: "open /tmp/nonexistent.txt: no such file or directory",
+			Success: &falseVal,
+		}, nil).Once()
+
+	// LLM sees the failure and responds (no escalation blocking)
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(mockLLMStopResponse("The file doesn't exist.", 20), nil).Once()
+
+	// Verify phase is NOT escalation_pending after tool execution
+	s.env.RegisterDelayedCallback(func() {
+		result, err := s.env.QueryWorkflow(QueryGetTurnStatus)
+		require.NoError(s.T(), err)
+
+		var status TurnStatus
+		require.NoError(s.T(), result.Get(&status))
+
+		// Should NOT be in escalation pending — normal failure passes through
+		assert.NotEqual(s.T(), PhaseEscalationPending, status.Phase,
+			"Normal file-not-found failure should not trigger escalation")
+	}, time.Second*2)
+
+	s.sendShutdown(time.Second * 3)
+
+	s.env.ExecuteWorkflow(AgenticWorkflow, testInputWithApproval("Read a file", models.ApprovalOnFailure))
+
+	require.True(s.T(), s.env.IsWorkflowCompleted())
+	var result WorkflowResult
+	require.NoError(s.T(), s.env.GetWorkflowResult(&result))
+	assert.Equal(s.T(), "shutdown", result.EndReason)
+	// Tool was "executed" (even though it failed) — the result went back to LLM
+	assert.Equal(s.T(), 50, result.TotalTokens) // 30 + 20
+}
+
+// TestHandleOnFailureEscalation_SandboxFailure verifies that a sandbox
+// denial DOES trigger escalation in on-failure mode.
+func (s *AgenticWorkflowTestSuite) TestHandleOnFailureEscalation_SandboxFailure() {
+	// LLM returns a shell command
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(activities.LLMActivityOutput{
+			Items: []models.ConversationItem{
+				{
+					Type:      models.ItemTypeFunctionCall,
+					CallID:    "call-shell",
+					Name:      "shell",
+					Arguments: `{"command": "mkdir /opt/test"}`,
+				},
+			},
+			FinishReason: models.FinishReasonToolCalls,
+			TokenUsage:   models.TokenUsage{TotalTokens: 30},
+		}, nil).Once()
+
+	// Tool fails with permission denied — sandbox denial
+	falseVal := false
+	s.env.OnActivity("ExecuteTool", mock.Anything, mock.Anything).
+		Return(activities.ToolActivityOutput{
+			CallID:  "call-shell",
+			Content: "mkdir: cannot create directory '/opt/test': Permission denied",
+			Success: &falseVal,
+		}, nil).Once()
+
+	// After escalation approval, re-execute succeeds
+	trueVal := true
+	s.env.OnActivity("ExecuteTool", mock.Anything, mock.Anything).
+		Return(activities.ToolActivityOutput{
+			CallID:  "call-shell",
+			Content: "",
+			Success: &trueVal,
+		}, nil).Once()
+
+	// LLM sees the re-executed result
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(mockLLMStopResponse("Directory created.", 20), nil).Once()
+
+	// Verify escalation pending, then approve
+	s.env.RegisterDelayedCallback(func() {
+		result, err := s.env.QueryWorkflow(QueryGetTurnStatus)
+		require.NoError(s.T(), err)
+
+		var status TurnStatus
+		require.NoError(s.T(), result.Get(&status))
+
+		assert.Equal(s.T(), PhaseEscalationPending, status.Phase,
+			"Sandbox denial should trigger escalation")
+		require.Len(s.T(), status.PendingEscalations, 1)
+		assert.Equal(s.T(), "call-shell", status.PendingEscalations[0].CallID)
+
+		// Approve the escalation
+		s.env.UpdateWorkflow(UpdateEscalationResponse, "esc-1", noopCallback(),
+			EscalationResponse{Approved: []string{"call-shell"}})
+	}, time.Second*2)
+
+	s.sendShutdown(time.Second * 4)
+
+	s.env.ExecuteWorkflow(AgenticWorkflow, testInputWithApproval("Create directory", models.ApprovalOnFailure))
+
+	require.True(s.T(), s.env.IsWorkflowCompleted())
+	var result WorkflowResult
+	require.NoError(s.T(), s.env.GetWorkflowResult(&result))
+	assert.Equal(s.T(), "shutdown", result.EndReason)
+}
+
+// TestHandleOnFailureEscalation_MixedFailures verifies that when a batch
+// has one sandbox failure and one normal failure, only the sandbox failure
+// is escalated. The normal failure passes through to the LLM.
+func (s *AgenticWorkflowTestSuite) TestHandleOnFailureEscalation_MixedFailures() {
+	// LLM returns two tool calls
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(activities.LLMActivityOutput{
+			Items: []models.ConversationItem{
+				{
+					Type:      models.ItemTypeFunctionCall,
+					CallID:    "call-read",
+					Name:      "read_file",
+					Arguments: `{"file_path": "/tmp/missing.txt"}`,
+				},
+				{
+					Type:      models.ItemTypeFunctionCall,
+					CallID:    "call-shell",
+					Name:      "shell",
+					Arguments: `{"command": "mkdir /opt/restricted"}`,
+				},
+			},
+			FinishReason: models.FinishReasonToolCalls,
+			TokenUsage:   models.TokenUsage{TotalTokens: 30},
+		}, nil).Once()
+
+	// read_file fails with normal error
+	falseVal := false
+	s.env.OnActivity("ExecuteTool", mock.Anything, mock.MatchedBy(func(input activities.ToolActivityInput) bool {
+		return input.ToolName == "read_file"
+	})).
+		Return(activities.ToolActivityOutput{
+			CallID:  "call-read",
+			Content: "open /tmp/missing.txt: no such file or directory",
+			Success: &falseVal,
+		}, nil).Once()
+
+	// shell fails with sandbox denial
+	s.env.OnActivity("ExecuteTool", mock.Anything, mock.MatchedBy(func(input activities.ToolActivityInput) bool {
+		return input.ToolName == "shell"
+	})).
+		Return(activities.ToolActivityOutput{
+			CallID:  "call-shell",
+			Content: "mkdir: Permission denied",
+			Success: &falseVal,
+		}, nil).Once()
+
+	// After escalation approval, re-execute shell
+	trueVal := true
+	s.env.OnActivity("ExecuteTool", mock.Anything, mock.Anything).
+		Return(activities.ToolActivityOutput{
+			CallID:  "call-shell",
+			Content: "",
+			Success: &trueVal,
+		}, nil).Once()
+
+	// LLM sees both results
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(mockLLMStopResponse("File missing, but directory created.", 20), nil).Once()
+
+	// Verify only shell is in pending escalations, then approve
+	s.env.RegisterDelayedCallback(func() {
+		result, err := s.env.QueryWorkflow(QueryGetTurnStatus)
+		require.NoError(s.T(), err)
+
+		var status TurnStatus
+		require.NoError(s.T(), result.Get(&status))
+
+		assert.Equal(s.T(), PhaseEscalationPending, status.Phase)
+		require.Len(s.T(), status.PendingEscalations, 1,
+			"Only the sandbox denial should be escalated")
+		assert.Equal(s.T(), "call-shell", status.PendingEscalations[0].CallID)
+
+		s.env.UpdateWorkflow(UpdateEscalationResponse, "esc-1", noopCallback(),
+			EscalationResponse{Approved: []string{"call-shell"}})
+	}, time.Second*2)
+
+	s.sendShutdown(time.Second * 4)
+
+	s.env.ExecuteWorkflow(AgenticWorkflow, testInputWithApproval("Read file and create dir", models.ApprovalOnFailure))
+
+	require.True(s.T(), s.env.IsWorkflowCompleted())
+	var result WorkflowResult
+	require.NoError(s.T(), s.env.GetWorkflowResult(&result))
+	assert.Equal(s.T(), "shutdown", result.EndReason)
+}
+
 // Ensure we reference workflow.Context (suppress unused import warning)
 var _ workflow.Context

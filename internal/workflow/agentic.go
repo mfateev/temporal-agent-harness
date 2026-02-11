@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"go.temporal.io/sdk/log"
@@ -1073,8 +1074,43 @@ func (s *SessionState) loadExecPolicy(ctx workflow.Context) {
 	logger.Info("Exec policy loaded", "rules_len", len(loadResult.RulesSource))
 }
 
+// sandboxDenialKeywords are output strings that indicate a sandbox/permission
+// denial rather than a normal command failure.
+// Matches Codex: codex-rs/core/src/exec.rs SANDBOX_DENIED_KEYWORDS
+var sandboxDenialKeywords = []string{
+	"operation not permitted",
+	"permission denied",
+	"read-only file system",
+	"seccomp",
+	"sandbox",
+	"landlock",
+	"failed to write file",
+}
+
+// isLikelySandboxDenial checks whether a failed tool result looks like it was
+// blocked by a sandbox rather than failing for an ordinary reason (file not
+// found, invalid args, etc.).
+func isLikelySandboxDenial(output string) bool {
+	lower := strings.ToLower(output)
+	for _, kw := range sandboxDenialKeywords {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// truncate returns s truncated to n bytes with "..." appended if it was longer.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
 // handleOnFailureEscalation checks for failed tools in on-failure mode.
-// For failed tools, prompts the user to re-execute without sandbox.
+// For failed tools that look like sandbox denials, prompts the user to
+// re-execute without sandbox. Normal failures are passed through to the LLM.
 // Returns updated tool results (may include re-executed results).
 func (s *SessionState) handleOnFailureEscalation(
 	ctx workflow.Context,
@@ -1089,14 +1125,21 @@ func (s *SessionState) handleOnFailureEscalation(
 
 	for i, result := range toolResults {
 		if result.Success != nil && !*result.Success {
-			failedIndices[i] = true
-			escalations = append(escalations, EscalationRequest{
-				CallID:    result.CallID,
-				ToolName:  functionCalls[i].Name,
-				Arguments: functionCalls[i].Arguments,
-				Output:    result.Content,
-				Reason:    "command failed in sandbox",
-			})
+			if isLikelySandboxDenial(result.Content) {
+				// Looks like sandbox blocked it — escalate to user
+				failedIndices[i] = true
+				escalations = append(escalations, EscalationRequest{
+					CallID:    result.CallID,
+					ToolName:  functionCalls[i].Name,
+					Arguments: functionCalls[i].Arguments,
+					Output:    result.Content,
+					Reason:    "command failed in sandbox",
+				})
+			} else {
+				// Normal failure (file not found, bad args, etc.) — let LLM see it
+				logger.Info("Tool failed but not sandbox-related, returning to LLM",
+					"tool", functionCalls[i].Name, "output_prefix", truncate(result.Content, 100))
+			}
 		}
 	}
 
