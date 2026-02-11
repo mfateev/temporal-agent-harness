@@ -151,7 +151,7 @@ func NewModel(config Config, c client.Client) Model {
 	ta.SetHeight(1) // Single line until Shift+Enter adds a newline
 	ta.ShowLineNumbers = false
 	ta.KeyMap.InsertNewline.SetEnabled(true) // Enable multi-line input
-	// Ctrl+J inserts a newline (terminals can't distinguish Shift+Enter from Enter)
+	// Shift+Enter sends ctrl+j (LF) in most terminals, distinct from Enter (CR)
 	ta.KeyMap.InsertNewline.SetKeys("ctrl+j")
 
 	sp := spinner.New()
