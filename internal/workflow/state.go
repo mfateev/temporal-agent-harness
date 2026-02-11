@@ -183,6 +183,14 @@ type SessionState struct {
 	// Exec policy rules (serialized text, persists across ContinueAsNew)
 	ExecPolicyRules string `json:"exec_policy_rules,omitempty"`
 
+	// Total iterations across all turns (persists across ContinueAsNew).
+	// Used to trigger ContinueAsNew when history grows too large.
+	TotalIterationsForCAN int `json:"total_iterations_for_can"`
+
+	// Repeated tool call detection (transient — not serialized)
+	lastToolKey string `json:"-"`
+	repeatCount int    `json:"-"`
+
 	// Cumulative stats (persist across ContinueAsNew)
 	TotalTokens       int      `json:"total_tokens"`
 	ToolCallsExecuted []string `json:"tool_calls_executed"`

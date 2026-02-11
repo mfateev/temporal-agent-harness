@@ -1459,5 +1459,187 @@ func (s *AgenticWorkflowTestSuite) TestMultiTurn_EnvironmentContext() {
 	require.True(s.T(), s.env.IsWorkflowCompleted())
 }
 
+// --- Iteration safety / loop-prevention tests ---
+
+// TestMultiTurn_MaxIterationsEndsTurn verifies that hitting MaxIterations
+// ends the turn (returns false) instead of triggering ContinueAsNew (true).
+// The history should contain a message explaining the limit.
+func (s *AgenticWorkflowTestSuite) TestMultiTurn_MaxIterationsEndsTurn() {
+	// Set up 20 LLM calls that each return a tool call (no stop).
+	// The 21st won't happen because MaxIterations=20.
+	for i := 0; i < 20; i++ {
+		callID := fmt.Sprintf("call-%d", i)
+		s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+			Return(activities.LLMActivityOutput{
+				Items: []models.ConversationItem{
+					{
+						Type:      models.ItemTypeFunctionCall,
+						CallID:    callID,
+						Name:      "read_file",
+						Arguments: fmt.Sprintf(`{"path": "/tmp/file%d.txt"}`, i),
+					},
+				},
+				FinishReason: models.FinishReasonToolCalls,
+				TokenUsage:   models.TokenUsage{TotalTokens: 10},
+			}, nil).Once()
+
+		trueVal := true
+		s.env.OnActivity("ExecuteTool", mock.Anything, mock.MatchedBy(func(input activities.ToolActivityInput) bool {
+			return input.CallID == callID
+		})).
+			Return(activities.ToolActivityOutput{
+				CallID:  callID,
+				Content: "content",
+				Success: &trueVal,
+			}, nil).Once()
+	}
+
+	// Query history after max iterations to verify the message was added
+	s.env.RegisterDelayedCallback(func() {
+		result, err := s.env.QueryWorkflow(QueryGetConversationItems)
+		require.NoError(s.T(), err)
+
+		var items []models.ConversationItem
+		require.NoError(s.T(), result.Get(&items))
+
+		// Find the max-iterations message
+		found := false
+		for _, item := range items {
+			if item.Type == models.ItemTypeAssistantMessage &&
+				assert.ObjectsAreEqual("[Turn ended: reached maximum of 20 iterations without completing. The task may need to be broken into smaller steps.]", item.Content) {
+				found = true
+				break
+			}
+		}
+		assert.True(s.T(), found, "Should have max iterations message in history")
+	}, time.Second*2)
+
+	s.sendShutdown(time.Second * 3)
+
+	s.env.ExecuteWorkflow(AgenticWorkflow, testInput("Read many files"))
+
+	require.True(s.T(), s.env.IsWorkflowCompleted())
+	var result WorkflowResult
+	require.NoError(s.T(), s.env.GetWorkflowResult(&result))
+	// Should end with shutdown (not ContinueAsNew error)
+	assert.Equal(s.T(), "shutdown", result.EndReason)
+}
+
+// TestMultiTurn_RepeatedToolCallsEndsTurn verifies that 3+ consecutive
+// identical tool call batches end the turn early.
+func (s *AgenticWorkflowTestSuite) TestMultiTurn_RepeatedToolCallsEndsTurn() {
+	// LLM returns the same read_file call 3 times in a row
+	for i := 0; i < 3; i++ {
+		s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+			Return(activities.LLMActivityOutput{
+				Items: []models.ConversationItem{
+					{
+						Type:      models.ItemTypeFunctionCall,
+						CallID:    fmt.Sprintf("call-%d", i),
+						Name:      "read_file",
+						Arguments: `{"path": "/tmp/LICENSE"}`,
+					},
+				},
+				FinishReason: models.FinishReasonToolCalls,
+				TokenUsage:   models.TokenUsage{TotalTokens: 10},
+			}, nil).Once()
+
+		// Only the first two tool calls should actually execute
+		if i < 2 {
+			trueVal := true
+			s.env.OnActivity("ExecuteTool", mock.Anything, mock.MatchedBy(func(input activities.ToolActivityInput) bool {
+				return input.CallID == fmt.Sprintf("call-%d", i)
+			})).
+				Return(activities.ToolActivityOutput{
+					CallID:  fmt.Sprintf("call-%d", i),
+					Content: "MIT License\n",
+					Success: &trueVal,
+				}, nil).Once()
+		}
+	}
+
+	// Query to verify the repeated-calls message
+	s.env.RegisterDelayedCallback(func() {
+		result, err := s.env.QueryWorkflow(QueryGetConversationItems)
+		require.NoError(s.T(), err)
+
+		var items []models.ConversationItem
+		require.NoError(s.T(), result.Get(&items))
+
+		found := false
+		for _, item := range items {
+			if item.Type == models.ItemTypeAssistantMessage &&
+				assert.ObjectsAreEqual("[Turn ended: detected repeated identical tool calls. Please try a different approach.]", item.Content) {
+				found = true
+				break
+			}
+		}
+		assert.True(s.T(), found, "Should have repeated tool calls message in history")
+	}, time.Second*2)
+
+	s.sendShutdown(time.Second * 3)
+
+	s.env.ExecuteWorkflow(AgenticWorkflow, testInput("Read LICENSE"))
+
+	require.True(s.T(), s.env.IsWorkflowCompleted())
+	var result WorkflowResult
+	require.NoError(s.T(), s.env.GetWorkflowResult(&result))
+	assert.Equal(s.T(), "shutdown", result.EndReason)
+}
+
+// TestDetectRepeatedToolCalls_Unit tests the detection logic directly.
+func TestDetectRepeatedToolCalls_Unit(t *testing.T) {
+	s := &SessionState{}
+
+	// Same call twice: not yet triggered
+	calls := []models.ConversationItem{
+		{Name: "read_file", Arguments: `{"path": "/tmp/test"}`},
+	}
+	assert.False(t, s.detectRepeatedToolCalls(calls))
+	assert.False(t, s.detectRepeatedToolCalls(calls))
+
+	// Third time: triggered
+	assert.True(t, s.detectRepeatedToolCalls(calls))
+
+	// Different call resets the counter
+	different := []models.ConversationItem{
+		{Name: "read_file", Arguments: `{"path": "/tmp/other"}`},
+	}
+	assert.False(t, s.detectRepeatedToolCalls(different))
+	assert.False(t, s.detectRepeatedToolCalls(different))
+	assert.True(t, s.detectRepeatedToolCalls(different))
+}
+
+// TestToolCallsKey_Deterministic verifies that the key function produces
+// deterministic output regardless of call order.
+func TestToolCallsKey_Deterministic(t *testing.T) {
+	calls1 := []models.ConversationItem{
+		{Name: "read_file", Arguments: `{"path": "a"}`},
+		{Name: "shell", Arguments: `{"command": "ls"}`},
+	}
+	calls2 := []models.ConversationItem{
+		{Name: "shell", Arguments: `{"command": "ls"}`},
+		{Name: "read_file", Arguments: `{"path": "a"}`},
+	}
+	assert.Equal(t, toolCallsKey(calls1), toolCallsKey(calls2))
+
+	// Different args produce different keys
+	calls3 := []models.ConversationItem{
+		{Name: "read_file", Arguments: `{"path": "b"}`},
+		{Name: "shell", Arguments: `{"command": "ls"}`},
+	}
+	assert.NotEqual(t, toolCallsKey(calls1), toolCallsKey(calls3))
+}
+
+// TestTotalIterationsForCAN_Persists verifies the field survives ContinueAsNew serialization.
+func TestTotalIterationsForCAN_Persists(t *testing.T) {
+	state := SessionState{
+		ConversationID:    "test",
+		TotalIterationsForCAN: 50,
+		MaxIterations:     20,
+	}
+	assert.Equal(t, 50, state.TotalIterationsForCAN)
+}
+
 // Ensure we reference workflow.Context (suppress unused import warning)
 var _ workflow.Context

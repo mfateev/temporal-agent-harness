@@ -4,9 +4,11 @@
 package workflow
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"go.temporal.io/sdk/log"
@@ -23,6 +25,14 @@ import (
 
 // IdleTimeout is how long the workflow waits for user input before triggering ContinueAsNew.
 const IdleTimeout = 24 * time.Hour
+
+// maxIterationsBeforeCAN is the total iteration count across all turns in a
+// single workflow run before triggering ContinueAsNew to keep history bounded.
+const maxIterationsBeforeCAN = 100
+
+// maxRepeatToolCalls is the number of consecutive identical tool call batches
+// before the turn is ended early to prevent tight loops.
+const maxRepeatToolCalls = 3
 
 // AgenticWorkflow is the main durable agentic loop.
 //
@@ -387,6 +397,14 @@ func (s *SessionState) runMultiTurnLoop(ctx workflow.Context) (WorkflowResult, e
 			return s.continueAsNew(ctx)
 		}
 
+		// Accumulate iterations for CAN threshold across turns.
+		s.TotalIterationsForCAN += s.IterationCount
+		if s.TotalIterationsForCAN >= maxIterationsBeforeCAN {
+			logger.Info("Total iterations across turns reached CAN threshold",
+				"total", s.TotalIterationsForCAN)
+			return s.continueAsNew(ctx)
+		}
+
 		// Turn complete — add TurnComplete marker (unless interrupted, which already added it)
 		if !s.Interrupted {
 			_ = s.History.AddItem(models.ConversationItem{
@@ -528,6 +546,19 @@ func (s *SessionState) runAgenticTurn(ctx workflow.Context) (bool, error) {
 			if item.Type == models.ItemTypeFunctionCall {
 				functionCalls = append(functionCalls, item)
 			}
+		}
+
+		// Detect repeated identical tool calls (tight-loop prevention).
+		// If the LLM is calling the same tools with the same args repeatedly,
+		// it's likely stuck. End the turn early so the user can intervene.
+		if len(functionCalls) > 0 && s.detectRepeatedToolCalls(functionCalls) {
+			logger.Warn("Detected repeated identical tool calls",
+				"repeat_count", s.repeatCount)
+			_ = s.History.AddItem(models.ConversationItem{
+				Type:    models.ItemTypeAssistantMessage,
+				Content: "[Turn ended: detected repeated identical tool calls. Please try a different approach.]",
+			})
+			return false, nil
 		}
 
 		// Execute tools if present (parallel execution)
@@ -674,18 +705,16 @@ func (s *SessionState) runAgenticTurn(ctx workflow.Context) (bool, error) {
 		return false, nil
 	}
 
-	// Max iterations reached — need ContinueAsNew
+	// Max iterations reached — end the turn with a message so the user can
+	// decide what to do next. Previously this triggered ContinueAsNew which
+	// allowed runaway loops to continue indefinitely across new workflow runs.
 	if s.IterationCount >= s.MaxIterations {
-		logger.Info("Max iterations reached, triggering ContinueAsNew")
-
-		tokenCount, _ := s.History.EstimateTokenCount()
-		contextUsage := float64(tokenCount) / float64(s.Config.Model.ContextWindow)
-
-		if contextUsage > 0.8 {
-			logger.Info("High context usage", "usage", contextUsage)
-		}
-
-		return true, nil
+		logger.Warn("Max iterations per turn reached", "iterations", s.IterationCount)
+		_ = s.History.AddItem(models.ConversationItem{
+			Type:    models.ItemTypeAssistantMessage,
+			Content: fmt.Sprintf("[Turn ended: reached maximum of %d iterations without completing. The task may need to be broken into smaller steps.]", s.MaxIterations),
+		})
+		return false, nil
 	}
 
 	return false, nil
@@ -1164,6 +1193,36 @@ func applyApprovalDecision(functionCalls []models.ConversationItem, resp *Approv
 	}
 
 	return approved, denied
+}
+
+// detectRepeatedToolCalls checks whether the current batch of tool calls is
+// identical to the previous batch. Returns true if the same batch has been
+// seen maxRepeatToolCalls times consecutively, indicating a tight loop.
+func (s *SessionState) detectRepeatedToolCalls(calls []models.ConversationItem) bool {
+	key := toolCallsKey(calls)
+	if key == s.lastToolKey {
+		s.repeatCount++
+	} else {
+		s.lastToolKey = key
+		s.repeatCount = 1
+	}
+	return s.repeatCount >= maxRepeatToolCalls
+}
+
+// toolCallsKey produces a deterministic hash for a batch of tool calls
+// based on tool names and arguments, used for repeat detection.
+func toolCallsKey(calls []models.ConversationItem) string {
+	// Build a sorted list of "name:args" strings for deterministic ordering.
+	parts := make([]string, len(calls))
+	for i, c := range calls {
+		parts[i] = c.Name + ":" + c.Arguments
+	}
+	sort.Strings(parts)
+	h := sha256.New()
+	for _, p := range parts {
+		h.Write([]byte(p))
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 // toInt64 converts a JSON-decoded number (float64) to int64.

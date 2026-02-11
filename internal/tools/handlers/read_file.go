@@ -124,6 +124,10 @@ func (t *ReadFileTool) Handle(_ context.Context, invocation *tools.ToolInvocatio
 		}
 	}
 
+	// Add file path header so the LLM knows which file this content belongs to.
+	// This prevents smaller models from losing track during multi-tool turns.
+	content = fmt.Sprintf("File: %s\n%s", path, content)
+
 	success := true
 	return &tools.ToolOutput{
 		Content: content,
