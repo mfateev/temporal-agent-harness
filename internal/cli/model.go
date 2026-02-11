@@ -146,7 +146,7 @@ func NewModel(config Config, c client.Client) Model {
 
 	ta := textarea.New()
 	ta.Placeholder = "Type a message..."
-	ta.Prompt = "> "
+	ta.Prompt = "❯ "
 	ta.CharLimit = 0
 	ta.SetHeight(1) // Single line until Shift+Enter adds a newline
 	ta.ShowLineNumbers = false
