@@ -82,7 +82,13 @@ func (r *ItemRenderer) RenderTurnStarted(item models.ConversationItem) string {
 	if w <= 0 {
 		w = 80
 	}
-	return r.styles.TurnSeparator.Render(strings.Repeat("─", w)) + "\n"
+	return r.styles.TurnSeparator.Render(strings.Repeat("─", w))
+}
+
+// RenderSystemMessage renders a system-level message with a yellow bullet.
+func (r *ItemRenderer) RenderSystemMessage(text string) string {
+	bullet := r.styles.SystemBullet.Render("●")
+	return bullet + " " + text + "\n"
 }
 
 // RenderUserMessage renders a user message with a distinct background.
@@ -96,20 +102,21 @@ func (r *ItemRenderer) RenderAssistantMessage(item models.ConversationItem) stri
 	if content == "" {
 		return ""
 	}
+	bullet := r.styles.AssistantBullet.Render("●")
 	if r.mdRenderer != nil {
 		rendered, err := r.mdRenderer.Render(content)
 		if err == nil {
-			return rendered
+			return bullet + rendered
 		}
 	}
-	return "\n" + content + "\n\n"
+	return bullet + " " + content + "\n"
 }
 
-// RenderFunctionCall renders a function call invocation in Codex style.
-// Example: "• Ran echo hello"
+// RenderFunctionCall renders a function call invocation.
+// Example: "● Ran echo hello"
 func (r *ItemRenderer) RenderFunctionCall(item models.ConversationItem) string {
 	verb, detail := formatToolCall(item.Name, item.Arguments)
-	bullet := r.styles.ToolBullet.Render("•")
+	bullet := r.styles.ToolBullet.Render("●")
 	styledVerb := r.styles.ToolVerb.Render(verb)
 	if detail != "" {
 		return bullet + " " + styledVerb + " " + detail + "\n"

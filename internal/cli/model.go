@@ -886,7 +886,7 @@ func (m *Model) handleWorkflowStarted(msg WorkflowStartedMsg) (tea.Model, tea.Cm
 	}
 
 	// New workflow
-	m.appendToViewport(fmt.Sprintf("Started session %s\n", m.workflowID))
+	m.appendToViewport(m.renderer.RenderSystemMessage(fmt.Sprintf("Started session %s", m.workflowID)))
 	if m.config.Message != "" {
 		m.state = StateWatching
 		m.spinnerMsg = "Thinking..."

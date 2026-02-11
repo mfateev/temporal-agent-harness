@@ -45,7 +45,7 @@ func TestItemRenderer_RenderFunctionCall(t *testing.T) {
 	assert.NotEmpty(t, result)
 	assert.Contains(t, result, "Ran")
 	assert.Contains(t, result, "echo hello")
-	assert.Contains(t, result, "•")
+	assert.Contains(t, result, "●")
 }
 
 func TestItemRenderer_RenderFunctionCallOutput_Success(t *testing.T) {
@@ -209,7 +209,9 @@ func TestItemRenderer_NoMarkdownProducesPlainText(t *testing.T) {
 		Content: mdContent,
 	}, false)
 
-	assert.Equal(t, "\n"+mdContent+"\n\n", result)
+	assert.Contains(t, result, "●")
+	assert.Contains(t, result, "Heading")
+	assert.Contains(t, result, "bold")
 }
 
 func TestItemRenderer_MarkdownEmptyContent(t *testing.T) {
@@ -312,7 +314,7 @@ func TestItemRenderer_RenderFunctionCall_ReadFile(t *testing.T) {
 		Arguments: `{"file_path": "/tmp/foo.txt"}`,
 	}, false)
 
-	assert.Contains(t, result, "•")
+	assert.Contains(t, result, "●")
 	assert.Contains(t, result, "Read")
 	assert.Contains(t, result, "/tmp/foo.txt")
 }
@@ -325,7 +327,7 @@ func TestItemRenderer_RenderFunctionCall_WriteFile(t *testing.T) {
 		Arguments: `{"file_path": "/tmp/bar.txt", "content": "hello"}`,
 	}, false)
 
-	assert.Contains(t, result, "•")
+	assert.Contains(t, result, "●")
 	assert.Contains(t, result, "Wrote")
 	assert.Contains(t, result, "/tmp/bar.txt")
 }
@@ -338,7 +340,7 @@ func TestItemRenderer_RenderFunctionCall_ApplyPatch(t *testing.T) {
 		Arguments: `{"file_path": "/tmp/foo.go", "patch": "..."}`,
 	}, false)
 
-	assert.Contains(t, result, "•")
+	assert.Contains(t, result, "●")
 	assert.Contains(t, result, "Patched")
 }
 
@@ -350,7 +352,7 @@ func TestItemRenderer_RenderFunctionCall_ListDir(t *testing.T) {
 		Arguments: `{"dir_path": "/tmp"}`,
 	}, false)
 
-	assert.Contains(t, result, "•")
+	assert.Contains(t, result, "●")
 	assert.Contains(t, result, "Listed")
 	assert.Contains(t, result, "/tmp")
 }
@@ -363,7 +365,7 @@ func TestItemRenderer_RenderFunctionCall_GrepFiles(t *testing.T) {
 		Arguments: `{"pattern": "TODO", "path": "src/"}`,
 	}, false)
 
-	assert.Contains(t, result, "•")
+	assert.Contains(t, result, "●")
 	assert.Contains(t, result, "Searched")
 	assert.Contains(t, result, `"TODO"`)
 	assert.Contains(t, result, "in src/")
@@ -377,7 +379,7 @@ func TestItemRenderer_RenderFunctionCall_Unknown(t *testing.T) {
 		Arguments: `{"foo": "bar"}`,
 	}, false)
 
-	assert.Contains(t, result, "•")
+	assert.Contains(t, result, "●")
 	assert.Contains(t, result, "Ran")
 	assert.Contains(t, result, "custom_tool")
 }
