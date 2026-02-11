@@ -265,12 +265,21 @@ func (c *OpenAIClient) buildToolDefinitions(specs []tools.ToolSpec) []openai.Cha
 	return toolDefs
 }
 
-// classifyError categorizes an OpenAI API error.
+// classifyError categorizes an OpenAI API error using the HTTP status code
+// when available, falling back to message-based heuristics.
 func classifyError(err error) error {
+	// Check message-based patterns first (works regardless of error type)
 	errMsg := strings.ToLower(err.Error())
 	if strings.Contains(errMsg, "context_length") || strings.Contains(errMsg, "maximum context length") {
 		return models.NewContextOverflowError(err.Error())
 	}
+
+	// Use typed error for status-code-based classification
+	if apiErr, ok := err.(*openai.Error); ok {
+		return classifyByStatusCode(apiErr.StatusCode, err)
+	}
+
+	// Fallback: message-based heuristics for non-typed errors (e.g., network errors)
 	if strings.Contains(errMsg, "rate_limit") || strings.Contains(errMsg, "rate limit") {
 		return models.NewAPILimitError(err.Error())
 	}

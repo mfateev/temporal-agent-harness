@@ -5,6 +5,8 @@ package llm
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 
 	"github.com/mfateev/codex-temporal-go/internal/models"
 	"github.com/mfateev/codex-temporal-go/internal/tools"
@@ -40,4 +42,27 @@ type LLMResponse struct {
 // Maps to: codex-rs/core/src/client.rs ModelClient trait
 type LLMClient interface {
 	Call(ctx context.Context, request LLMRequest) (LLMResponse, error)
+}
+
+// classifyByStatusCode maps an HTTP status code to the appropriate ActivityError.
+// Shared by all provider error classifiers.
+//
+// Classification:
+//   - 429 (Too Many Requests): rate limit, retryable with delay
+//   - 408 (Request Timeout), 409 (Conflict): transient, retryable
+//   - Other 4xx: fatal client error, non-retryable (e.g., 400, 401, 403, 404)
+//   - 5xx: transient server error, retryable
+func classifyByStatusCode(statusCode int, err error) *models.ActivityError {
+	switch {
+	case statusCode == http.StatusTooManyRequests:
+		return models.NewAPILimitError(fmt.Sprintf("rate limit (%d): %v", statusCode, err))
+	case statusCode == http.StatusRequestTimeout || statusCode == http.StatusConflict:
+		return models.NewTransientError(fmt.Sprintf("retryable error (%d): %v", statusCode, err))
+	case statusCode >= 400 && statusCode < 500:
+		return models.NewFatalError(fmt.Sprintf("client error (%d): %v", statusCode, err))
+	case statusCode >= 500:
+		return models.NewTransientError(fmt.Sprintf("server error (%d): %v", statusCode, err))
+	default:
+		return models.NewTransientError(fmt.Sprintf("unexpected status (%d): %v", statusCode, err))
+	}
 }

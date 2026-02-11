@@ -190,6 +190,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.handleKeyMsg(msg)
 
+	case tea.MouseMsg:
+		// Route all mouse events to viewport (handles wheel scrolling)
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		return &m, cmd
+
 	case spinner.TickMsg:
 		if m.state == StateWatching || m.state == StateStartup {
 			var cmd tea.Cmd
@@ -441,6 +447,13 @@ func (m *Model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, sendUserInputCmd(m.client, m.workflowID, line)
 	}
 
+	// Route scroll keys to viewport (textarea is single-line, doesn't need them)
+	if m.isScrollKey(msg) {
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		return m, cmd
+	}
+
 	var cmd tea.Cmd
 	m.textarea, cmd = m.textarea.Update(msg)
 	return m, cmd
@@ -471,6 +484,13 @@ func (m *Model) handleApprovalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Route scroll keys to viewport
+	if m.isScrollKey(msg) {
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		return m, cmd
+	}
+
 	var cmd tea.Cmd
 	m.textarea, cmd = m.textarea.Update(msg)
 	return m, cmd
@@ -490,9 +510,30 @@ func (m *Model) handleEscalationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Route scroll keys to viewport
+	if m.isScrollKey(msg) {
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		return m, cmd
+	}
+
 	var cmd tea.Cmd
 	m.textarea, cmd = m.textarea.Update(msg)
 	return m, cmd
+}
+
+// isScrollKey returns true if the key should be routed to the viewport
+// for scrolling rather than to the textarea.
+func (m *Model) isScrollKey(msg tea.KeyMsg) bool {
+	switch msg.Type {
+	case tea.KeyUp, tea.KeyDown, tea.KeyPgUp, tea.KeyPgDown, tea.KeyHome, tea.KeyEnd:
+		return true
+	}
+	switch msg.String() {
+	case "k", "j":
+		return true
+	}
+	return false
 }
 
 func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
@@ -774,15 +815,11 @@ func Run(config Config) error {
 	if !config.Inline {
 		opts = append(opts, tea.WithAltScreen())
 	}
-	// No mouse capture — preserves native text selection.
-	// Alternate scroll mode (CSI 1007) converts wheel → arrow keys.
+	// Enable mouse cell motion for wheel scroll support.
+	// Text selection still works via Shift+click in most terminals.
+	opts = append(opts, tea.WithMouseCellMotion())
 
 	p := tea.NewProgram(model, opts...)
-
-	// Enable alternate scroll mode: terminal translates wheel to arrow keys.
-	// This matches Codex's approach — scrolling works without capturing mouse.
-	fmt.Fprint(os.Stdout, "\x1b[?1007h")
-	defer fmt.Fprint(os.Stdout, "\x1b[?1007l")
 
 	finalModel, err := p.Run()
 	if err != nil {

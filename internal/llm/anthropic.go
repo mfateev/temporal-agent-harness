@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -390,9 +391,24 @@ func (c *AnthropicClient) parseResponse(response *anthropic.Message) ([]models.C
 	return items, finishReason
 }
 
-// classifyAnthropicError converts Anthropic errors to our error types.
+// classifyAnthropicError categorizes an Anthropic API error using the HTTP
+// status code when available, falling back to message-based heuristics.
 func classifyAnthropicError(err error) error {
-	// TODO: Implement proper error classification similar to OpenAI
-	// For now, wrap in generic error
-	return fmt.Errorf("anthropic API error: %w", err)
+	errMsg := strings.ToLower(err.Error())
+
+	// Context overflow detection
+	if strings.Contains(errMsg, "context_length") || strings.Contains(errMsg, "too many tokens") {
+		return models.NewContextOverflowError(err.Error())
+	}
+
+	// Use typed error for status-code-based classification
+	if apiErr, ok := err.(*anthropic.Error); ok {
+		return classifyByStatusCode(apiErr.StatusCode, err)
+	}
+
+	// Fallback for non-typed errors
+	if strings.Contains(errMsg, "rate_limit") || strings.Contains(errMsg, "rate limit") {
+		return models.NewAPILimitError(err.Error())
+	}
+	return models.NewTransientError(fmt.Sprintf("Anthropic API error: %v", err))
 }

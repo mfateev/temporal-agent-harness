@@ -29,6 +29,7 @@ func startWorkflowCmd(c client.Client, config Config) tea.Cmd {
 			UserMessage:    config.Message,
 			Config: models.SessionConfiguration{
 				Model: models.ModelConfig{
+					Provider:      config.Provider,
 					Model:         config.Model,
 					Temperature:   0.7,
 					MaxTokens:     4096,

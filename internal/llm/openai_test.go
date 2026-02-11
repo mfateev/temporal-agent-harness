@@ -1,6 +1,9 @@
 package llm
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/mfateev/codex-temporal-go/internal/models"
@@ -301,4 +304,128 @@ func TestConvertHistory_OrphanedFunctionCalls(t *testing.T) {
 	assert.Equal(t, "call1", messages[1].OfAssistant.ToolCalls[0].ID)
 
 	assert.Equal(t, "tool", msgRole(t, messages[2]))
+}
+
+// --- Tests for classifyByStatusCode ---
+
+func TestClassifyByStatusCode_400_Fatal(t *testing.T) {
+	err := classifyByStatusCode(http.StatusBadRequest, fmt.Errorf("bad request"))
+	assert.Equal(t, models.ErrorTypeFatal, err.Type)
+	assert.False(t, err.Retryable)
+}
+
+func TestClassifyByStatusCode_401_Fatal(t *testing.T) {
+	err := classifyByStatusCode(http.StatusUnauthorized, fmt.Errorf("unauthorized"))
+	assert.Equal(t, models.ErrorTypeFatal, err.Type)
+	assert.False(t, err.Retryable)
+}
+
+func TestClassifyByStatusCode_403_Fatal(t *testing.T) {
+	err := classifyByStatusCode(http.StatusForbidden, fmt.Errorf("forbidden"))
+	assert.Equal(t, models.ErrorTypeFatal, err.Type)
+	assert.False(t, err.Retryable)
+}
+
+func TestClassifyByStatusCode_404_Fatal(t *testing.T) {
+	err := classifyByStatusCode(http.StatusNotFound, fmt.Errorf("not found"))
+	assert.Equal(t, models.ErrorTypeFatal, err.Type)
+	assert.False(t, err.Retryable)
+}
+
+func TestClassifyByStatusCode_422_Fatal(t *testing.T) {
+	err := classifyByStatusCode(http.StatusUnprocessableEntity, fmt.Errorf("unprocessable"))
+	assert.Equal(t, models.ErrorTypeFatal, err.Type)
+	assert.False(t, err.Retryable)
+}
+
+func TestClassifyByStatusCode_408_Transient(t *testing.T) {
+	err := classifyByStatusCode(http.StatusRequestTimeout, fmt.Errorf("timeout"))
+	assert.Equal(t, models.ErrorTypeTransient, err.Type)
+	assert.True(t, err.Retryable)
+}
+
+func TestClassifyByStatusCode_409_Transient(t *testing.T) {
+	err := classifyByStatusCode(http.StatusConflict, fmt.Errorf("conflict"))
+	assert.Equal(t, models.ErrorTypeTransient, err.Type)
+	assert.True(t, err.Retryable)
+}
+
+func TestClassifyByStatusCode_429_APILimit(t *testing.T) {
+	err := classifyByStatusCode(http.StatusTooManyRequests, fmt.Errorf("rate limited"))
+	assert.Equal(t, models.ErrorTypeAPILimit, err.Type)
+	assert.True(t, err.Retryable)
+}
+
+func TestClassifyByStatusCode_500_Transient(t *testing.T) {
+	err := classifyByStatusCode(http.StatusInternalServerError, fmt.Errorf("server error"))
+	assert.Equal(t, models.ErrorTypeTransient, err.Type)
+	assert.True(t, err.Retryable)
+}
+
+func TestClassifyByStatusCode_502_Transient(t *testing.T) {
+	err := classifyByStatusCode(http.StatusBadGateway, fmt.Errorf("bad gateway"))
+	assert.Equal(t, models.ErrorTypeTransient, err.Type)
+	assert.True(t, err.Retryable)
+}
+
+func TestClassifyByStatusCode_503_Transient(t *testing.T) {
+	err := classifyByStatusCode(http.StatusServiceUnavailable, fmt.Errorf("unavailable"))
+	assert.Equal(t, models.ErrorTypeTransient, err.Type)
+	assert.True(t, err.Retryable)
+}
+
+// --- Tests for classifyError (OpenAI) ---
+
+// newOpenAIError creates an openai.Error with required Request/Response fields.
+func newOpenAIError(statusCode int) *openai.Error {
+	req := httptest.NewRequest("POST", "https://api.openai.com/v1/chat/completions", nil)
+	resp := &http.Response{StatusCode: statusCode, Request: req}
+	return &openai.Error{
+		StatusCode: statusCode,
+		Request:    req,
+		Response:   resp,
+	}
+}
+
+func TestClassifyError_OpenAI_400_NonRetryable(t *testing.T) {
+	result := classifyError(newOpenAIError(400))
+	var actErr *models.ActivityError
+	require.ErrorAs(t, result, &actErr)
+	assert.Equal(t, models.ErrorTypeFatal, actErr.Type)
+	assert.False(t, actErr.Retryable)
+}
+
+func TestClassifyError_OpenAI_429_RateLimit(t *testing.T) {
+	result := classifyError(newOpenAIError(429))
+	var actErr *models.ActivityError
+	require.ErrorAs(t, result, &actErr)
+	assert.Equal(t, models.ErrorTypeAPILimit, actErr.Type)
+	assert.True(t, actErr.Retryable)
+}
+
+func TestClassifyError_OpenAI_500_Retryable(t *testing.T) {
+	result := classifyError(newOpenAIError(500))
+	var actErr *models.ActivityError
+	require.ErrorAs(t, result, &actErr)
+	assert.Equal(t, models.ErrorTypeTransient, actErr.Type)
+	assert.True(t, actErr.Retryable)
+}
+
+func TestClassifyError_ContextLengthExceeded(t *testing.T) {
+	// Wrap an error that includes "context_length" in the message
+	err := fmt.Errorf("maximum context length exceeded")
+	result := classifyError(err)
+	var actErr *models.ActivityError
+	require.ErrorAs(t, result, &actErr)
+	assert.Equal(t, models.ErrorTypeContextOverflow, actErr.Type)
+	assert.False(t, actErr.Retryable)
+}
+
+func TestClassifyError_NetworkError_Transient(t *testing.T) {
+	err := fmt.Errorf("dial tcp: connection refused")
+	result := classifyError(err)
+	var actErr *models.ActivityError
+	require.ErrorAs(t, result, &actErr)
+	assert.Equal(t, models.ErrorTypeTransient, actErr.Type)
+	assert.True(t, actErr.Retryable)
 }

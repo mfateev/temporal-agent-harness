@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -456,4 +457,60 @@ func TestModel_ViewNotReady(t *testing.T) {
 	m.ready = false
 	view := m.View()
 	assert.Contains(t, view, "Starting")
+}
+
+func TestModel_IsScrollKey(t *testing.T) {
+	m := newTestModel()
+
+	// Scroll keys should be detected
+	assert.True(t, m.isScrollKey(tea.KeyMsg{Type: tea.KeyUp}))
+	assert.True(t, m.isScrollKey(tea.KeyMsg{Type: tea.KeyDown}))
+	assert.True(t, m.isScrollKey(tea.KeyMsg{Type: tea.KeyPgUp}))
+	assert.True(t, m.isScrollKey(tea.KeyMsg{Type: tea.KeyPgDown}))
+	assert.True(t, m.isScrollKey(tea.KeyMsg{Type: tea.KeyHome}))
+	assert.True(t, m.isScrollKey(tea.KeyMsg{Type: tea.KeyEnd}))
+
+	// Non-scroll keys should not be detected
+	assert.False(t, m.isScrollKey(tea.KeyMsg{Type: tea.KeyEnter}))
+	assert.False(t, m.isScrollKey(tea.KeyMsg{Type: tea.KeyTab}))
+	assert.False(t, m.isScrollKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}}))
+}
+
+func TestModel_ScrollKeysDuringInput(t *testing.T) {
+	m := newTestModel()
+	m.state = StateInput
+	// Add content so viewport has something to scroll
+	m.viewportContent = strings.Repeat("line\n", 100)
+	m.viewport.SetContent(m.viewportContent)
+
+	// Up arrow during input should go to viewport, not textarea
+	result, _ := m.handleInputKey(tea.KeyMsg{Type: tea.KeyUp})
+	rm := result.(*Model)
+	assert.Equal(t, StateInput, rm.state, "state should remain StateInput")
+}
+
+func TestModel_ScrollKeysDuringApproval(t *testing.T) {
+	m := newTestModel()
+	m.state = StateApproval
+	m.pendingApprovals = []workflow.PendingApproval{{CallID: "c1"}}
+	m.viewportContent = strings.Repeat("line\n", 100)
+	m.viewport.SetContent(m.viewportContent)
+
+	// PgDown during approval should go to viewport
+	result, _ := m.handleApprovalKey(tea.KeyMsg{Type: tea.KeyPgDown})
+	rm := result.(*Model)
+	assert.Equal(t, StateApproval, rm.state, "state should remain StateApproval")
+}
+
+func TestModel_ScrollKeysDuringEscalation(t *testing.T) {
+	m := newTestModel()
+	m.state = StateEscalation
+	m.pendingEscalations = []workflow.EscalationRequest{{CallID: "c1"}}
+	m.viewportContent = strings.Repeat("line\n", 100)
+	m.viewport.SetContent(m.viewportContent)
+
+	// Down arrow during escalation should go to viewport
+	result, _ := m.handleEscalationKey(tea.KeyMsg{Type: tea.KeyDown})
+	rm := result.(*Model)
+	assert.Equal(t, StateEscalation, rm.state, "state should remain StateEscalation")
 }
