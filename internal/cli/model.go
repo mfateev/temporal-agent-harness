@@ -114,6 +114,10 @@ type Model struct {
 	// Selector (replaces textarea for approval/escalation/user-input states)
 	selector *SelectorModel
 
+	// Paste buffering: multi-line pastes show "[N lines pasted]" placeholder
+	pastedContent string
+	pasteLabel    string
+
 	// Ctrl+C tracking
 	lastInterruptTime time.Time
 
@@ -442,11 +446,31 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Intercept multi-line paste: show "[N lines pasted]" placeholder
+	if msg.Paste && msg.Type == tea.KeyRunes && strings.ContainsRune(string(msg.Runes), '\n') {
+		content := string(msg.Runes)
+		lines := strings.Count(content, "\n") + 1
+		m.pastedContent = content
+		m.pasteLabel = fmt.Sprintf("[%d lines pasted]", lines)
+		// Insert the placeholder at the cursor via a synthetic rune message
+		synthetic := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(m.pasteLabel)}
+		var cmd tea.Cmd
+		m.textarea, cmd = m.textarea.Update(synthetic)
+		return m, cmd
+	}
+
+	// Ignore Enter during a bracketed paste (don't submit mid-paste)
+	if msg.Paste && msg.Type == tea.KeyEnter {
+		return m, nil
+	}
+
 	// Handle Enter for submit
 	if msg.Type == tea.KeyEnter {
-		line := strings.TrimSpace(m.textarea.Value())
+		line := strings.TrimSpace(m.expandPastedContent(m.textarea.Value()))
 		m.textarea.Reset()
-		
+		m.pastedContent = ""
+		m.pasteLabel = ""
+
 		// Reset textarea to initial height after submit
 		m.textarea.SetHeight(1)
 		// Recalculate viewport
@@ -1045,6 +1069,15 @@ func (m *Model) calculateTextareaHeight() int {
 	}
 	
 	return lines
+}
+
+// expandPastedContent replaces the "[N lines pasted]" placeholder in the
+// textarea value with the actual buffered paste content before submission.
+func (m *Model) expandPastedContent(value string) string {
+	if m.pastedContent != "" && m.pasteLabel != "" {
+		return strings.Replace(value, m.pasteLabel, m.pastedContent, 1)
+	}
+	return value
 }
 
 // buildApprovalSelector creates a selector for approval prompts.
