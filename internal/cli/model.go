@@ -366,7 +366,13 @@ func (m Model) renderStatusBar() string {
 	if wv == "" {
 		wv = "?"
 	}
-	bar := fmt.Sprintf(" %s · %s tokens · %s · %s · cli:%s · worker:%s", model, tokens, turn, stateLabel, version.GitCommit, wv)
+	left := fmt.Sprintf(" %s · %s tokens · %s · %s", model, tokens, turn, stateLabel)
+	right := fmt.Sprintf("cli:%s · worker:%s ", version.GitCommit, wv)
+	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 1 {
+		gap = 1
+	}
+	bar := left + strings.Repeat(" ", gap) + right
 	return m.styles.StatusBar.Render(bar)
 }
 
@@ -937,10 +943,6 @@ func (m *Model) handlePollResult(msg PollResultMsg) (tea.Model, tea.Cmd) {
 	// when a stale poll result arrives after we already transitioned to Input)
 	if m.isTurnComplete(result.Items) && result.Status.Phase == workflow.PhaseWaitingForInput && m.state == StateWatching {
 		m.stopPolling()
-
-		// Render status line
-		m.appendToViewport(m.renderer.RenderStatusLine(m.modelName, result.Status.TotalTokens, result.Status.TurnCount))
-
 		m.state = StateInput
 		return m, m.focusTextarea()
 	}
