@@ -44,8 +44,6 @@ type Config struct {
 	Model        string
 	NoMarkdown   bool
 	NoColor      bool
-	EnableShell  bool
-	EnableRead   bool
 	Cwd          string
 	ApprovalMode models.ApprovalMode
 

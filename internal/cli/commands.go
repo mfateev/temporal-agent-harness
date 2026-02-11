@@ -35,10 +35,7 @@ func startWorkflowCmd(c client.Client, config Config) tea.Cmd {
 					MaxTokens:     4096,
 					ContextWindow: 128000,
 				},
-				Tools: models.ToolsConfig{
-					EnableShell:    config.EnableShell,
-					EnableReadFile: config.EnableRead,
-				},
+				Tools: models.DefaultToolsConfig(),
 				ApprovalMode:             config.ApprovalMode,
 				CodexHome:                config.CodexHome,
 				SandboxMode:              config.SandboxMode,

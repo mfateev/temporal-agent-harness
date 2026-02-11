@@ -36,8 +36,6 @@ func main() {
 	noMarkdown := flag.Bool("no-markdown", false, "Disable markdown rendering")
 	noColor := flag.Bool("no-color", false, "Disable colored output")
 	inline := flag.Bool("inline", false, "Disable alt-screen mode (inline output)")
-	enableShell := flag.Bool("enable-shell", true, "Enable shell tool")
-	enableRead := flag.Bool("enable-read-file", true, "Enable read_file tool")
 	fullAuto := flag.Bool("full-auto", false, "Auto-approve all tool calls without prompting")
 	approvalMode := flag.String("approval-mode", "", "Approval mode: unless-trusted, never, on-failure")
 	sandboxMode := flag.String("sandbox", "", "Sandbox mode: full-access, read-only, workspace-write")
@@ -113,8 +111,6 @@ func main() {
 		Model:                    *model,
 		NoMarkdown:               *noMarkdown,
 		NoColor:                  *noColor,
-		EnableShell:              *enableShell,
-		EnableRead:               *enableRead,
 		ApprovalMode:             resolvedApproval,
 		SandboxMode:              *sandboxMode,
 		SandboxWritableRoots:     writableRoots,

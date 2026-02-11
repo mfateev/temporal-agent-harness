@@ -80,8 +80,6 @@ func cmdStart(args []string) {
 	fs := flag.NewFlagSet("start", flag.ExitOnError)
 	message := fs.String("message", "", "User message to send to the agent (required)")
 	model := fs.String("model", "gpt-4o-mini", "LLM model to use")
-	enableShell := fs.Bool("enable-shell", true, "Enable shell tool")
-	enableReadFile := fs.Bool("enable-read-file", true, "Enable read_file tool")
 	fs.Parse(args)
 
 	if *message == "" {
@@ -108,10 +106,7 @@ func cmdStart(args []string) {
 				MaxTokens:     4096,
 				ContextWindow: 128000,
 			},
-			Tools: models.ToolsConfig{
-				EnableShell:    *enableShell,
-				EnableReadFile: *enableReadFile,
-			},
+			Tools: models.DefaultToolsConfig(),
 			Cwd:           cwd,
 			SessionSource: "cli",
 		},
