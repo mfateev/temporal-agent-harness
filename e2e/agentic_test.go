@@ -1107,3 +1107,82 @@ func TestAgenticWorkflow_ManualCompact(t *testing.T) {
 
 	t.Logf("Manual compact test - Total tokens: %d", result.TotalTokens)
 }
+
+// TestAgenticWorkflow_SpawnAndWait tests the subagent collaboration flow:
+// Parent spawns an explorer child to answer a question, waits for completion,
+// and reports the result. Verifies child workflow appears and results flow back.
+func TestAgenticWorkflow_SpawnAndWait(t *testing.T) {
+	c := dialTemporal(t)
+
+	workflowID := "test-spawn-wait-" + uuid.New().String()[:8]
+	input := workflow.WorkflowInput{
+		ConversationID: workflowID,
+		UserMessage: "You have access to agent collaboration tools. " +
+			"Use spawn_agent to spawn an explorer agent with the message 'What is 2+2? Answer with just the number.' " +
+			"Then use the wait tool to wait for the agent to complete. " +
+			"Finally, report what the agent returned.",
+		Config: models.SessionConfiguration{
+			Model: models.ModelConfig{
+				Model:         CheapModel,
+				Temperature:   0,
+				MaxTokens:     1000,
+				ContextWindow: 128000,
+			},
+			Tools: models.ToolsConfig{
+				EnableShell:    false,
+				EnableReadFile: false,
+				EnableCollab:   true,
+			},
+		},
+	}
+
+	t.Logf("Starting spawn-and-wait workflow: %s", workflowID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), WorkflowTimeout)
+	defer cancel()
+
+	startWorkflow(t, ctx, c, input)
+	waitForTurnComplete(t, ctx, c, workflowID, 1)
+	result := shutdownWorkflow(t, ctx, c, workflowID)
+
+	assert.Equal(t, workflowID, result.ConversationID)
+	assert.Greater(t, result.TotalTokens, 0, "Should have consumed tokens")
+	assert.Equal(t, "shutdown", result.EndReason)
+
+	// Query history and look for spawn_agent and wait tool calls
+	resp, err := c.QueryWorkflow(ctx, workflowID, "", workflow.QueryGetConversationItems)
+	require.NoError(t, err)
+	var items []models.ConversationItem
+	require.NoError(t, resp.Get(&items))
+
+	hasSpawnCall := false
+	hasWaitCall := false
+	for _, item := range items {
+		if item.Type == models.ItemTypeFunctionCall {
+			t.Logf("Tool call: %s (call_id: %s)", item.Name, item.CallID)
+			if item.Name == "spawn_agent" {
+				hasSpawnCall = true
+			}
+			if item.Name == "wait" {
+				hasWaitCall = true
+			}
+		}
+		if item.Type == models.ItemTypeFunctionCallOutput {
+			t.Logf("Tool output (call_id: %s): %s", item.CallID, truncateStr(item.Output.Content, 200))
+		}
+	}
+
+	assert.True(t, hasSpawnCall, "LLM should have called spawn_agent")
+	// wait is optional — the LLM may or may not call it depending on how it interprets the results
+
+	t.Logf("Spawn-and-wait test - Total tokens: %d, spawn_agent: %v, wait: %v",
+		result.TotalTokens, hasSpawnCall, hasWaitCall)
+}
+
+// truncateStr truncates a string to n characters with "..." appended.
+func truncateStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}

@@ -46,6 +46,14 @@ const (
 
 	// UpdateCompact triggers manual context compaction.
 	UpdateCompact = "compact"
+
+	// SignalAgentInput delivers a user message to a child agent workflow.
+	// Maps to: codex-rs/core/src/agent/control.rs agent input signal
+	SignalAgentInput = "agent_input"
+
+	// SignalAgentShutdown requests a child agent workflow to shut down.
+	// Maps to: codex-rs/core/src/agent/control.rs agent shutdown signal
+	SignalAgentShutdown = "agent_shutdown"
 )
 
 // TurnPhase indicates the current phase of the workflow turn.
@@ -59,6 +67,7 @@ const (
 	PhaseEscalationPending  TurnPhase = "escalation_pending"
 	PhaseUserInputPending   TurnPhase = "user_input_pending"
 	PhaseCompacting         TurnPhase = "compacting"
+	PhaseWaitingForAgents   TurnPhase = "waiting_for_agents"
 )
 
 // TurnStatus is the response from the get_turn_status query.
@@ -82,6 +91,9 @@ type WorkflowInput struct {
 	ConversationID string                      `json:"conversation_id"`
 	UserMessage    string                      `json:"user_message"`
 	Config         models.SessionConfiguration `json:"config"`
+	// Depth tracks subagent nesting level. 0 = top-level, 1 = child.
+	// Maps to: codex-rs SubAgentSource::ThreadSpawn.depth
+	Depth int `json:"depth,omitempty"`
 }
 
 // UserInput is the payload for the user_input Update.
@@ -200,6 +212,14 @@ type CompactResponse struct {
 	Acknowledged bool `json:"acknowledged"`
 }
 
+// AgentInputSignal is the payload for the agent_input signal.
+// Sent from parent to child workflow via SignalExternalWorkflow.
+// Maps to: codex-rs/core/src/agent/control.rs AgentInputSignal
+type AgentInputSignal struct {
+	Content   string `json:"content"`
+	Interrupt bool   `json:"interrupt"`
+}
+
 // SessionState is passed through ContinueAsNew.
 // Uses ContextManager interface to allow pluggable storage backends.
 //
@@ -270,6 +290,10 @@ type SessionState struct {
 	// Cumulative stats (persist across ContinueAsNew)
 	TotalTokens       int      `json:"total_tokens"`
 	ToolCallsExecuted []string `json:"tool_calls_executed"`
+
+	// Subagent control — manages child workflow lifecycles.
+	// Maps to: codex-rs/core/src/agent/control.rs AgentControl
+	AgentCtl *AgentControl `json:"agent_ctl,omitempty"`
 }
 
 // WorkflowResult is the final result of the workflow.
@@ -279,6 +303,10 @@ type WorkflowResult struct {
 	TotalTokens       int      `json:"total_tokens"`
 	ToolCallsExecuted []string `json:"tool_calls_executed"`
 	EndReason         string   `json:"end_reason,omitempty"` // "shutdown", "error"
+	// FinalMessage is the last assistant message from the workflow.
+	// Used by parent workflows to get the child's result.
+	// Maps to: codex-rs AgentStatus::Completed(Option<String>)
+	FinalMessage string `json:"final_message,omitempty"`
 }
 
 // initHistory initializes the History field from HistoryItems.

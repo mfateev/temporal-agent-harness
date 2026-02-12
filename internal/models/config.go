@@ -4,11 +4,12 @@ package models
 //
 // Maps to: codex-rs/core/src/codex.rs SessionConfiguration (model config part)
 type ModelConfig struct {
-	Provider      string  `json:"provider"`       // "openai" or "anthropic"
-	Model         string  `json:"model"`          // e.g., "gpt-4o", "claude-sonnet-4.5-20250929"
-	Temperature   float64 `json:"temperature"`    // 0.0 to 2.0
-	MaxTokens     int     `json:"max_tokens"`     // Max tokens to generate
-	ContextWindow int     `json:"context_window"` // Max context window size
+	Provider        string  `json:"provider"`                  // "openai" or "anthropic"
+	Model           string  `json:"model"`                     // e.g., "gpt-4o", "claude-sonnet-4.5-20250929"
+	Temperature     float64 `json:"temperature"`               // 0.0 to 2.0
+	MaxTokens       int     `json:"max_tokens"`                // Max tokens to generate
+	ContextWindow   int     `json:"context_window"`            // Max context window size
+	ReasoningEffort string  `json:"reasoning_effort,omitempty"` // "low", "medium", "high" — for model reasoning control
 }
 
 // DefaultModelConfig returns a sensible default configuration
@@ -32,6 +33,7 @@ type ToolsConfig struct {
 	EnableListDir    bool `json:"enable_list_dir,omitempty"`    // Built-in list_dir tool
 	EnableGrepFiles  bool `json:"enable_grep_files,omitempty"`  // Built-in grep_files tool
 	EnableApplyPatch bool `json:"enable_apply_patch,omitempty"` // Built-in apply_patch tool
+	EnableCollab     bool `json:"enable_collab,omitempty"`      // Collaboration tools (spawn_agent, send_input, wait, close_agent, resume_agent)
 }
 
 // DefaultToolsConfig returns default tools configuration

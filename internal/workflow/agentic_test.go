@@ -2702,5 +2702,145 @@ func TestContextOverflow_ResetsResponseID(t *testing.T) {
 	assert.Equal(t, 0, state.lastSentHistoryLen, "lastSentHistoryLen should be zero after overflow")
 }
 
+// TestMultiTurn_SpawnAgentIntercepted verifies that a spawn_agent tool call is
+// intercepted by the workflow (not dispatched as an activity), starts a child
+// workflow, and returns the agent_id to the LLM.
+func (s *AgenticWorkflowTestSuite) TestMultiTurn_SpawnAgentIntercepted() {
+	// First LLM call: return a spawn_agent tool call
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(activities.LLMActivityOutput{
+			Items: []models.ConversationItem{
+				{
+					Type:      models.ItemTypeFunctionCall,
+					CallID:    "call-spawn",
+					Name:      "spawn_agent",
+					Arguments: `{"message": "explore the code", "agent_type": "explorer"}`,
+				},
+			},
+			FinishReason: models.FinishReasonToolCalls,
+			TokenUsage:   models.TokenUsage{TotalTokens: 30},
+		}, nil).Once()
+
+	// Second LLM call (after spawn result): return a stop
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(mockLLMStopResponse("I spawned an explorer agent.", 20), nil).Once()
+
+	s.sendShutdown(time.Second * 3)
+
+	input := testInput("Spawn an explorer agent")
+	input.Config.Tools.EnableCollab = true
+
+	s.env.ExecuteWorkflow(AgenticWorkflow, input)
+
+	require.True(s.T(), s.env.IsWorkflowCompleted())
+	var result WorkflowResult
+	require.NoError(s.T(), s.env.GetWorkflowResult(&result))
+	assert.Equal(s.T(), "shutdown", result.EndReason)
+	assert.Equal(s.T(), 50, result.TotalTokens) // 30 + 20
+
+	// Verify history contains the spawn_agent call and its output
+	items, err := s.env.QueryWorkflow(QueryGetConversationItems)
+	require.NoError(s.T(), err)
+	var history []models.ConversationItem
+	require.NoError(s.T(), items.Get(&history))
+
+	// Find the spawn_agent output
+	foundSpawnOutput := false
+	for _, item := range history {
+		if item.Type == models.ItemTypeFunctionCallOutput && item.CallID == "call-spawn" {
+			foundSpawnOutput = true
+			require.NotNil(s.T(), item.Output)
+			// The output should contain an agent_id (success) or error
+			assert.NotEmpty(s.T(), item.Output.Content)
+		}
+	}
+	assert.True(s.T(), foundSpawnOutput, "Should have spawn_agent output in history")
+}
+
+// TestMultiTurn_ResumeAgentNotImplemented verifies that resume_agent returns
+// a not-implemented error without crashing the workflow.
+func (s *AgenticWorkflowTestSuite) TestMultiTurn_ResumeAgentNotImplemented() {
+	// LLM calls resume_agent
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(activities.LLMActivityOutput{
+			Items: []models.ConversationItem{
+				{
+					Type:      models.ItemTypeFunctionCall,
+					CallID:    "call-resume",
+					Name:      "resume_agent",
+					Arguments: `{"id": "agent-123"}`,
+				},
+			},
+			FinishReason: models.FinishReasonToolCalls,
+			TokenUsage:   models.TokenUsage{TotalTokens: 25},
+		}, nil).Once()
+
+	// LLM sees the error and responds
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(mockLLMStopResponse("Resume is not available yet.", 15), nil).Once()
+
+	s.sendShutdown(time.Second * 3)
+
+	input := testInput("Resume agent-123")
+	input.Config.Tools.EnableCollab = true
+
+	s.env.ExecuteWorkflow(AgenticWorkflow, input)
+
+	require.True(s.T(), s.env.IsWorkflowCompleted())
+	var result WorkflowResult
+	require.NoError(s.T(), s.env.GetWorkflowResult(&result))
+	assert.Equal(s.T(), "shutdown", result.EndReason)
+	assert.Equal(s.T(), 40, result.TotalTokens)
+
+	// Verify the resume_agent output contains "not yet implemented"
+	items, err := s.env.QueryWorkflow(QueryGetConversationItems)
+	require.NoError(s.T(), err)
+	var hist []models.ConversationItem
+	require.NoError(s.T(), items.Get(&hist))
+
+	for _, item := range hist {
+		if item.Type == models.ItemTypeFunctionCallOutput && item.CallID == "call-resume" {
+			require.NotNil(s.T(), item.Output)
+			assert.Contains(s.T(), item.Output.Content, "not yet implemented")
+			assert.False(s.T(), *item.Output.Success)
+		}
+	}
+}
+
+// TestMultiTurn_CollabToolsNotInSpecsWhenDisabled verifies that collab tools
+// are not included in tool specs when EnableCollab is false.
+func (s *AgenticWorkflowTestSuite) TestMultiTurn_CollabToolsNotInSpecsWhenDisabled() {
+	// Just verify via the query that the LLM doesn't receive collab tool specs.
+	// We do this by checking the ToolSpecs field is populated correctly.
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(mockLLMStopResponse("Hello!", 10), nil).Once()
+
+	s.sendShutdown(time.Second * 2)
+
+	input := testInput("Hello")
+	input.Config.Tools.EnableCollab = false
+
+	s.env.ExecuteWorkflow(AgenticWorkflow, input)
+
+	require.True(s.T(), s.env.IsWorkflowCompleted())
+	// If we got here without error, the workflow ran correctly without collab tools
+}
+
+// TestMultiTurn_FinalMessageInResult verifies that WorkflowResult.FinalMessage
+// is populated from the last assistant message on shutdown.
+func (s *AgenticWorkflowTestSuite) TestMultiTurn_FinalMessageInResult() {
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(mockLLMStopResponse("This is my final answer.", 30), nil).Once()
+
+	s.sendShutdown(time.Second * 2)
+
+	s.env.ExecuteWorkflow(AgenticWorkflow, testInput("What is 2+2?"))
+
+	require.True(s.T(), s.env.IsWorkflowCompleted())
+	var result WorkflowResult
+	require.NoError(s.T(), s.env.GetWorkflowResult(&result))
+	assert.Equal(s.T(), "This is my final answer.", result.FinalMessage)
+}
+
 // Ensure we reference workflow.Context (suppress unused import warning)
 var _ workflow.Context

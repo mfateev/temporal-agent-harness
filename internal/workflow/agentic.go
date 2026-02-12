@@ -46,6 +46,7 @@ func AgenticWorkflow(ctx workflow.Context, input WorkflowInput) (WorkflowResult,
 		Config:         input.Config,
 		MaxIterations:  20,
 		IterationCount: 0,
+		AgentCtl:       NewAgentControl(input.Depth),
 	}
 
 	// Build tool specs based on configuration
@@ -341,6 +342,49 @@ func (s *SessionState) registerHandlers(ctx workflow.Context) {
 	if err != nil {
 		logger.Error("Failed to register user_input_question_response update handler", "error", err)
 	}
+
+	// Signal channels for child workflow mode (subagent).
+	// These are drained in goroutines so signals are processed asynchronously.
+	// Maps to: codex-rs/core/src/agent/control.rs agent signal handling
+
+	// agent_input — delivers a message from parent to child workflow.
+	agentInputCh := workflow.GetSignalChannel(ctx, SignalAgentInput)
+	workflow.Go(ctx, func(gCtx workflow.Context) {
+		for {
+			var signal AgentInputSignal
+			if !agentInputCh.Receive(gCtx, &signal) {
+				return // channel closed
+			}
+			if signal.Interrupt {
+				s.Interrupted = true
+			}
+
+			turnID := generateTurnID(gCtx)
+			_ = s.History.AddItem(models.ConversationItem{
+				Type:   models.ItemTypeTurnStarted,
+				TurnID: turnID,
+			})
+			_ = s.History.AddItem(models.ConversationItem{
+				Type:    models.ItemTypeUserMessage,
+				Content: signal.Content,
+				TurnID:  turnID,
+			})
+
+			s.CurrentTurnID = turnID
+			s.PendingUserInput = true
+		}
+	})
+
+	// agent_shutdown — requests this child workflow to shut down.
+	agentShutdownCh := workflow.GetSignalChannel(ctx, SignalAgentShutdown)
+	workflow.Go(ctx, func(gCtx workflow.Context) {
+		var ignored interface{}
+		if !agentShutdownCh.Receive(gCtx, &ignored) {
+			return
+		}
+		s.ShutdownRequested = true
+		s.Interrupted = true
+	})
 }
 
 // generateTurnID generates a unique turn ID using Temporal's SideEffect.
@@ -422,8 +466,12 @@ func (s *SessionState) runMultiTurnLoop(ctx workflow.Context) (WorkflowResult, e
 				return WorkflowResult{}, fmt.Errorf("await failed: %w", err)
 			}
 			if timedOut {
-				logger.Info("Idle timeout reached, triggering ContinueAsNew")
-				return s.continueAsNew(ctx)
+				if s.AgentCtl != nil && s.AgentCtl.HasActiveChildren() {
+					logger.Info("Idle timeout reached but active children exist, deferring CAN")
+				} else {
+					logger.Info("Idle timeout reached, triggering ContinueAsNew")
+					return s.continueAsNew(ctx)
+				}
 			}
 		}
 
@@ -440,12 +488,14 @@ func (s *SessionState) runMultiTurnLoop(ctx workflow.Context) (WorkflowResult, e
 		// Check for shutdown
 		if s.ShutdownRequested {
 			logger.Info("Shutdown requested, completing workflow")
+			items, _ := s.History.GetRawItems()
 			return WorkflowResult{
 				ConversationID:    s.ConversationID,
 				TotalIterations:   s.IterationCount,
 				TotalTokens:       s.TotalTokens,
 				ToolCallsExecuted: s.ToolCallsExecuted,
 				EndReason:         "shutdown",
+				FinalMessage:      extractFinalMessage(items),
 			}, nil
 		}
 
@@ -468,9 +518,17 @@ func (s *SessionState) runMultiTurnLoop(ctx workflow.Context) (WorkflowResult, e
 		// Accumulate iterations for CAN threshold across turns.
 		s.TotalIterationsForCAN += s.IterationCount
 		if s.TotalIterationsForCAN >= maxIterationsBeforeCAN {
-			logger.Info("Total iterations across turns reached CAN threshold",
-				"total", s.TotalIterationsForCAN)
-			return s.continueAsNew(ctx)
+			// Block ContinueAsNew if there are active child workflows.
+			// Re-attaching to child futures after CAN is complex, so we defer.
+			if s.AgentCtl != nil && s.AgentCtl.HasActiveChildren() {
+				logger.Info("Deferring ContinueAsNew: active child workflows",
+					"total", s.TotalIterationsForCAN)
+				s.TotalIterationsForCAN = maxIterationsBeforeCAN / 2
+			} else {
+				logger.Info("Total iterations across turns reached CAN threshold",
+					"total", s.TotalIterationsForCAN)
+				return s.continueAsNew(ctx)
+			}
 		}
 
 		// Turn complete — add TurnComplete marker (unless interrupted, which already added it)
@@ -674,21 +732,31 @@ func (s *SessionState) runAgenticTurn(ctx workflow.Context) (bool, error) {
 			}
 		}
 
-		// Intercept request_user_input calls — these are handled by the workflow,
-		// not dispatched as activities. Separate them from normal tool calls.
-		// Maps to: codex-rs/protocol/src/request_user_input.rs
-		hadUserInputCalls := false
+		// Intercept workflow-handled tool calls — these are NOT dispatched as
+		// activities. Includes: request_user_input, and all collab tools
+		// (spawn_agent, send_input, wait, close_agent, resume_agent).
+		// Maps to: codex-rs/protocol/src/request_user_input.rs, codex-rs/core/src/agent/collab.rs
+		hadInterceptedCalls := false
 		if len(functionCalls) > 0 {
 			var normalCalls []models.ConversationItem
 			for _, fc := range functionCalls {
 				if fc.Name == "request_user_input" {
-					hadUserInputCalls = true
+					hadInterceptedCalls = true
 					outputItem, err := s.handleRequestUserInput(ctx, fc)
 					if err != nil {
 						return false, err
 					}
 					if err := s.History.AddItem(outputItem); err != nil {
 						return false, fmt.Errorf("failed to add user input response: %w", err)
+					}
+				} else if isCollabToolCall(fc.Name) {
+					hadInterceptedCalls = true
+					outputItem, err := s.handleCollabToolCall(ctx, fc)
+					if err != nil {
+						return false, err
+					}
+					if err := s.History.AddItem(outputItem); err != nil {
+						return false, fmt.Errorf("failed to add collab tool response: %w", err)
 					}
 				} else {
 					normalCalls = append(normalCalls, fc)
@@ -697,10 +765,10 @@ func (s *SessionState) runAgenticTurn(ctx workflow.Context) (bool, error) {
 			functionCalls = normalCalls
 		}
 
-		// If only request_user_input calls were present (no normal tools),
-		// continue to next LLM iteration so it can use the user's answers.
-		if hadUserInputCalls && len(functionCalls) == 0 {
-			// Check for interrupt/shutdown after user input
+		// If only intercepted calls were present (no normal tools),
+		// continue to next LLM iteration so it can use the results.
+		if hadInterceptedCalls && len(functionCalls) == 0 {
+			// Check for interrupt/shutdown after intercepted calls
 			if s.Interrupted || s.ShutdownRequested {
 				return false, nil
 			}
@@ -992,6 +1060,17 @@ func buildToolSpecs(config models.ToolsConfig) []tools.ToolSpec {
 	// request_user_input is always available (intercepted by workflow, not dispatched)
 	specs = append(specs, tools.NewRequestUserInputToolSpec())
 
+	// Collaboration tools for subagent orchestration (intercepted by workflow)
+	if config.EnableCollab {
+		specs = append(specs,
+			tools.NewSpawnAgentToolSpec(),
+			tools.NewSendInputToolSpec(),
+			tools.NewWaitToolSpec(),
+			tools.NewCloseAgentToolSpec(),
+			tools.NewResumeAgentToolSpec(),
+		)
+	}
+
 	return specs
 }
 
@@ -1272,6 +1351,11 @@ func evaluateToolApproval(
 	policyMgr *execpolicy.ExecPolicyManager,
 	mode models.ApprovalMode,
 ) (tools.ExecApprovalRequirement, string) {
+	// Collab tools are workflow-intercepted and always safe
+	if isCollabToolCall(toolName) {
+		return tools.ApprovalSkip, ""
+	}
+
 	switch toolName {
 	case "read_file", "list_dir", "grep_files", "request_user_input":
 		return tools.ApprovalSkip, "" // Read-only / workflow-intercepted tools always safe
