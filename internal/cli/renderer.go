@@ -108,7 +108,7 @@ func (r *ItemRenderer) RenderAssistantMessage(item models.ConversationItem) stri
 	if r.mdRenderer != nil {
 		rendered, err := r.mdRenderer.Render(content)
 		if err == nil {
-			return "\n" + bullet + " " + strings.TrimLeft(rendered, "\n")
+			return "\n" + bullet + " " + strings.TrimLeft(rendered, " \n")
 		}
 	}
 	return "\n" + bullet + " " + content + "\n"
