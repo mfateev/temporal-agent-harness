@@ -266,6 +266,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case EscalationErrorMsg:
 		m.appendToViewport(fmt.Sprintf("Error sending escalation response: %v\n", msg.Err))
 
+	case CompactSentMsg:
+		m.appendToViewport(m.renderer.RenderSystemMessage("Context compacted."))
+		m.state = StateWatching
+		m.spinnerMsg = "Compacting..."
+		cmds = append(cmds, m.startPolling())
+
+	case CompactErrorMsg:
+		m.appendToViewport(fmt.Sprintf("Error compacting context: %v\n", msg.Err))
+		m.state = StateInput
+		cmds = append(cmds, m.focusTextarea())
+
 	case UserInputQuestionSentMsg:
 		m.pendingUserInputReq = nil
 		m.selector = nil
@@ -498,6 +509,16 @@ func (m *Model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.state = StateWatching
 			m.textarea.Blur()
 			return m, sendShutdownCmd(m.client, m.workflowID)
+		}
+		if line == "/compact" {
+			if m.workflowID == "" {
+				m.appendToViewport("No active session to compact.\n")
+				return m, nil
+			}
+			m.spinnerMsg = "Compacting context..."
+			m.state = StateWatching
+			m.textarea.Blur()
+			return m, sendCompactCmd(m.client, m.workflowID)
 		}
 
 		// Show user message in viewport (❯ prefix, no separators)

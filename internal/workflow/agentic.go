@@ -293,6 +293,31 @@ func (s *SessionState) registerHandlers(ctx workflow.Context) {
 		logger.Error("Failed to register escalation_response update handler", "error", err)
 	}
 
+	// Update: compact
+	// Triggers manual context compaction from the CLI /compact command.
+	err = workflow.SetUpdateHandlerWithOptions(
+		ctx,
+		UpdateCompact,
+		func(ctx workflow.Context, req CompactRequest) (CompactResponse, error) {
+			s.CompactRequested = true
+			return CompactResponse{Acknowledged: true}, nil
+		},
+		workflow.UpdateHandlerOptions{
+			Validator: func(ctx workflow.Context, req CompactRequest) error {
+				if s.ShutdownRequested {
+					return fmt.Errorf("session is shutting down")
+				}
+				if s.Phase == PhaseCompacting {
+					return fmt.Errorf("compaction already in progress")
+				}
+				return nil
+			},
+		},
+	)
+	if err != nil {
+		logger.Error("Failed to register compact update handler", "error", err)
+	}
+
 	// Update: user_input_question_response
 	// Maps to: Codex request_user_input flow (user answers multi-choice questions)
 	err = workflow.SetUpdateHandlerWithOptions(
@@ -386,12 +411,12 @@ func (s *SessionState) runMultiTurnLoop(ctx workflow.Context) (WorkflowResult, e
 
 	for {
 		// Wait for pending user input (first turn has it set already)
-		if !s.PendingUserInput && !s.ShutdownRequested {
+		if !s.PendingUserInput && !s.ShutdownRequested && !s.CompactRequested {
 			s.Phase = PhaseWaitingForInput
 			s.ToolsInFlight = nil
 			logger.Info("Waiting for user input or shutdown")
 			timedOut, err := awaitWithIdleTimeout(ctx, func() bool {
-				return s.PendingUserInput || s.ShutdownRequested
+				return s.PendingUserInput || s.ShutdownRequested || s.CompactRequested
 			})
 			if err != nil {
 				return WorkflowResult{}, fmt.Errorf("await failed: %w", err)
@@ -400,6 +425,16 @@ func (s *SessionState) runMultiTurnLoop(ctx workflow.Context) (WorkflowResult, e
 				logger.Info("Idle timeout reached, triggering ContinueAsNew")
 				return s.continueAsNew(ctx)
 			}
+		}
+
+		// Handle manual compaction request (before shutdown/input checks)
+		if s.CompactRequested {
+			s.CompactRequested = false
+			logger.Info("Manual compaction requested via /compact")
+			if err := s.performCompaction(ctx); err != nil {
+				logger.Warn("Manual compaction failed", "error", err)
+			}
+			continue
 		}
 
 		// Check for shutdown

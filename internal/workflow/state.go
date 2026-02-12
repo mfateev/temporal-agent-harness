@@ -43,6 +43,9 @@ const (
 	// UpdateUserInputQuestionResponse submits the user's answers to request_user_input questions.
 	// Maps to: codex-rs/protocol/src/request_user_input.rs
 	UpdateUserInputQuestionResponse = "user_input_question_response"
+
+	// UpdateCompact triggers manual context compaction.
+	UpdateCompact = "compact"
 )
 
 // TurnPhase indicates the current phase of the workflow turn.
@@ -189,6 +192,14 @@ type UserInputQuestionResponse struct {
 // UserInputQuestionResponseAck is returned by the user_input_question_response Update.
 type UserInputQuestionResponseAck struct{}
 
+// CompactRequest is the payload for the compact Update.
+type CompactRequest struct{}
+
+// CompactResponse is returned by the compact Update.
+type CompactResponse struct {
+	Acknowledged bool `json:"acknowledged"`
+}
+
 // SessionState is passed through ContinueAsNew.
 // Uses ContextManager interface to allow pluggable storage backends.
 //
@@ -228,6 +239,9 @@ type SessionState struct {
 	PendingUserInputReq   *PendingUserInputRequest   `json:"pending_user_input_request,omitempty"`
 	UserInputQReceived    bool                       `json:"-"`
 	UserInputQResponse    *UserInputQuestionResponse `json:"-"`
+
+	// Transient: user requested manual compaction via /compact command
+	CompactRequested bool `json:"-"`
 
 	// Exec policy rules (serialized text, persists across ContinueAsNew)
 	ExecPolicyRules string `json:"exec_policy_rules,omitempty"`

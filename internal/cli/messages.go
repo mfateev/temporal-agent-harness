@@ -82,3 +82,11 @@ type UserInputQuestionSentMsg struct{}
 type UserInputQuestionErrorMsg struct {
 	Err error
 }
+
+// CompactSentMsg is sent after a compact request has been successfully sent.
+type CompactSentMsg struct{}
+
+// CompactErrorMsg is sent when sending a compact request fails.
+type CompactErrorMsg struct {
+	Err error
+}

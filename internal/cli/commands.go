@@ -234,6 +234,31 @@ func sendUserInputQuestionResponseCmd(c client.Client, workflowID string, resp w
 	}
 }
 
+// sendCompactCmd sends a compact request to the workflow.
+func sendCompactCmd(c client.Client, workflowID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		updateHandle, err := c.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
+			WorkflowID:   workflowID,
+			UpdateName:   workflow.UpdateCompact,
+			Args:         []interface{}{workflow.CompactRequest{}},
+			WaitForStage: client.WorkflowUpdateStageCompleted,
+		})
+		if err != nil {
+			return CompactErrorMsg{Err: err}
+		}
+
+		var resp workflow.CompactResponse
+		if err := updateHandle.Get(ctx, &resp); err != nil {
+			return CompactErrorMsg{Err: err}
+		}
+
+		return CompactSentMsg{}
+	}
+}
+
 // waitForCompletionCmd waits for a workflow to complete after shutdown.
 func waitForCompletionCmd(c client.Client, workflowID string) tea.Cmd {
 	return func() tea.Msg {

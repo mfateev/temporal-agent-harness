@@ -973,3 +973,106 @@ func TestAgenticWorkflow_ProactiveCompaction(t *testing.T) {
 
 	t.Logf("Compaction test - Total tokens: %d, History items: %d", result.TotalTokens, len(items))
 }
+
+// TestAgenticWorkflow_ManualCompact verifies the /compact command flow end-to-end.
+// Steps:
+//  1. Start a conversation and wait for the first turn to complete.
+//  2. Send UpdateCompact to trigger manual compaction.
+//  3. Wait for compaction marker to appear in history.
+//  4. Send another user message to verify the workflow resumes normally.
+//  5. Shutdown and verify result.
+func TestAgenticWorkflow_ManualCompact(t *testing.T) {
+	c := dialTemporal(t)
+
+	workflowID := "test-manual-compact-" + uuid.New().String()[:8]
+	input := workflow.WorkflowInput{
+		ConversationID: workflowID,
+		// Generate enough content for compaction to have something to work with.
+		UserMessage: "Write a short paragraph (at least 100 words) about the importance of testing software. Do not use any tools.",
+		Config: testSessionConfig(1000, models.ToolsConfig{
+			EnableShell:    false,
+			EnableReadFile: false,
+		}),
+	}
+
+	t.Logf("Starting manual compaction test: %s", workflowID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), WorkflowTimeout)
+	defer cancel()
+
+	startWorkflow(t, ctx, c, input)
+
+	// 1. Wait for the first turn to complete
+	waitForTurnComplete(t, ctx, c, workflowID, 1)
+	t.Log("Turn 1 complete")
+
+	// 2. Send UpdateCompact
+	updateHandle, err := c.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
+		WorkflowID:   workflowID,
+		UpdateName:   workflow.UpdateCompact,
+		Args:         []interface{}{workflow.CompactRequest{}},
+		WaitForStage: client.WorkflowUpdateStageCompleted,
+	})
+	require.NoError(t, err, "Failed to send compact update")
+
+	var compactResp workflow.CompactResponse
+	require.NoError(t, updateHandle.Get(ctx, &compactResp))
+	assert.True(t, compactResp.Acknowledged, "Compact should be acknowledged")
+	t.Log("Compact update acknowledged")
+
+	// 3. Wait for compaction marker in history
+	deadline := time.After(time.Minute)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	var items []models.ConversationItem
+	compactionFound := false
+	for !compactionFound {
+		select {
+		case <-deadline:
+			t.Fatal("Timed out waiting for compaction marker")
+		case <-ctx.Done():
+			t.Fatal("Context cancelled")
+		case <-ticker.C:
+			resp, err := c.QueryWorkflow(ctx, workflowID, "", workflow.QueryGetConversationItems)
+			if err != nil {
+				continue
+			}
+			if err := resp.Get(&items); err != nil {
+				continue
+			}
+			for _, item := range items {
+				if item.Type == models.ItemTypeCompaction {
+					compactionFound = true
+					t.Logf("Found compaction marker: %q", item.Content[:min(50, len(item.Content))])
+					break
+				}
+			}
+		}
+	}
+
+	// 4. Send another user message to verify workflow resumes
+	updateHandle2, err := c.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
+		WorkflowID:   workflowID,
+		UpdateName:   workflow.UpdateUserInput,
+		Args:         []interface{}{workflow.UserInput{Content: "What is 2+2? Answer with just the number."}},
+		WaitForStage: client.WorkflowUpdateStageCompleted,
+	})
+	require.NoError(t, err, "Failed to send second user input")
+
+	var accepted workflow.UserInputAccepted
+	require.NoError(t, updateHandle2.Get(ctx, &accepted))
+	t.Logf("Second input accepted, turn ID: %s", accepted.TurnID)
+
+	// Wait for the post-compaction turn to complete.
+	// After compaction ReplaceAll, old TurnComplete markers are gone, so look
+	// for at least 1 TurnComplete in the compacted history.
+	waitForTurnComplete(t, ctx, c, workflowID, 1)
+
+	// 5. Shutdown and verify
+	result := shutdownWorkflow(t, ctx, c, workflowID)
+	assert.Equal(t, "shutdown", result.EndReason)
+	assert.Greater(t, result.TotalTokens, 0)
+
+	t.Logf("Manual compact test - Total tokens: %d", result.TotalTokens)
+}
