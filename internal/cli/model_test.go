@@ -410,7 +410,8 @@ func TestModel_RenderNewItems(t *testing.T) {
 
 	m.renderNewItems(items)
 	assert.Equal(t, 1, m.lastRenderedSeq)
-	assert.Contains(t, m.viewportContent, "──")
+	// TurnStarted is not rendered in live mode (separator handled by input handler)
+	assert.NotContains(t, m.viewportContent, "──")
 	assert.Contains(t, m.viewportContent, "Hello!")
 }
 

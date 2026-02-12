@@ -8,6 +8,8 @@ type Styles struct {
 	TurnSeparator lipgloss.Style
 	// User message
 	UserMessage lipgloss.Style
+	// User message chevron (❯)
+	UserChevron lipgloss.Style
 	// Function call name
 	FunctionCallName lipgloss.Style
 	// Function call arguments
@@ -58,7 +60,8 @@ type Styles struct {
 func DefaultStyles() Styles {
 	return Styles{
 		TurnSeparator:    lipgloss.NewStyle().Faint(true),
-		UserMessage:      lipgloss.NewStyle().Background(lipgloss.Color("236")).Padding(0, 1),
+		UserMessage:      lipgloss.NewStyle(),
+		UserChevron:      lipgloss.NewStyle().Bold(true),
 		FunctionCallName: lipgloss.NewStyle().Foreground(lipgloss.Color("3")), // yellow
 		FunctionCallArgs: lipgloss.NewStyle(),
 		OutputSuccess:    lipgloss.NewStyle().Foreground(lipgloss.Color("2")), // green
@@ -89,6 +92,7 @@ func NoColorStyles() Styles {
 	return Styles{
 		TurnSeparator:    lipgloss.NewStyle(),
 		UserMessage:      lipgloss.NewStyle(),
+		UserChevron:      lipgloss.NewStyle(),
 		FunctionCallName: lipgloss.NewStyle(),
 		FunctionCallArgs: lipgloss.NewStyle(),
 		OutputSuccess:    lipgloss.NewStyle(),

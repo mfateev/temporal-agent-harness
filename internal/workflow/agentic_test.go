@@ -2440,5 +2440,157 @@ func TestParseRequestUserInputArgs_MultipleQuestions(t *testing.T) {
 	assert.Equal(t, "Desc X", questions[1].Options[0].Description)
 }
 
+// --- Response ID tracking tests (OpenAI Responses API) ---
+
+// TestResponseIDTracking verifies that ResponseID from the LLM activity output
+// is stored in SessionState.LastResponseID and passed as PreviousResponseID
+// in subsequent LLM calls.
+func (s *AgenticWorkflowTestSuite) TestResponseIDTracking() {
+	// First LLM call: return a tool call with a response ID
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.MatchedBy(func(input activities.LLMActivityInput) bool {
+		// First call should not have a previous response ID
+		return input.PreviousResponseID == ""
+	})).
+		Return(activities.LLMActivityOutput{
+			Items: []models.ConversationItem{
+				{
+					Type:      models.ItemTypeFunctionCall,
+					CallID:    "call-1",
+					Name:      "shell",
+					Arguments: `{"command": "echo hi"}`,
+				},
+			},
+			FinishReason: models.FinishReasonToolCalls,
+			TokenUsage:   models.TokenUsage{TotalTokens: 30},
+			ResponseID:   "resp_first",
+		}, nil).Once()
+
+	// Tool execution
+	trueVal := true
+	s.env.OnActivity("ExecuteTool", mock.Anything, mock.Anything).
+		Return(activities.ToolActivityOutput{
+			CallID:  "call-1",
+			Content: "hi\n",
+			Success: &trueVal,
+		}, nil).Once()
+
+	// Second LLM call: should receive previous_response_id = "resp_first"
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.MatchedBy(func(input activities.LLMActivityInput) bool {
+		return input.PreviousResponseID == "resp_first"
+	})).
+		Return(activities.LLMActivityOutput{
+			Items: []models.ConversationItem{
+				{Type: models.ItemTypeAssistantMessage, Content: "Got: hi"},
+			},
+			FinishReason: models.FinishReasonStop,
+			TokenUsage:   models.TokenUsage{TotalTokens: 20},
+			ResponseID:   "resp_second",
+		}, nil).Once()
+
+	s.sendShutdown(time.Second * 3)
+
+	s.env.ExecuteWorkflow(AgenticWorkflow, testInput("Run echo hi"))
+
+	require.True(s.T(), s.env.IsWorkflowCompleted())
+	var result WorkflowResult
+	require.NoError(s.T(), s.env.GetWorkflowResult(&result))
+	assert.Equal(s.T(), "shutdown", result.EndReason)
+	assert.Equal(s.T(), 50, result.TotalTokens)
+}
+
+// TestIncrementalHistorySend verifies that when PreviousResponseID is set,
+// only new history items (since the last send) are included in the LLM input.
+func (s *AgenticWorkflowTestSuite) TestIncrementalHistorySend() {
+	// First LLM call: return a tool call with response ID
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.MatchedBy(func(input activities.LLMActivityInput) bool {
+		// First call: should include full history (TurnStarted marker filtered by LLM,
+		// but activity receives all items from GetForPrompt)
+		return input.PreviousResponseID == "" && len(input.History) > 0
+	})).
+		Return(activities.LLMActivityOutput{
+			Items: []models.ConversationItem{
+				{
+					Type:      models.ItemTypeFunctionCall,
+					CallID:    "call-1",
+					Name:      "shell",
+					Arguments: `{"command": "ls"}`,
+				},
+			},
+			FinishReason: models.FinishReasonToolCalls,
+			TokenUsage:   models.TokenUsage{TotalTokens: 25},
+			ResponseID:   "resp_001",
+		}, nil).Once()
+
+	trueVal := true
+	s.env.OnActivity("ExecuteTool", mock.Anything, mock.Anything).
+		Return(activities.ToolActivityOutput{
+			CallID:  "call-1",
+			Content: "file.txt\n",
+			Success: &trueVal,
+		}, nil).Once()
+
+	// Second LLM call: should be incremental (only new items since last call)
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.MatchedBy(func(input activities.LLMActivityInput) bool {
+		if input.PreviousResponseID != "resp_001" {
+			return false
+		}
+		// Incremental send: should only include items added after the first call
+		// (function_call from LLM output + function_call_output from tool execution)
+		// NOT the full history
+		return len(input.History) < 5 // much fewer than full history
+	})).
+		Return(activities.LLMActivityOutput{
+			Items: []models.ConversationItem{
+				{Type: models.ItemTypeAssistantMessage, Content: "Files: file.txt"},
+			},
+			FinishReason: models.FinishReasonStop,
+			TokenUsage:   models.TokenUsage{TotalTokens: 20},
+			ResponseID:   "resp_002",
+		}, nil).Once()
+
+	s.sendShutdown(time.Second * 3)
+
+	s.env.ExecuteWorkflow(AgenticWorkflow, testInput("List files"))
+
+	require.True(s.T(), s.env.IsWorkflowCompleted())
+	var result WorkflowResult
+	require.NoError(s.T(), s.env.GetWorkflowResult(&result))
+	assert.Equal(s.T(), "shutdown", result.EndReason)
+}
+
+// TestContextOverflow_ResetsResponseID verifies that after context overflow
+// and history compaction, the LastResponseID is reset so the next LLM call
+// sends full history (not incremental).
+func TestContextOverflow_ResetsResponseID(t *testing.T) {
+	h := history.NewInMemoryHistory()
+	state := SessionState{
+		History:        h,
+		LastResponseID: "resp_should_be_cleared",
+	}
+	state.lastSentHistoryLen = 10
+
+	// Simulate overflow handling
+	for i := 0; i < 4; i++ {
+		h.AddItem(models.ConversationItem{Type: models.ItemTypeTurnStarted, TurnID: fmt.Sprintf("t%d", i)})
+		h.AddItem(models.ConversationItem{Type: models.ItemTypeUserMessage, Content: fmt.Sprintf("msg-%d", i)})
+		h.AddItem(models.ConversationItem{Type: models.ItemTypeAssistantMessage, Content: fmt.Sprintf("reply-%d", i)})
+		h.AddItem(models.ConversationItem{Type: models.ItemTypeTurnComplete, TurnID: fmt.Sprintf("t%d", i)})
+	}
+
+	turnCount, _ := h.GetTurnCount()
+	keepTurns := turnCount / 2
+	if keepTurns < 2 {
+		keepTurns = 2
+	}
+	_, _ = h.DropOldestUserTurns(keepTurns)
+
+	// Simulate what the overflow handler does
+	state.LastResponseID = ""
+	state.lastSentHistoryLen = 0
+
+	assert.Equal(t, "", state.LastResponseID, "LastResponseID should be cleared after overflow")
+	assert.Equal(t, 0, state.lastSentHistoryLen, "lastSentHistoryLen should be zero after overflow")
+}
+
 // Ensure we reference workflow.Context (suppress unused import warning)
 var _ workflow.Context

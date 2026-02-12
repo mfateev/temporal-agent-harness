@@ -235,6 +235,15 @@ type SessionState struct {
 	// Used to trigger ContinueAsNew when history grows too large.
 	TotalIterationsForCAN int `json:"total_iterations_for_can"`
 
+	// OpenAI Responses API: last response ID for incremental sends
+	// Persists across CAN to enable chaining across workflow continuations.
+	LastResponseID string `json:"last_response_id,omitempty"`
+
+	// Transient: tracks how many history items were sent in the last LLM call,
+	// enabling incremental sends (only new items after this index).
+	// Reset on history modification (compaction, DropOldestUserTurns).
+	lastSentHistoryLen int `json:"-"`
+
 	// Repeated tool call detection (transient — not serialized)
 	lastToolKey string `json:"-"`
 	repeatCount int    `json:"-"`

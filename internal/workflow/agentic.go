@@ -489,10 +489,23 @@ func (s *SessionState) runAgenticTurn(ctx workflow.Context) (bool, error) {
 
 		logger.Info("Starting iteration", "iteration", s.IterationCount, "turn_id", s.CurrentTurnID)
 
-		// Get history for prompt
+		// Get history for prompt — supports incremental sends when a previous
+		// response ID is available (OpenAI Responses API optimization).
 		historyItems, err := s.History.GetForPrompt()
 		if err != nil {
 			return false, fmt.Errorf("failed to get history: %w", err)
+		}
+
+		var inputItems []models.ConversationItem
+		var previousResponseID string
+		if s.LastResponseID != "" && s.lastSentHistoryLen > 0 && s.lastSentHistoryLen <= len(historyItems) {
+			// Incremental: send only new items since last call
+			inputItems = historyItems[s.lastSentHistoryLen:]
+			previousResponseID = s.LastResponseID
+		} else {
+			// Full send: first call, after CAN, or after history modification
+			inputItems = historyItems
+			previousResponseID = ""
 		}
 
 		// Configure LLM activity options
@@ -513,12 +526,13 @@ func (s *SessionState) runAgenticTurn(ctx workflow.Context) (bool, error) {
 
 		// Call LLM Activity
 		llmInput := activities.LLMActivityInput{
-			History:               historyItems,
+			History:               inputItems,
 			ModelConfig:           s.Config.Model,
 			ToolSpecs:             s.ToolSpecs,
 			BaseInstructions:      s.Config.BaseInstructions,
 			DeveloperInstructions: s.Config.DeveloperInstructions,
 			UserInstructions:      s.Config.UserInstructions,
+			PreviousResponseID:    previousResponseID,
 		}
 
 		var llmResult activities.LLMActivityOutput
@@ -535,6 +549,9 @@ func (s *SessionState) runAgenticTurn(ctx workflow.Context) (bool, error) {
 						keepTurns = 2
 					}
 					dropped, _ := s.History.DropOldestUserTurns(keepTurns)
+					// Reset incremental send state — history was modified
+					s.LastResponseID = ""
+					s.lastSentHistoryLen = 0
 					logger.Warn("Context overflow, compacted history",
 						"dropped_items", dropped, "kept_turns", keepTurns)
 					return true, nil
@@ -583,6 +600,14 @@ func (s *SessionState) runAgenticTurn(ctx workflow.Context) (bool, error) {
 			if err := s.History.AddItem(item); err != nil {
 				return false, fmt.Errorf("failed to add response item: %w", err)
 			}
+		}
+
+		// Track response ID for incremental sends (OpenAI Responses API)
+		if llmResult.ResponseID != "" {
+			s.LastResponseID = llmResult.ResponseID
+			// Update sent history length to current total (after adding response items)
+			allItems, _ := s.History.GetForPrompt()
+			s.lastSentHistoryLen = len(allItems)
 		}
 
 		// Extract FunctionCall items for execution

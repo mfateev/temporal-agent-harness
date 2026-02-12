@@ -331,11 +331,15 @@ func (m Model) View() string {
 		inputView = m.spinner.View() + " " + m.styles.SpinnerMessage.Render(m.spinnerMsg)
 	}
 
+	// Bottom separator below input (matches Claude Code layout)
+	sepBottom := sep
+
 	return lipgloss.JoinVertical(lipgloss.Left,
 		vpView,
 		sep,
-		statusBar,
 		inputView,
+		sepBottom,
+		statusBar,
 	)
 }
 
@@ -384,9 +388,9 @@ func (m *Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.width = msg.Width
 	m.height = msg.Height
 
-	// Reserve space: separator(1) + status(1) + input(variable) = variable lines
+	// Reserve space: separator(1) + input(variable) + separator(1) + status(1)
 	taHeight := m.inputAreaHeight()
-	vpHeight := m.height - taHeight - 2 // 2 for separator + status
+	vpHeight := m.height - taHeight - 3 // 3 for top separator + bottom separator + status
 	if vpHeight < 1 {
 		vpHeight = 1
 	}
@@ -496,7 +500,7 @@ func (m *Model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, sendShutdownCmd(m.client, m.workflowID)
 		}
 
-		// Show user message in viewport
+		// Show user message in viewport (❯ prefix, no separators)
 		m.appendToViewport(m.renderer.RenderUserMessage(models.ConversationItem{
 			Type:    models.ItemTypeUserMessage,
 			Content: line,

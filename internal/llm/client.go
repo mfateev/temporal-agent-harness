@@ -24,6 +24,9 @@ type LLMRequest struct {
 	BaseInstructions      string `json:"base_instructions,omitempty"`
 	DeveloperInstructions string `json:"developer_instructions,omitempty"`
 	UserInstructions      string `json:"user_instructions,omitempty"`
+
+	// OpenAI Responses API: chain to previous response for incremental sends
+	PreviousResponseID string `json:"previous_response_id,omitempty"`
 }
 
 // LLMResponse represents a response from the LLM.
@@ -35,6 +38,9 @@ type LLMResponse struct {
 	Items        []models.ConversationItem `json:"items"`
 	FinishReason models.FinishReason       `json:"finish_reason"`
 	TokenUsage   models.TokenUsage         `json:"token_usage"`
+
+	// OpenAI Responses API: response ID for chaining via PreviousResponseID
+	ResponseID string `json:"response_id,omitempty"`
 }
 
 // LLMClient is the interface for LLM providers.

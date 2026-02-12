@@ -24,6 +24,9 @@ type LLMActivityInput struct {
 	BaseInstructions      string `json:"base_instructions,omitempty"`
 	DeveloperInstructions string `json:"developer_instructions,omitempty"`
 	UserInstructions      string `json:"user_instructions,omitempty"`
+
+	// OpenAI Responses API: chain to previous response for incremental sends
+	PreviousResponseID string `json:"previous_response_id,omitempty"`
 }
 
 // LLMActivityOutput is the output from the LLM activity.
@@ -35,6 +38,9 @@ type LLMActivityOutput struct {
 	Items        []models.ConversationItem `json:"items"`
 	FinishReason models.FinishReason       `json:"finish_reason"`
 	TokenUsage   models.TokenUsage         `json:"token_usage"`
+
+	// OpenAI Responses API: response ID for chaining
+	ResponseID string `json:"response_id,omitempty"`
 }
 
 // LLMActivities contains LLM-related activities.
@@ -58,6 +64,7 @@ func (a *LLMActivities) ExecuteLLMCall(ctx context.Context, input LLMActivityInp
 		BaseInstructions:      input.BaseInstructions,
 		DeveloperInstructions: input.DeveloperInstructions,
 		UserInstructions:      input.UserInstructions,
+		PreviousResponseID:    input.PreviousResponseID,
 	}
 
 	response, err := a.client.Call(ctx, request)
@@ -73,6 +80,7 @@ func (a *LLMActivities) ExecuteLLMCall(ctx context.Context, input LLMActivityInp
 		Items:        response.Items,
 		FinishReason: response.FinishReason,
 		TokenUsage:   response.TokenUsage,
+		ResponseID:   response.ResponseID,
 	}, nil
 }
 
