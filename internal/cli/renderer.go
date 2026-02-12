@@ -92,8 +92,13 @@ func (r *ItemRenderer) RenderSystemMessage(text string) string {
 	return bullet + " " + text + "\n"
 }
 
-// RenderUserMessage renders a user message with a chevron prefix and background.
+// RenderUserMessage renders a user message with a chevron prefix.
+// Skips internal messages like environment context that aren't user-visible.
 func (r *ItemRenderer) RenderUserMessage(item models.ConversationItem) string {
+	// Hide internal context messages from display
+	if strings.HasPrefix(item.Content, "<environment_context>") {
+		return ""
+	}
 	chevron := r.styles.UserChevron.Render("❯")
 	return chevron + " " + item.Content + "\n"
 }
@@ -426,6 +431,9 @@ func indent(s, prefix string) string {
 // without raw markdown markers.
 func darkStyleCleanHeadings() gansi.StyleConfig {
 	s := glamourstyles.DarkStyleConfig
+	// Remove document margin so ● bullets align with other items
+	noMargin := uint(0)
+	s.Document.Margin = &noMargin
 	s.H2.Prefix = ""
 	s.H3.Prefix = ""
 	s.H4.Prefix = ""
