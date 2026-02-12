@@ -149,16 +149,9 @@ func (c *OpenAIClient) buildInput(history []models.ConversationItem) []responses
 			})
 
 		case models.ItemTypeCompaction:
-			// Opaque compaction data — parse the raw JSON and pass it back to
-			// OpenAI as-is via OfItemReference. If parsing fails, skip it.
-			var rawItem map[string]interface{}
-			if err := json.Unmarshal([]byte(item.Content), &rawItem); err == nil {
-				items = append(items, responses.ResponseInputItemUnionParam{
-					OfItemReference: &responses.ResponseInputItemItemReferenceParam{
-						ID: item.CallID, // may be empty; OpenAI ignores it for opaque items
-					},
-				})
-			}
+			// Compaction markers are internal tracking items. After compaction,
+			// the history contains a summary as an assistant message which is
+			// already handled above. Skip the marker itself.
 
 		default:
 			// Skip turn_started, turn_complete markers (internal only)

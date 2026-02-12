@@ -175,6 +175,7 @@ func createWorker(c client.Client) worker.Worker {
 	// Register activities
 	llmActivities := activities.NewLLMActivities(llmClient)
 	w.RegisterActivity(llmActivities.ExecuteLLMCall)
+	w.RegisterActivity(llmActivities.ExecuteCompact)
 
 	toolActivities := activities.NewToolActivities(toolRegistry)
 	w.RegisterActivity(toolActivities.ExecuteTool)
@@ -289,6 +290,52 @@ func startWorkflow(t *testing.T, ctx context.Context, c client.Client, input wor
 	}, "AgenticWorkflow", input)
 	require.NoError(t, err, "Failed to start workflow")
 	return workflowID
+}
+
+// waitForCompactionAndTurnComplete polls until the history contains both an
+// ItemTypeCompaction marker and at least one TurnComplete. This is used after
+// sending a second user input that triggers compaction — ReplaceAll wipes the
+// old history so we can't count cumulative TurnComplete markers.
+func waitForCompactionAndTurnComplete(t *testing.T, ctx context.Context, c client.Client, workflowID string) []models.ConversationItem {
+	t.Helper()
+	deadline := time.After(2 * time.Minute)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("Timed out waiting for compaction + TurnComplete")
+		case <-ctx.Done():
+			t.Fatalf("Context cancelled")
+		case <-ticker.C:
+			resp, err := c.QueryWorkflow(ctx, workflowID, "", workflow.QueryGetConversationItems)
+			if err != nil {
+				continue
+			}
+			var items []models.ConversationItem
+			if err := resp.Get(&items); err != nil {
+				continue
+			}
+
+			hasCompaction := false
+			hasTurnComplete := false
+			for _, item := range items {
+				if item.Type == models.ItemTypeCompaction {
+					hasCompaction = true
+				}
+				if item.Type == models.ItemTypeTurnComplete {
+					hasTurnComplete = true
+				}
+			}
+			t.Logf("History: %d items, compaction=%v, turnComplete=%v",
+				len(items), hasCompaction, hasTurnComplete)
+
+			if hasCompaction && hasTurnComplete {
+				return items
+			}
+		}
+	}
 }
 
 // --- Tests ---
@@ -826,4 +873,103 @@ func TestAgenticWorkflow_AnthropicWithTools(t *testing.T) {
 
 	t.Logf("Anthropic with tools - Total tokens: %d, Iterations: %d, Tools: %v",
 		result.TotalTokens, result.TotalIterations, result.ToolCallsExecuted)
+}
+
+// TestAgenticWorkflow_ProactiveCompaction verifies that proactive context compaction
+// fires when the conversation history exceeds AutoCompactTokenLimit. Uses a prompt
+// that generates a long response to build up history, then a very low token limit
+// to trigger compaction on the second turn. Verifies the conversation continues
+// successfully with a compaction marker in history.
+func TestAgenticWorkflow_ProactiveCompaction(t *testing.T) {
+	c := dialTemporal(t)
+
+	workflowID := "test-compaction-" + uuid.New().String()[:8]
+	input := workflow.WorkflowInput{
+		ConversationID: workflowID,
+		// Ask for a long response so history accumulates enough tokens to exceed the limit.
+		// At ~4 chars/token, 2000 chars ≈ 500 tokens in the history estimate.
+		UserMessage: "Write a detailed paragraph (at least 300 words) explaining how photosynthesis works. " +
+			"Include the light reactions, Calvin cycle, and the role of chlorophyll. Do not use any tools.",
+		Config: models.SessionConfiguration{
+			Model: models.ModelConfig{
+				Model:         CheapModel,
+				Temperature:   0,
+				MaxTokens:     2000, // Allow a long response
+				ContextWindow: 128000,
+			},
+			Tools: models.ToolsConfig{
+				EnableShell:    false,
+				EnableReadFile: false,
+			},
+			// Set limit low enough that a ~300-word response exceeds it.
+			// 300 words ≈ 1500 chars ≈ 375 tokens + prompt ≈ 500+ tokens total.
+			AutoCompactTokenLimit: 200,
+		},
+	}
+
+	t.Logf("Starting compaction test workflow: %s", workflowID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), WorkflowTimeout)
+	defer cancel()
+
+	startWorkflow(t, ctx, c, input)
+
+	// Wait for the first turn to complete
+	items := waitForTurnComplete(t, ctx, c, workflowID, 1)
+	t.Logf("After turn 1: %d history items", len(items))
+
+	// Log the estimated history size for debugging
+	totalChars := 0
+	for _, item := range items {
+		totalChars += len(item.Content)
+	}
+	t.Logf("Estimated history tokens: ~%d (chars: %d)", totalChars/4, totalChars)
+
+	// Send a second user message — this should trigger proactive compaction
+	// because the history from turn 1 exceeds the 200-token limit.
+	updateHandle, err := c.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
+		WorkflowID:   workflowID,
+		UpdateName:   workflow.UpdateUserInput,
+		Args:         []interface{}{workflow.UserInput{Content: "Now summarize photosynthesis in exactly one sentence."}},
+		WaitForStage: client.WorkflowUpdateStageCompleted,
+	})
+	require.NoError(t, err, "Failed to send second user input")
+
+	var accepted workflow.UserInputAccepted
+	require.NoError(t, updateHandle.Get(ctx, &accepted))
+	t.Logf("Second input accepted, turn ID: %s", accepted.TurnID)
+
+	// Wait until we see both a compaction marker AND a TurnComplete in history.
+	// Compaction via ReplaceAll wipes the old history (including turn 1's
+	// TurnComplete), so we poll until the compacted history contains a fresh
+	// TurnComplete from turn 2.
+	items = waitForCompactionAndTurnComplete(t, ctx, c, workflowID)
+	t.Logf("After turn 2 with compaction: %d history items", len(items))
+
+	// Check that compaction happened
+	hasCompaction := false
+	for _, item := range items {
+		if item.Type == models.ItemTypeCompaction {
+			hasCompaction = true
+			t.Logf("Found compaction marker: %q", item.Content)
+			break
+		}
+	}
+	assert.True(t, hasCompaction, "History should contain a compaction marker after proactive compaction")
+
+	// Verify the conversation still works — the LLM should have answered
+	hasAssistantReply := false
+	for _, item := range items {
+		if item.Type == models.ItemTypeAssistantMessage && item.Content != "" {
+			hasAssistantReply = true
+		}
+	}
+	assert.True(t, hasAssistantReply, "LLM should have produced a response after compaction")
+
+	// Shutdown and verify result
+	result := shutdownWorkflow(t, ctx, c, workflowID)
+	assert.Equal(t, "shutdown", result.EndReason)
+	assert.Greater(t, result.TotalTokens, 0, "Should have consumed tokens")
+
+	t.Logf("Compaction test - Total tokens: %d, History items: %d", result.TotalTokens, len(items))
 }
