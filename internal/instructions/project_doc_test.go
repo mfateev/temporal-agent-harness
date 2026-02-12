@@ -162,8 +162,10 @@ func TestLoadProjectDocs_DeeplyNested(t *testing.T) {
 }
 
 // --- Supplementary file tests ---
+// SupplementaryFileNames is now empty, so CONTRIBUTING.md and README.md
+// are no longer loaded into the system context.
 
-func TestLoadProjectDocs_ContributingAlongsideAgents(t *testing.T) {
+func TestLoadProjectDocs_ContributingNotLoaded(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("agent rules"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "CONTRIBUTING.md"), []byte("how to contribute"), 0o644))
@@ -171,22 +173,10 @@ func TestLoadProjectDocs_ContributingAlongsideAgents(t *testing.T) {
 	docs, err := LoadProjectDocs(dir, dir)
 	require.NoError(t, err)
 	assert.Contains(t, docs, "agent rules")
-	assert.Contains(t, docs, "how to contribute")
-	assert.Contains(t, docs, "AGENTS.md")
-	assert.Contains(t, docs, "CONTRIBUTING.md")
+	assert.NotContains(t, docs, "how to contribute")
 }
 
-func TestLoadProjectDocs_ContributingWithoutAgents(t *testing.T) {
-	// CONTRIBUTING.md alone (no agent instruction file)
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "CONTRIBUTING.md"), []byte("contrib guide"), 0o644))
-
-	docs, err := LoadProjectDocs(dir, dir)
-	require.NoError(t, err)
-	assert.Contains(t, docs, "contrib guide")
-}
-
-func TestLoadProjectDocs_ReadmeAlongsideAgents(t *testing.T) {
+func TestLoadProjectDocs_ReadmeNotLoaded(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("agent rules"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("project overview"), 0o644))
@@ -194,19 +184,11 @@ func TestLoadProjectDocs_ReadmeAlongsideAgents(t *testing.T) {
 	docs, err := LoadProjectDocs(dir, dir)
 	require.NoError(t, err)
 	assert.Contains(t, docs, "agent rules")
-	assert.Contains(t, docs, "project overview")
+	assert.NotContains(t, docs, "project overview")
 }
 
-func TestLoadProjectDocs_ReadmeWithoutAgents(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("project readme"), 0o644))
-
-	docs, err := LoadProjectDocs(dir, dir)
-	require.NoError(t, err)
-	assert.Contains(t, docs, "project readme")
-}
-
-func TestLoadProjectDocs_AllSupplementaryFiles(t *testing.T) {
+func TestLoadProjectDocs_OnlyAgentsFiles(t *testing.T) {
+	// Only AGENTS.md/CLAUDE.md are loaded, not CONTRIBUTING.md or README.md
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("agent rules"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "CONTRIBUTING.md"), []byte("contrib guide"), 0o644))
@@ -215,45 +197,8 @@ func TestLoadProjectDocs_AllSupplementaryFiles(t *testing.T) {
 	docs, err := LoadProjectDocs(dir, dir)
 	require.NoError(t, err)
 	assert.Contains(t, docs, "agent rules")
-	assert.Contains(t, docs, "contrib guide")
-	assert.Contains(t, docs, "project overview")
-
-	// Order: AGENTS.md first, then CONTRIBUTING.md, then README.md
-	agentsIdx := strings.Index(docs, "agent rules")
-	contribIdx := strings.Index(docs, "contrib guide")
-	readmeIdx := strings.Index(docs, "project overview")
-	assert.Less(t, agentsIdx, contribIdx)
-	assert.Less(t, contribIdx, readmeIdx)
-}
-
-func TestLoadProjectDocs_SupplementaryNested(t *testing.T) {
-	// root/AGENTS.md + root/CONTRIBUTING.md + root/sub/README.md
-	dir := t.TempDir()
-	sub := filepath.Join(dir, "sub")
-	require.NoError(t, os.MkdirAll(sub, 0o755))
-
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("root agents"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "CONTRIBUTING.md"), []byte("root contrib"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(sub, "README.md"), []byte("sub readme"), 0o644))
-
-	docs, err := LoadProjectDocs(dir, sub)
-	require.NoError(t, err)
-	assert.Contains(t, docs, "root agents")
-	assert.Contains(t, docs, "root contrib")
-	assert.Contains(t, docs, "sub readme")
-}
-
-func TestLoadProjectDocs_SupplementaryDoesNotReplaceAgents(t *testing.T) {
-	// Verify CONTRIBUTING.md doesn't suppress AGENTS.md
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("primary instructions"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "CONTRIBUTING.md"), []byte("supplementary"), 0o644))
-
-	docs, err := LoadProjectDocs(dir, dir)
-	require.NoError(t, err)
-	// Both must be present
-	assert.Contains(t, docs, "primary instructions")
-	assert.Contains(t, docs, "supplementary")
+	assert.NotContains(t, docs, "contrib guide")
+	assert.NotContains(t, docs, "project overview")
 }
 
 // --- pathSegments tests ---

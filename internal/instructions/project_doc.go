@@ -19,7 +19,7 @@ var AgentsFileNames = []string{"AGENTS.override.md", "AGENTS.md", "CLAUDE.md"}
 // SupplementaryFileNames lists additional documentation files loaded alongside
 // the primary agent instruction file. These are always additive — they don't
 // compete with AgentsFileNames but are appended if found at the same directory level.
-var SupplementaryFileNames = []string{"CONTRIBUTING.md", "README.md"}
+var SupplementaryFileNames []string
 
 // MaxProjectDocsBytes is the maximum total size of concatenated project docs.
 const MaxProjectDocsBytes = 512 * 1024 // 512KB
