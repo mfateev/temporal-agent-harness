@@ -82,7 +82,7 @@ func (r *ItemRenderer) RenderTurnStarted(item models.ConversationItem) string {
 	if w <= 0 {
 		w = 80
 	}
-	return r.styles.TurnSeparator.Render(strings.Repeat("─", w))
+	return r.styles.TurnSeparator.Render(strings.Repeat("─", w)) + "\n"
 }
 
 // RenderSystemMessage renders a system-level message with a yellow bullet.
