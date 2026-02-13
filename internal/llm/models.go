@@ -85,6 +85,30 @@ func isOpenAIChatModel(id string) bool {
 		return false
 	}
 
+	// Exclude non-chat models that happen to share chat prefixes (gpt-, chatgpt-)
+	nonChatSubstrings := []string{
+		"-tts",        // text-to-speech models (gpt-4o-mini-tts)
+		"-realtime",   // realtime/voice models (gpt-4o-realtime-preview)
+		"-transcribe", // transcription models (gpt-4o-transcribe)
+		"-instruct",   // completion models, not chat (gpt-3.5-turbo-instruct)
+	}
+	for _, sub := range nonChatSubstrings {
+		if strings.Contains(id, sub) {
+			return false
+		}
+	}
+
+	nonChatPrefixes := []string{
+		"gpt-audio",   // audio models (gpt-audio, gpt-audio-mini)
+		"gpt-image",   // image generation (gpt-image-1)
+		"chatgpt-image", // image generation (chatgpt-image-latest)
+	}
+	for _, prefix := range nonChatPrefixes {
+		if strings.HasPrefix(id, prefix) {
+			return false
+		}
+	}
+
 	// Known chat-model prefixes
 	chatPrefixes := []string{
 		"gpt-",

@@ -1466,10 +1466,16 @@ func TestFetchAvailableModels_E2E(t *testing.T) {
 		for _, m := range models {
 			if m.Provider == "openai" {
 				assert.NotContains(t, m.ID, "embedding", "Should not include embedding models")
-				assert.NotContains(t, m.ID, "dall-e", "Should not include image models")
-				assert.NotContains(t, m.ID, "whisper", "Should not include audio models")
-				assert.NotContains(t, m.ID, "tts", "Should not include TTS models")
+				assert.NotContains(t, m.ID, "dall-e", "Should not include DALL-E models")
+				assert.NotContains(t, m.ID, "whisper", "Should not include Whisper models")
+				assert.NotContains(t, m.ID, "-tts", "Should not include TTS models")
+				assert.NotContains(t, m.ID, "-realtime", "Should not include realtime models")
+				assert.NotContains(t, m.ID, "-transcribe", "Should not include transcription models")
+				assert.NotContains(t, m.ID, "-instruct", "Should not include instruct models")
 				assert.False(t, strings.HasPrefix(m.ID, "ft:"), "Should not include fine-tuned models")
+				assert.False(t, strings.HasPrefix(m.ID, "gpt-audio"), "Should not include gpt-audio models")
+				assert.False(t, strings.HasPrefix(m.ID, "gpt-image"), "Should not include gpt-image models")
+				assert.False(t, strings.HasPrefix(m.ID, "chatgpt-image"), "Should not include chatgpt-image models")
 			}
 		}
 	}

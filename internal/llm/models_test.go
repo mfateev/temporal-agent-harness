@@ -37,6 +37,25 @@ func TestIsOpenAIChatModel(t *testing.T) {
 		{"babbage-002", false},
 		{"davinci-002", false},
 
+		// gpt- prefixed non-chat models — should be filtered out
+		{"gpt-4o-mini-tts", false},
+		{"gpt-4o-mini-tts-2025-03-20", false},
+		{"gpt-4o-realtime-preview", false},
+		{"gpt-4o-realtime-preview-2024-12-17", false},
+		{"gpt-4o-transcribe", false},
+		{"gpt-4o-transcribe-diarize", false},
+		{"gpt-3.5-turbo-instruct", false},
+		{"gpt-3.5-turbo-instruct-0914", false},
+		{"gpt-audio", false},
+		{"gpt-audio-mini", false},
+		{"gpt-audio-mini-2025-10-06", false},
+		{"gpt-image-1", false},
+		{"gpt-image-1-mini", false},
+		{"gpt-image-1.5", false},
+		{"gpt-realtime", false},
+		{"gpt-realtime-mini", false},
+		{"chatgpt-image-latest", false},
+
 		// Fine-tuned models — should be filtered out
 		{"ft:gpt-4o-mini:my-org:custom:abc123", false},
 		{"ft:gpt-3.5-turbo:org:name:id", false},
