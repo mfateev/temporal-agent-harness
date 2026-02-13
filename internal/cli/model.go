@@ -458,7 +458,11 @@ func (m Model) View() string {
 	var inputView string
 	switch m.state {
 	case StateInput:
-		inputView = m.textarea.View()
+		if m.selectingModel && m.selector != nil {
+			inputView = m.selector.View()
+		} else {
+			inputView = m.textarea.View()
+		}
 	case StateApproval, StateEscalation, StateUserInputQuestion:
 		if m.selector != nil {
 			inputView = m.selector.View()
