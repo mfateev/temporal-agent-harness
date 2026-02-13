@@ -1462,20 +1462,23 @@ func TestFetchAvailableModels_E2E(t *testing.T) {
 
 	if hasOpenAI {
 		assert.Greater(t, providerCounts["openai"], 0, "Should have OpenAI models when OPENAI_API_KEY is set")
-		// Verify no non-chat models slipped through
+		// The filter should produce a concise list (no date snapshots, no specialized variants)
+		assert.Less(t, providerCounts["openai"], 40, "Filter should keep list concise (<40 OpenAI models)")
 		for _, m := range models {
 			if m.Provider == "openai" {
+				// Capability exclusions
 				assert.NotContains(t, m.ID, "embedding", "Should not include embedding models")
-				assert.NotContains(t, m.ID, "dall-e", "Should not include DALL-E models")
-				assert.NotContains(t, m.ID, "whisper", "Should not include Whisper models")
 				assert.NotContains(t, m.ID, "-tts", "Should not include TTS models")
 				assert.NotContains(t, m.ID, "-realtime", "Should not include realtime models")
 				assert.NotContains(t, m.ID, "-transcribe", "Should not include transcription models")
 				assert.NotContains(t, m.ID, "-instruct", "Should not include instruct models")
 				assert.False(t, strings.HasPrefix(m.ID, "ft:"), "Should not include fine-tuned models")
-				assert.False(t, strings.HasPrefix(m.ID, "gpt-audio"), "Should not include gpt-audio models")
 				assert.False(t, strings.HasPrefix(m.ID, "gpt-image"), "Should not include gpt-image models")
-				assert.False(t, strings.HasPrefix(m.ID, "chatgpt-image"), "Should not include chatgpt-image models")
+				// Noise exclusions
+				assert.NotContains(t, m.ID, "-preview", "Should not include preview models")
+				assert.NotContains(t, m.ID, "-search", "Should not include search models")
+				assert.NotContains(t, m.ID, "-deep-research", "Should not include deep-research models")
+				assert.NotContains(t, m.ID, "-chat-latest", "Should not include chat-latest aliases")
 			}
 		}
 	}
