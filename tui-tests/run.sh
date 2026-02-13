@@ -125,7 +125,46 @@ if [ ! -d "$SCRIPT_DIR/node_modules" ]; then
   (cd "$SCRIPT_DIR" && npm install)
 fi
 
-# --- 6. Run tui-test ---
+# --- 6. Create seed session for resume testing ---
+
+echo "==> Creating seed session for resume testing..."
+SEED_TYPESCRIPT=$(mktemp)
+# Run tcx under `script` to provide a PTY (bubbletea requires one).
+# tcx doesn't auto-exit after a turn, so we background it, wait for
+# the LLM response, then send SIGINT for a clean exit.
+script -qf -c "$PROJECT_ROOT/tcx --temporal-host localhost:$TEMPORAL_PORT --full-auto --model gpt-4o-mini --no-color --inline -m 'Say exactly the word: persimmon'" "$SEED_TYPESCRIPT" &>/dev/null &
+SEED_PID=$!
+
+# Wait up to 45s for the LLM response (check for "ready" in status bar = turn complete)
+for i in $(seq 1 45); do
+  if sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' "$SEED_TYPESCRIPT" 2>/dev/null | grep -q 'ready'; then
+    echo "    Seed session turn complete after ${i}s"
+    break
+  fi
+  if [ "$i" -eq 45 ]; then
+    echo "    WARNING: Seed session timed out (45s)"
+  fi
+  sleep 1
+done
+
+# Send SIGINT for a clean exit (in StateInput, tcx handles Ctrl+C gracefully)
+kill -INT "$SEED_PID" 2>/dev/null || true
+sleep 1
+kill "$SEED_PID" 2>/dev/null || true
+wait "$SEED_PID" 2>/dev/null || true
+rm -f "$SEED_TYPESCRIPT"
+
+# Use Temporal CLI to find the most recent workflow ID (more reliable than
+# parsing ANSI-laden script output).
+RESUME_SESSION_ID=$($TEMPORAL_BIN workflow list --address "localhost:$TEMPORAL_PORT" --limit 1 2>/dev/null | grep -oP 'codex-[a-f0-9]+' | head -1 || true)
+if [ -n "$RESUME_SESSION_ID" ]; then
+  echo "    Seed session: $RESUME_SESSION_ID"
+  export RESUME_SESSION_ID
+else
+  echo "    WARNING: Could not create seed session (resume tests will skip)"
+fi
+
+# --- 7. Run tui-test ---
 
 echo "==> Running TUI tests..."
 echo ""

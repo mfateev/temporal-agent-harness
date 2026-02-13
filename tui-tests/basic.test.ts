@@ -1,20 +1,11 @@
 import { test, expect } from "@microsoft/tui-test";
-
-const tcxBinary = process.env.TCX_BINARY || "../tcx";
-const temporalHost = process.env.TEMPORAL_HOST || "localhost:18233";
-
-// Explicit timeout for expect matchers — tui-test's config-based timeout
-// does not propagate to worker processes in this version.
-const EXPECT_TIMEOUT = 60_000;
+import { tcxBinary, fullAutoArgs, EXPECT_TIMEOUT } from "./helpers.js";
 
 test.use({
   program: {
     file: tcxBinary,
     args: [
-      "--temporal-host", temporalHost,
-      "--full-auto",
-      "--model", "gpt-4o-mini",
-      "--no-color",
+      ...fullAutoArgs,
       "-m", "Say exactly the word: pineapple",
     ],
   },
