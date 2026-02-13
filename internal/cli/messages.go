@@ -91,6 +91,17 @@ type CompactErrorMsg struct {
 	Err error
 }
 
+// ModelUpdateSentMsg is sent after a model update has been successfully sent.
+type ModelUpdateSentMsg struct {
+	Provider string
+	Model    string
+}
+
+// ModelUpdateErrorMsg is sent when sending a model update fails.
+type ModelUpdateErrorMsg struct {
+	Err error
+}
+
 // PlanRequestAcceptedMsg is sent when the plan_request Update is accepted and
 // the planner child workflow has started.
 type PlanRequestAcceptedMsg struct {
@@ -107,6 +118,12 @@ type PlanRequestErrorMsg struct {
 // its plan text has been extracted.
 type PlannerCompletedMsg struct {
 	PlanText string
+}
+
+// ModelsFetchedMsg is sent when the background model-list fetch completes.
+type ModelsFetchedMsg struct {
+	Models []modelOption
+	Err    error
 }
 
 // SuggestionPollMsg is sent after a delayed poll to pick up the suggestion

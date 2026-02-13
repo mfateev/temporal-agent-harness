@@ -67,6 +67,7 @@ The TUI supports multi-line input for composing longer messages:
 - **↑/↓, PgUp/PgDn** - Scroll viewport
 - **/exit, /quit** - Exit session
 - **/end** - End session gracefully
+- **/model** - Switch model for the current session
 
 The input area automatically expands up to 10 lines as you type.
 

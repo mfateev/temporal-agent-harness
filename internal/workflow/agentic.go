@@ -256,6 +256,37 @@ func (s *SessionState) registerHandlers(ctx workflow.Context) {
 		logger.Error("Failed to register shutdown update handler", "error", err)
 	}
 
+	// Update: update_model
+	// Allows the CLI to change the model used for subsequent LLM calls.
+	err = workflow.SetUpdateHandlerWithOptions(
+		ctx,
+		UpdateModel,
+		func(ctx workflow.Context, req UpdateModelRequest) (UpdateModelResponse, error) {
+			s.Config.Model.Provider = req.Provider
+			s.Config.Model.Model = req.Model
+			// Reset response chaining when switching models.
+			s.LastResponseID = ""
+			return UpdateModelResponse{Acknowledged: true}, nil
+		},
+		workflow.UpdateHandlerOptions{
+			Validator: func(ctx workflow.Context, req UpdateModelRequest) error {
+				if req.Provider == "" {
+					return fmt.Errorf("provider must not be empty")
+				}
+				if req.Model == "" {
+					return fmt.Errorf("model must not be empty")
+				}
+				if s.ShutdownRequested {
+					return fmt.Errorf("session is shutting down")
+				}
+				return nil
+			},
+		},
+	)
+	if err != nil {
+		logger.Error("Failed to register update_model update handler", "error", err)
+	}
+
 	// Update: approval_response
 	// Maps to: Codex approval flow (user approves/denies tool calls)
 	err = workflow.SetUpdateHandlerWithOptions(

@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"go.temporal.io/sdk/client"
 
+	"github.com/mfateev/codex-temporal-go/internal/llm"
 	"github.com/mfateev/codex-temporal-go/internal/models"
 	"github.com/mfateev/codex-temporal-go/internal/workflow"
 )
@@ -289,6 +290,31 @@ func sendPlanRequestCmd(c client.Client, workflowID, message string) tea.Cmd {
 	}
 }
 
+// sendUpdateModelCmd sends an update_model Update to the workflow.
+func sendUpdateModelCmd(c client.Client, workflowID, provider, model string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		updateHandle, err := c.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
+			WorkflowID:   workflowID,
+			UpdateName:   workflow.UpdateModel,
+			Args:         []interface{}{workflow.UpdateModelRequest{Provider: provider, Model: model}},
+			WaitForStage: client.WorkflowUpdateStageCompleted,
+		})
+		if err != nil {
+			return ModelUpdateErrorMsg{Err: err}
+		}
+
+		var resp workflow.UpdateModelResponse
+		if err := updateHandle.Get(ctx, &resp); err != nil {
+			return ModelUpdateErrorMsg{Err: err}
+		}
+
+		return ModelUpdateSentMsg{Provider: provider, Model: model}
+	}
+}
+
 // queryChildConversationItems queries a child workflow's conversation items
 // and extracts the last assistant message (the plan text).
 func queryChildConversationItems(c client.Client, childWorkflowID string) tea.Cmd {
@@ -314,6 +340,33 @@ func queryChildConversationItems(c client.Client, childWorkflowID string) tea.Cm
 		}
 
 		return PlannerCompletedMsg{PlanText: ""}
+	}
+}
+
+// fetchModelsCmd fetches the list of available models from all configured
+// providers and returns a ModelsFetchedMsg. Uses a 10-second timeout.
+func fetchModelsCmd() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		available, err := llm.FetchAvailableModels(ctx)
+		if err != nil {
+			return ModelsFetchedMsg{Err: err}
+		}
+		if available == nil {
+			return ModelsFetchedMsg{} // nil Models signals fallback
+		}
+
+		opts := make([]modelOption, 0, len(available))
+		for _, m := range available {
+			opts = append(opts, modelOption{
+				Provider:    m.Provider,
+				Model:       m.ID,
+				DisplayName: m.DisplayName,
+			})
+		}
+		return ModelsFetchedMsg{Models: opts}
 	}
 }
 

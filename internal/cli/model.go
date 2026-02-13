@@ -20,6 +20,56 @@ import (
 	"github.com/mfateev/codex-temporal-go/internal/workflow"
 )
 
+type modelOption struct {
+	Provider    string
+	Model       string
+	DisplayName string
+}
+
+func defaultModelOptions() []modelOption {
+	return []modelOption{
+		{Provider: "openai", Model: "gpt-4o"},
+		{Provider: "openai", Model: "gpt-4o-mini"},
+		{Provider: "openai", Model: "gpt-4-turbo"},
+		{Provider: "openai", Model: "gpt-3.5-turbo"},
+		{Provider: "anthropic", Model: "claude-opus-4-6"},
+		{Provider: "anthropic", Model: "claude-opus-4-5"},
+		{Provider: "anthropic", Model: "claude-sonnet-4.5-20250929"},
+		{Provider: "anthropic", Model: "claude-sonnet-4-0"},
+	}
+}
+
+func modelSelectorOptions(opts []modelOption) []SelectorOption {
+	result := make([]SelectorOption, 0, len(opts))
+	for _, opt := range opts {
+		label := fmt.Sprintf("%s (%s)", opt.Model, opt.Provider)
+		if opt.DisplayName != "" {
+			label = fmt.Sprintf("%s (%s: %s)", opt.Model, opt.Provider, opt.DisplayName)
+		}
+		result = append(result, SelectorOption{Label: label})
+	}
+	return result
+}
+
+// currentModelOptions returns the cached model list if available, otherwise
+// the hardcoded default list.
+func (m *Model) currentModelOptions() []modelOption {
+	if len(m.cachedModelOptions) > 0 {
+		return m.cachedModelOptions
+	}
+	return defaultModelOptions()
+}
+
+// modelOptionAt returns the provider and model for the given index in the
+// current model options list.
+func (m *Model) modelOptionAt(idx int) (provider, model string) {
+	opts := m.currentModelOptions()
+	if idx < 0 || idx >= len(opts) {
+		return "", ""
+	}
+	return opts[idx].Provider, opts[idx].Model
+}
+
 const (
 	TaskQueue    = "codex-temporal"
 	PollInterval = 200 * time.Millisecond
@@ -144,6 +194,12 @@ type Model struct {
 
 	// Provider
 	provider string
+
+	// /model command state
+	selectingModel    bool
+	cachedModelOptions []modelOption
+	modelsFetched     bool
+	modelsFetching    bool
 }
 
 // NewModel creates a new bubbletea model.
@@ -291,6 +347,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appendToViewport(fmt.Sprintf("Error compacting context: %v\n", msg.Err))
 		m.state = StateInput
 		cmds = append(cmds, m.focusTextarea())
+
+	case ModelUpdateSentMsg:
+		m.provider = msg.Provider
+		m.modelName = msg.Model
+		m.appendToViewport(m.renderer.RenderSystemMessage(
+			fmt.Sprintf("Model updated to %s (%s).", msg.Model, msg.Provider)))
+		m.selectingModel = false
+		m.selector = nil
+		m.state = StateInput
+		cmds = append(cmds, m.focusTextarea())
+
+	case ModelUpdateErrorMsg:
+		m.appendToViewport(fmt.Sprintf("Error updating model: %v\n", msg.Err))
+		m.selectingModel = false
+		m.selector = nil
+		m.state = StateInput
+		cmds = append(cmds, m.focusTextarea())
+
+	case ModelsFetchedMsg:
+		m.modelsFetching = false
+		m.modelsFetched = true
+		if msg.Models != nil {
+			m.cachedModelOptions = msg.Models
+		}
+		// If user is waiting for the selector, show it now
+		if m.selectingModel {
+			m.appendToViewport(m.renderer.RenderSystemMessage("Select a model (Esc to cancel):"))
+			m.selector = NewSelectorModel(modelSelectorOptions(m.currentModelOptions()), m.styles)
+			m.selector.SetWidth(m.width)
+			m.state = StateInput
+		}
 
 	case UserInputQuestionSentMsg:
 		m.pendingUserInputReq = nil
@@ -513,6 +600,56 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// /model selection uses the selector UI.
+	if m.selectingModel {
+		if m.selector != nil {
+			if m.isViewportScrollKey(msg) {
+				var cmd tea.Cmd
+				m.viewport, cmd = m.viewport.Update(msg)
+				return m, cmd
+			}
+
+			done := m.selector.Update(msg)
+			if done {
+				m.selectingModel = false
+				if m.selector.Cancelled() {
+					m.selector = nil
+					m.state = StateInput
+					return m, m.focusTextarea()
+				}
+				idx := m.selector.Selected()
+				provider, model := m.modelOptionAt(idx)
+				m.selector = nil
+				if provider == "" || model == "" {
+					m.appendToViewport("Invalid model selection.\n")
+					m.state = StateInput
+					return m, m.focusTextarea()
+				}
+				if m.workflowID == "" {
+					m.provider = provider
+					m.modelName = model
+					m.appendToViewport(m.renderer.RenderSystemMessage(
+						fmt.Sprintf("Model set to %s (%s). Start a session to apply.", model, provider)))
+					m.state = StateInput
+					return m, m.focusTextarea()
+				}
+				m.spinnerMsg = "Updating model..."
+				m.state = StateWatching
+				m.textarea.Blur()
+				return m, sendUpdateModelCmd(m.client, m.workflowID, provider, model)
+			}
+			return m, nil
+		}
+		// Selector not ready yet (still fetching) — allow Esc to cancel, ignore other keys
+		if msg.Type == tea.KeyEsc {
+			m.selectingModel = false
+			m.modelsFetching = false
+			m.state = StateInput
+			return m, m.focusTextarea()
+		}
+		return m, nil
+	}
+
 	// Intercept multi-line paste: show "[N lines pasted]" placeholder
 	if msg.Paste && msg.Type == tea.KeyRunes && strings.ContainsRune(string(msg.Runes), '\n') {
 		content := string(msg.Runes)
@@ -582,6 +719,28 @@ func (m *Model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.state = StateWatching
 			m.textarea.Blur()
 			return m, sendCompactCmd(m.client, m.workflowID)
+		}
+		if line == "/model" {
+			if m.modelsFetched {
+				// Models already cached — show selector immediately
+				m.appendToViewport(m.renderer.RenderSystemMessage("Select a model (Esc to cancel):"))
+				m.selector = NewSelectorModel(modelSelectorOptions(m.currentModelOptions()), m.styles)
+				m.selector.SetWidth(m.width)
+				m.selectingModel = true
+				m.state = StateInput
+				m.textarea.Blur()
+				return m, nil
+			}
+			if !m.modelsFetching {
+				// Fire async fetch
+				m.modelsFetching = true
+				m.selectingModel = true
+				m.appendToViewport(m.renderer.RenderSystemMessage("Fetching available models..."))
+				m.textarea.Blur()
+				return m, fetchModelsCmd()
+			}
+			// Already fetching — just wait
+			return m, nil
 		}
 		if strings.HasPrefix(line, "/plan") {
 			if m.workflowID == "" {

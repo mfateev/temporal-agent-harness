@@ -58,7 +58,22 @@ const (
 	// UpdatePlanRequest spawns a planner child workflow directly (no LLM round-trip).
 	// The CLI sends this when the user types /plan <message>.
 	UpdatePlanRequest = "plan_request"
+
+	// UpdateModel updates the session's model configuration.
+	// Used by the CLI /model command.
+	UpdateModel = "update_model"
 )
+
+// UpdateModelRequest is the payload for the update_model Update.
+type UpdateModelRequest struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
+// UpdateModelResponse is returned by the update_model Update.
+type UpdateModelResponse struct {
+	Acknowledged bool `json:"acknowledged"`
+}
 
 // TurnPhase indicates the current phase of the workflow turn.
 type TurnPhase string

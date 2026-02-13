@@ -1426,6 +1426,79 @@ func TestAgenticWorkflow_SuggestionDisabledE2E(t *testing.T) {
 	t.Logf("No-suggestion test - Total tokens: %d", result.TotalTokens)
 }
 
+// TestFetchAvailableModels_E2E verifies that FetchAvailableModels returns real
+// models from the provider APIs. It checks:
+// - At least one model is returned from each configured provider
+// - Results are sorted (anthropic before openai)
+// - Anthropic models have DisplayName set
+// - OpenAI models are filtered to chat-capable models only
+func TestFetchAvailableModels_E2E(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping E2E test in short mode")
+	}
+
+	hasOpenAI := os.Getenv("OPENAI_API_KEY") != ""
+	hasAnthropic := os.Getenv("ANTHROPIC_API_KEY") != ""
+	if !hasOpenAI && !hasAnthropic {
+		t.Skip("No LLM provider key set, skipping")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	models, err := llm.FetchAvailableModels(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, models, "Should return models when at least one API key is set")
+	require.NotEmpty(t, models, "Should return at least one model")
+
+	t.Logf("Fetched %d models total", len(models))
+
+	// Collect provider stats
+	providerCounts := map[string]int{}
+	for _, m := range models {
+		providerCounts[m.Provider]++
+		t.Logf("  %s: %s (display: %q)", m.Provider, m.ID, m.DisplayName)
+	}
+
+	if hasOpenAI {
+		assert.Greater(t, providerCounts["openai"], 0, "Should have OpenAI models when OPENAI_API_KEY is set")
+		// Verify no non-chat models slipped through
+		for _, m := range models {
+			if m.Provider == "openai" {
+				assert.NotContains(t, m.ID, "embedding", "Should not include embedding models")
+				assert.NotContains(t, m.ID, "dall-e", "Should not include image models")
+				assert.NotContains(t, m.ID, "whisper", "Should not include audio models")
+				assert.NotContains(t, m.ID, "tts", "Should not include TTS models")
+				assert.False(t, strings.HasPrefix(m.ID, "ft:"), "Should not include fine-tuned models")
+			}
+		}
+	}
+
+	if hasAnthropic {
+		assert.Greater(t, providerCounts["anthropic"], 0, "Should have Anthropic models when ANTHROPIC_API_KEY is set")
+		// Verify Anthropic models have display names
+		for _, m := range models {
+			if m.Provider == "anthropic" {
+				assert.NotEmpty(t, m.DisplayName, "Anthropic models should have DisplayName: %s", m.ID)
+			}
+		}
+	}
+
+	// Verify sort order: anthropic before openai
+	if hasOpenAI && hasAnthropic {
+		seenOpenAI := false
+		for _, m := range models {
+			if m.Provider == "openai" {
+				seenOpenAI = true
+			}
+			if m.Provider == "anthropic" && seenOpenAI {
+				t.Error("Anthropic model found after OpenAI model — sort order is wrong")
+				break
+			}
+		}
+	}
+}
+
 // truncateStr truncates a string to n characters with "..." appended.
 func truncateStr(s string, n int) string {
 	if len(s) <= n {

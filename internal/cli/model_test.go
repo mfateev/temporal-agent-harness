@@ -233,6 +233,73 @@ func TestModel_PollResultApprovalPending(t *testing.T) {
 	assert.Len(t, rm.pendingApprovals, 1)
 }
 
+func TestModel_ModelCommandStartsFetch(t *testing.T) {
+	m := newTestModel()
+	m.workflowID = "codex-abc123"
+
+	m.textarea.SetValue("/model")
+	updated, cmd := m.handleInputKey(tea.KeyMsg{Type: tea.KeyEnter})
+	um := updated.(*Model)
+	assert.True(t, um.selectingModel, "selectingModel should be set")
+	assert.True(t, um.modelsFetching, "modelsFetching should be set")
+	assert.Nil(t, um.selector, "selector should not be created yet (fetching)")
+	assert.NotNil(t, cmd, "should return a fetch command")
+	assert.Contains(t, um.viewportContent, "Fetching")
+}
+
+func TestModel_ModelsFetchedShowsSelector(t *testing.T) {
+	m := newTestModel()
+	m.workflowID = "codex-abc123"
+	m.selectingModel = true
+	m.modelsFetching = true
+
+	fetched := []modelOption{
+		{Provider: "anthropic", Model: "claude-sonnet-4.5-20250929", DisplayName: "Claude Sonnet 4.5"},
+		{Provider: "openai", Model: "gpt-4o"},
+	}
+
+	updated, _ := m.Update(ModelsFetchedMsg{Models: fetched})
+	um := updated.(*Model)
+	assert.True(t, um.modelsFetched)
+	assert.False(t, um.modelsFetching)
+	assert.Equal(t, fetched, um.cachedModelOptions)
+	assert.NotNil(t, um.selector, "selector should be created after fetch")
+	assert.Contains(t, um.viewportContent, "Select a model")
+}
+
+func TestModel_ModelsFetchedFallback(t *testing.T) {
+	m := newTestModel()
+	m.workflowID = "codex-abc123"
+	m.selectingModel = true
+	m.modelsFetching = true
+
+	// nil Models signals fallback to defaults
+	updated, _ := m.Update(ModelsFetchedMsg{Models: nil})
+	um := updated.(*Model)
+	assert.True(t, um.modelsFetched)
+	assert.Nil(t, um.cachedModelOptions, "cache should stay nil for fallback")
+	assert.NotNil(t, um.selector, "selector should still be shown using defaults")
+	// The selector should have as many options as the default list
+	assert.Equal(t, len(defaultModelOptions()), len(um.currentModelOptions()))
+}
+
+func TestModel_ModelCommandCachedShowsImmediately(t *testing.T) {
+	m := newTestModel()
+	m.workflowID = "codex-abc123"
+	m.modelsFetched = true
+	m.cachedModelOptions = []modelOption{
+		{Provider: "openai", Model: "gpt-4o"},
+		{Provider: "anthropic", Model: "claude-sonnet-4.5-20250929"},
+	}
+
+	m.textarea.SetValue("/model")
+	updated, _ := m.handleInputKey(tea.KeyMsg{Type: tea.KeyEnter})
+	um := updated.(*Model)
+	assert.True(t, um.selectingModel)
+	assert.NotNil(t, um.selector, "selector shown immediately when cached")
+	assert.Contains(t, um.viewportContent, "Select a model")
+}
+
 func TestModel_PollResultAutoApprove(t *testing.T) {
 	m := newTestModel()
 	m.state = StateWatching
