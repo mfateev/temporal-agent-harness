@@ -115,6 +115,9 @@ func testInput(message string) WorkflowInput {
 				MaxTokens:     100,
 				ContextWindow: 128000,
 			},
+			Tools: models.ToolsConfig{
+				EnableRequestUserInput: true,
+			},
 			DisableSuggestions: true,
 		},
 	}
@@ -418,6 +421,9 @@ func (s *AgenticWorkflowTestSuite) TestMultiTurn_ContinueAsNewPreservesState() {
 				Temperature:   0,
 				MaxTokens:     100,
 				ContextWindow: 128000,
+			},
+			Tools: models.ToolsConfig{
+				EnableRequestUserInput: true,
 			},
 		},
 		MaxIterations:     20,

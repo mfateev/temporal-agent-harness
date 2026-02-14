@@ -590,18 +590,20 @@ func buildAgentSharedConfig(parentConfig models.SessionConfiguration, depth int)
 func applyRoleOverrides(cfg *models.SessionConfiguration, role AgentRole) {
 	switch role {
 	case AgentRoleExplorer:
-		// Explorer: cheaper model, medium reasoning, read-only tools
+		// Explorer: cheaper model, medium reasoning, read-only tools, one-shot.
 		cfg.Model.ReasoningEffort = "medium"
 		cfg.Tools.EnableWriteFile = false
 		cfg.Tools.EnableApplyPatch = false
+		cfg.Tools.EnableRequestUserInput = false
 		// Override to cheaper model for OpenAI providers
 		if cfg.Model.Provider == "openai" {
 			cfg.Model.Model = ExplorerModel
 		}
 		// Keep read tools: shell (for read commands), read_file, list_dir, grep_files
 	case AgentRolePlanner:
-		// Planner: read-only tools, no collab, custom base instructions.
+		// Planner: read-only tools, no collab, keeps user interaction.
 		// The planner explores the codebase and produces a plan without modifications.
+		// Keeps request_user_input — planners may ask clarifying questions.
 		cfg.Tools.EnableWriteFile = false
 		cfg.Tools.EnableApplyPatch = false
 		cfg.Tools.EnableCollab = false
@@ -609,15 +611,17 @@ func applyRoleOverrides(cfg *models.SessionConfiguration, role AgentRole) {
 		// Replace base instructions with planner-specific prompt
 		cfg.BaseInstructions = instructions.PlannerBaseInstructions
 	case AgentRoleOrchestrator:
-		// Orchestrator: coordination focus, no write tools, keeps shell for read commands.
-		// Matches Codex behavior where orchestrators retain shell access.
+		// Orchestrator: coordination focus, no write tools, one-shot.
 		cfg.Tools.EnableWriteFile = false
 		cfg.Tools.EnableApplyPatch = false
+		cfg.Tools.EnableRequestUserInput = false
 		cfg.BaseInstructions = instructions.OrchestratorBaseInstructions
 	case AgentRoleWorker:
-		// Worker: full tool access, same as parent
+		// Worker: full tool access, one-shot (no user interaction).
+		cfg.Tools.EnableRequestUserInput = false
 	case AgentRoleDefault:
-		// Default: same as parent
+		// Default: one-shot (no user interaction).
+		cfg.Tools.EnableRequestUserInput = false
 	}
 }
 

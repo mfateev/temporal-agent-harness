@@ -48,8 +48,9 @@ type ToolsConfig struct {
 	EnableListDir    bool `json:"enable_list_dir,omitempty"`    // Built-in list_dir tool
 	EnableGrepFiles  bool `json:"enable_grep_files,omitempty"`  // Built-in grep_files tool
 	EnableApplyPatch bool `json:"enable_apply_patch,omitempty"` // Built-in apply_patch tool
-	EnableCollab     bool `json:"enable_collab,omitempty"`      // Collaboration tools (spawn_agent, send_input, wait, close_agent, resume_agent)
-	EnableUpdatePlan bool `json:"enable_update_plan,omitempty"` // update_plan tool (intercepted by workflow, not dispatched)
+	EnableCollab            bool `json:"enable_collab,omitempty"`              // Collaboration tools (spawn_agent, send_input, wait, close_agent, resume_agent)
+	EnableUpdatePlan        bool `json:"enable_update_plan,omitempty"`        // update_plan tool (intercepted by workflow, not dispatched)
+	EnableRequestUserInput  bool `json:"enable_request_user_input,omitempty"` // request_user_input tool — when false, workflow auto-completes after turn
 
 	// ShellType selects which shell tool variant to expose to the LLM.
 	// When unset, ResolvedShellType() derives the value from EnableShell.
@@ -73,13 +74,14 @@ func (c ToolsConfig) ResolvedShellType() ShellToolType {
 // DefaultToolsConfig returns default tools configuration
 func DefaultToolsConfig() ToolsConfig {
 	return ToolsConfig{
-		EnableShell:      true,
-		EnableReadFile:   true,
-		EnableWriteFile:  true,
-		EnableListDir:    true,
-		EnableGrepFiles:  true,
-		EnableApplyPatch: true,
-		EnableUpdatePlan: true,
+		EnableShell:            true,
+		EnableReadFile:         true,
+		EnableWriteFile:        true,
+		EnableListDir:          true,
+		EnableGrepFiles:        true,
+		EnableApplyPatch:       true,
+		EnableUpdatePlan:       true,
+		EnableRequestUserInput: true,
 	}
 }
 

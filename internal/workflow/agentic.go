@@ -192,10 +192,12 @@ func (s *SessionState) runMultiTurnLoop(ctx workflow.Context) (WorkflowResult, e
 			})
 		}
 
-		// Child workflows auto-complete after their first turn.
-		// They are one-shot: the parent sends a task, the child does it and returns.
-		if s.AgentCtl != nil && s.AgentCtl.ParentDepth > 0 {
-			logger.Info("Child workflow completing after first turn", "depth", s.AgentCtl.ParentDepth)
+		// Workflows without request_user_input auto-complete after a turn.
+		// This is the one-shot pattern: the caller sends a task, the workflow
+		// does it and returns. Roles that can interact with the user
+		// (EnableRequestUserInput=true) stay alive for more input instead.
+		if !s.Config.Tools.EnableRequestUserInput {
+			logger.Info("Auto-completing workflow (request_user_input disabled)")
 			items, _ := s.History.GetRawItems()
 			return WorkflowResult{
 				ConversationID:    s.ConversationID,

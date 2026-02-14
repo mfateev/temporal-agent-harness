@@ -148,8 +148,11 @@ func buildToolSpecs(config models.ToolsConfig, profile models.ResolvedProfile) [
 		specs = append(specs, tools.NewApplyPatchToolSpec())
 	}
 
-	// request_user_input is always available (intercepted by workflow, not dispatched)
-	specs = append(specs, tools.NewRequestUserInputToolSpec())
+	// request_user_input allows the LLM to ask the user questions.
+	// When disabled, the workflow auto-completes after a turn (one-shot mode).
+	if config.EnableRequestUserInput {
+		specs = append(specs, tools.NewRequestUserInputToolSpec())
+	}
 
 	// update_plan is intercepted by the workflow (not dispatched as an activity)
 	if config.EnableUpdatePlan {

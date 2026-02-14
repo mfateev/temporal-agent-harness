@@ -269,6 +269,9 @@ func createWorker(c client.Client) worker.Worker {
 // default to avoid extra API calls; tests that exercise suggestions should
 // override DisableSuggestions.
 func testSessionConfig(maxTokens int, tools models.ToolsConfig) models.SessionConfiguration {
+	// All E2E tests are top-level workflows that need request_user_input
+	// to stay alive between turns (otherwise they auto-complete).
+	tools.EnableRequestUserInput = true
 	return models.SessionConfiguration{
 		Model: models.ModelConfig{
 			Model:         CheapModel,
@@ -885,8 +888,9 @@ func TestAgenticWorkflow_AnthropicProvider(t *testing.T) {
 				ContextWindow: 200000,
 			},
 			Tools: models.ToolsConfig{
-				EnableShell:    false,
-				EnableReadFile: false,
+				EnableShell:            false,
+				EnableReadFile:         false,
+				EnableRequestUserInput: true,
 			},
 		},
 	}
@@ -934,12 +938,13 @@ func TestAgenticWorkflow_AnthropicWithTools(t *testing.T) {
 				ContextWindow: 200000,
 			},
 			Tools: models.ToolsConfig{
-				EnableShell:      true,
-				EnableReadFile:   false,
-				EnableWriteFile:  false,
-				EnableListDir:    false,
-				EnableGrepFiles:  false,
-				EnableApplyPatch: false,
+				EnableShell:            true,
+				EnableReadFile:         false,
+				EnableWriteFile:        false,
+				EnableListDir:          false,
+				EnableGrepFiles:        false,
+				EnableApplyPatch:       false,
+				EnableRequestUserInput: true,
 			},
 		},
 	}
@@ -990,8 +995,9 @@ func TestAgenticWorkflow_ProactiveCompaction(t *testing.T) {
 				ContextWindow: 128000,
 			},
 			Tools: models.ToolsConfig{
-				EnableShell:    false,
-				EnableReadFile: false,
+				EnableShell:            false,
+				EnableReadFile:         false,
+				EnableRequestUserInput: true,
 			},
 			// Set limit low enough that a ~300-word response exceeds it.
 			// 300 words ≈ 1500 chars ≈ 375 tokens + prompt ≈ 500+ tokens total.
@@ -1192,9 +1198,10 @@ func TestAgenticWorkflow_SpawnAndWait(t *testing.T) {
 				ContextWindow: 128000,
 			},
 			Tools: models.ToolsConfig{
-				EnableShell:    false,
-				EnableReadFile: false,
-				EnableCollab:   true,
+				EnableShell:            false,
+				EnableReadFile:         false,
+				EnableCollab:           true,
+				EnableRequestUserInput: true,
 			},
 		},
 	}
@@ -1274,9 +1281,10 @@ func TestAgenticWorkflow_PlanMode(t *testing.T) {
 				ContextWindow: 128000,
 			},
 			Tools: models.ToolsConfig{
-				EnableShell:    true,
-				EnableReadFile: true,
-				EnableCollab:   true,
+				EnableShell:            true,
+				EnableReadFile:         true,
+				EnableCollab:           true,
+				EnableRequestUserInput: true,
 			},
 		},
 	}
@@ -1391,8 +1399,9 @@ func TestAgenticWorkflow_PromptSuggestion(t *testing.T) {
 				ContextWindow: 128000,
 			},
 			Tools: models.ToolsConfig{
-				EnableShell:    false,
-				EnableReadFile: false,
+				EnableShell:            false,
+				EnableReadFile:         false,
+				EnableRequestUserInput: true,
 			},
 			DisableSuggestions: false, // Enable suggestions for this test
 		},
@@ -1601,8 +1610,9 @@ func TestAgenticWorkflow_CodexModel(t *testing.T) {
 				ContextWindow: 200000,
 			},
 			Tools: models.ToolsConfig{
-				EnableShell:    false,
-				EnableReadFile: false,
+				EnableShell:            false,
+				EnableReadFile:         false,
+				EnableRequestUserInput: true,
 			},
 			DisableSuggestions: true,
 		},
@@ -1648,7 +1658,8 @@ func TestAgenticWorkflow_CodexModelWithTools(t *testing.T) {
 				ContextWindow: 200000,
 			},
 			Tools: models.ToolsConfig{
-				EnableShell: true,
+				EnableShell:            true,
+				EnableRequestUserInput: true,
 			},
 			DisableSuggestions: true,
 		},

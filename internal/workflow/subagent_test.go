@@ -175,22 +175,24 @@ func TestBuildAgentSharedConfig(t *testing.T) {
 }
 
 func TestApplyRoleOverrides(t *testing.T) {
-	t.Run("explorer: read-only, medium reasoning", func(t *testing.T) {
+	t.Run("explorer: read-only, medium reasoning, one-shot", func(t *testing.T) {
 		cfg := models.SessionConfiguration{
 			Model: models.ModelConfig{Provider: "openai", Model: "gpt-4o"},
 			Tools: models.ToolsConfig{
-				EnableShell:      true,
-				EnableReadFile:   true,
-				EnableWriteFile:  true,
-				EnableApplyPatch: true,
-				EnableListDir:    true,
-				EnableGrepFiles:  true,
+				EnableShell:            true,
+				EnableReadFile:         true,
+				EnableWriteFile:        true,
+				EnableApplyPatch:       true,
+				EnableListDir:          true,
+				EnableGrepFiles:        true,
+				EnableRequestUserInput: true,
 			},
 		}
 		applyRoleOverrides(&cfg, AgentRoleExplorer)
 		assert.Equal(t, "medium", cfg.Model.ReasoningEffort)
 		assert.False(t, cfg.Tools.EnableWriteFile, "explorer should not write")
 		assert.False(t, cfg.Tools.EnableApplyPatch, "explorer should not patch")
+		assert.False(t, cfg.Tools.EnableRequestUserInput, "explorer is one-shot")
 		assert.True(t, cfg.Tools.EnableShell, "explorer keeps shell for read commands")
 		assert.True(t, cfg.Tools.EnableReadFile, "explorer keeps read_file")
 		assert.True(t, cfg.Tools.EnableListDir, "explorer keeps list_dir")
@@ -213,31 +215,34 @@ func TestApplyRoleOverrides(t *testing.T) {
 		assert.Equal(t, "medium", cfg.Model.ReasoningEffort)
 	})
 
-	t.Run("orchestrator: no write tools, keeps shell, has base instructions", func(t *testing.T) {
+	t.Run("orchestrator: no write tools, one-shot, has base instructions", func(t *testing.T) {
 		cfg := models.SessionConfiguration{
 			Tools: models.ToolsConfig{
-				EnableShell:      true,
-				EnableReadFile:   true,
-				EnableWriteFile:  true,
-				EnableApplyPatch: true,
+				EnableShell:            true,
+				EnableReadFile:         true,
+				EnableWriteFile:        true,
+				EnableApplyPatch:       true,
+				EnableRequestUserInput: true,
 			},
 		}
 		applyRoleOverrides(&cfg, AgentRoleOrchestrator)
 		assert.False(t, cfg.Tools.EnableWriteFile)
 		assert.False(t, cfg.Tools.EnableApplyPatch)
+		assert.False(t, cfg.Tools.EnableRequestUserInput, "orchestrator is one-shot")
 		assert.True(t, cfg.Tools.EnableShell, "orchestrator keeps shell for read commands")
 		assert.True(t, cfg.Tools.EnableReadFile, "orchestrator keeps read_file")
 		assert.Contains(t, cfg.BaseInstructions, "Sub-agents",
 			"orchestrator should have base instructions with sub-agent guidance")
 	})
 
-	t.Run("worker: keeps everything", func(t *testing.T) {
+	t.Run("worker: full tools, one-shot", func(t *testing.T) {
 		cfg := models.SessionConfiguration{
 			Tools: models.ToolsConfig{
-				EnableShell:      true,
-				EnableReadFile:   true,
-				EnableWriteFile:  true,
-				EnableApplyPatch: true,
+				EnableShell:            true,
+				EnableReadFile:         true,
+				EnableWriteFile:        true,
+				EnableApplyPatch:       true,
+				EnableRequestUserInput: true,
 			},
 		}
 		applyRoleOverrides(&cfg, AgentRoleWorker)
@@ -245,15 +250,17 @@ func TestApplyRoleOverrides(t *testing.T) {
 		assert.True(t, cfg.Tools.EnableReadFile)
 		assert.True(t, cfg.Tools.EnableWriteFile)
 		assert.True(t, cfg.Tools.EnableApplyPatch)
+		assert.False(t, cfg.Tools.EnableRequestUserInput, "worker is one-shot")
 	})
 
-	t.Run("default: keeps everything", func(t *testing.T) {
+	t.Run("default: one-shot", func(t *testing.T) {
 		cfg := models.SessionConfiguration{
 			Tools: models.ToolsConfig{
-				EnableShell:      true,
-				EnableReadFile:   true,
-				EnableWriteFile:  true,
-				EnableApplyPatch: true,
+				EnableShell:            true,
+				EnableReadFile:         true,
+				EnableWriteFile:        true,
+				EnableApplyPatch:       true,
+				EnableRequestUserInput: true,
 			},
 		}
 		applyRoleOverrides(&cfg, AgentRoleDefault)
@@ -261,19 +268,21 @@ func TestApplyRoleOverrides(t *testing.T) {
 		assert.True(t, cfg.Tools.EnableReadFile)
 		assert.True(t, cfg.Tools.EnableWriteFile)
 		assert.True(t, cfg.Tools.EnableApplyPatch)
+		assert.False(t, cfg.Tools.EnableRequestUserInput, "default is one-shot")
 	})
 
-	t.Run("planner: read-only, no collab, custom instructions", func(t *testing.T) {
+	t.Run("planner: read-only, no collab, interactive, custom instructions", func(t *testing.T) {
 		cfg := models.SessionConfiguration{
 			Model: models.ModelConfig{Model: "gpt-4o"},
 			Tools: models.ToolsConfig{
-				EnableShell:      true,
-				EnableReadFile:   true,
-				EnableWriteFile:  true,
-				EnableApplyPatch: true,
-				EnableListDir:    true,
-				EnableGrepFiles:  true,
-				EnableCollab:     true,
+				EnableShell:            true,
+				EnableReadFile:         true,
+				EnableWriteFile:        true,
+				EnableApplyPatch:       true,
+				EnableListDir:          true,
+				EnableGrepFiles:        true,
+				EnableCollab:           true,
+				EnableRequestUserInput: true,
 			},
 			BaseInstructions: "original instructions",
 		}
@@ -281,6 +290,7 @@ func TestApplyRoleOverrides(t *testing.T) {
 		assert.False(t, cfg.Tools.EnableWriteFile, "planner should not write")
 		assert.False(t, cfg.Tools.EnableApplyPatch, "planner should not patch")
 		assert.False(t, cfg.Tools.EnableCollab, "planner should not spawn children")
+		assert.True(t, cfg.Tools.EnableRequestUserInput, "planner keeps user interaction")
 		assert.True(t, cfg.Tools.EnableShell, "planner keeps shell for read commands")
 		assert.True(t, cfg.Tools.EnableReadFile, "planner keeps read_file")
 		assert.True(t, cfg.Tools.EnableListDir, "planner keeps list_dir")
@@ -295,9 +305,10 @@ func TestApplyRoleOverrides(t *testing.T) {
 func TestBuildToolSpecs_WithCollabTools(t *testing.T) {
 	t.Run("collab disabled", func(t *testing.T) {
 		specs := buildToolSpecs(models.ToolsConfig{
-			EnableShell:    true,
-			EnableReadFile: true,
-			EnableCollab:   false,
+			EnableShell:            true,
+			EnableReadFile:         true,
+			EnableCollab:           false,
+			EnableRequestUserInput: true,
 		}, models.ResolvedProfile{})
 
 		names := specNames(specs)
@@ -313,9 +324,10 @@ func TestBuildToolSpecs_WithCollabTools(t *testing.T) {
 
 	t.Run("collab enabled", func(t *testing.T) {
 		specs := buildToolSpecs(models.ToolsConfig{
-			EnableShell:    true,
-			EnableReadFile: true,
-			EnableCollab:   true,
+			EnableShell:            true,
+			EnableReadFile:         true,
+			EnableCollab:           true,
+			EnableRequestUserInput: true,
 		}, models.ResolvedProfile{})
 
 		names := specNames(specs)
