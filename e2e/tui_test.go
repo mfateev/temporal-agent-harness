@@ -21,14 +21,17 @@ import (
 // Temporal server and worker already started by TestMain. This unifies TUI
 // tests into the Go E2E suite so the push-gate hook covers both.
 func TestTUI(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping TUI tests in short mode")
 	}
-	if tcxBinaryPath == "" {
-		t.Skip("tcx binary not built; skipping TUI tests")
-	}
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node not found in PATH; skipping TUI tests")
+	}
+	// Lazily build the tcx binary (only TestTUI needs it)
+	binary := getTcxBinary()
+	if binary == "" {
+		t.Skip("tcx binary build failed; skipping TUI tests")
 	}
 
 	// Resolve tui-tests/ directory relative to the repo root.
@@ -59,7 +62,7 @@ func TestTUI(t *testing.T) {
 	cmd := exec.Command("npx", "@microsoft/tui-test")
 	cmd.Dir = tuiDir
 	cmd.Env = append(os.Environ(),
-		"TCX_BINARY="+tcxBinaryPath,
+		"TCX_BINARY="+binary,
 		"TEMPORAL_HOST="+TestHostPort,
 	)
 	if seedID != "" {

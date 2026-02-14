@@ -359,7 +359,7 @@ func TestCollabToolsDisabledForChildren(t *testing.T) {
 func TestBuildToolSpecs_ShellType_Default(t *testing.T) {
 	specs := buildToolSpecs(models.ToolsConfig{
 		ShellType: models.ShellToolDefault,
-	})
+	}, models.ResolvedProfile{})
 	names := specNames(specs)
 	assert.Contains(t, names, "shell", "ShellToolDefault should produce 'shell' spec")
 	assert.NotContains(t, names, "shell_command")
@@ -368,7 +368,7 @@ func TestBuildToolSpecs_ShellType_Default(t *testing.T) {
 func TestBuildToolSpecs_ShellType_ShellCommand(t *testing.T) {
 	specs := buildToolSpecs(models.ToolsConfig{
 		ShellType: models.ShellToolShellCommand,
-	})
+	}, models.ResolvedProfile{})
 	names := specNames(specs)
 	assert.Contains(t, names, "shell_command", "ShellToolShellCommand should produce 'shell_command' spec")
 	assert.NotContains(t, names, "shell")
@@ -377,7 +377,7 @@ func TestBuildToolSpecs_ShellType_ShellCommand(t *testing.T) {
 func TestBuildToolSpecs_ShellType_Disabled(t *testing.T) {
 	specs := buildToolSpecs(models.ToolsConfig{
 		ShellType: models.ShellToolDisabled,
-	})
+	}, models.ResolvedProfile{})
 	names := specNames(specs)
 	assert.NotContains(t, names, "shell")
 	assert.NotContains(t, names, "shell_command")
@@ -387,14 +387,14 @@ func TestBuildToolSpecs_ShellType_BackwardCompat(t *testing.T) {
 	// EnableShell=true with no explicit ShellType should produce shell_command
 	specs := buildToolSpecs(models.ToolsConfig{
 		EnableShell: true,
-	})
+	}, models.ResolvedProfile{})
 	names := specNames(specs)
 	assert.Contains(t, names, "shell_command", "EnableShell=true should default to shell_command")
 
 	// EnableShell=false with no explicit ShellType should produce nothing
 	specs = buildToolSpecs(models.ToolsConfig{
 		EnableShell: false,
-	})
+	}, models.ResolvedProfile{})
 	names = specNames(specs)
 	assert.NotContains(t, names, "shell")
 	assert.NotContains(t, names, "shell_command")
@@ -405,7 +405,7 @@ func TestBuildToolSpecs_ShellType_ExplicitOverridesEnableShell(t *testing.T) {
 	specs := buildToolSpecs(models.ToolsConfig{
 		EnableShell: false,
 		ShellType:   models.ShellToolDefault,
-	})
+	}, models.ResolvedProfile{})
 	names := specNames(specs)
 	assert.Contains(t, names, "shell", "explicit ShellType should override EnableShell=false")
 }
@@ -617,7 +617,7 @@ func specNames(specs []tools.ToolSpec) []string {
 func TestBuildToolSpecs_UpdatePlan_Enabled(t *testing.T) {
 	specs := buildToolSpecs(models.ToolsConfig{
 		EnableUpdatePlan: true,
-	})
+	}, models.ResolvedProfile{})
 	names := specNames(specs)
 	assert.Contains(t, names, "update_plan", "update_plan should be present when enabled")
 }
@@ -625,13 +625,13 @@ func TestBuildToolSpecs_UpdatePlan_Enabled(t *testing.T) {
 func TestBuildToolSpecs_UpdatePlan_Disabled(t *testing.T) {
 	specs := buildToolSpecs(models.ToolsConfig{
 		EnableUpdatePlan: false,
-	})
+	}, models.ResolvedProfile{})
 	names := specNames(specs)
 	assert.NotContains(t, names, "update_plan", "update_plan should not be present when disabled")
 }
 
 func TestBuildToolSpecs_UpdatePlan_DefaultConfig(t *testing.T) {
-	specs := buildToolSpecs(models.DefaultToolsConfig())
+	specs := buildToolSpecs(models.DefaultToolsConfig(), models.ResolvedProfile{})
 	names := specNames(specs)
 	assert.Contains(t, names, "update_plan", "update_plan should be present in default config")
 }

@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -46,8 +47,24 @@ var (
 	temporalCmd    *exec.Cmd
 	testWorker     worker.Worker
 	temporalClient client.Client
-	tcxBinaryPath  string // Path to tcx binary built for TUI tests; empty if build failed.
+	tcxBinaryPath  string    // Path to tcx binary built for TUI tests; empty if build failed.
+	tcxBuildOnce   sync.Once // Ensures tcx binary is built at most once.
 )
+
+// getTcxBinary lazily builds the tcx binary on first call. Thread-safe.
+func getTcxBinary() string {
+	tcxBuildOnce.Do(func() {
+		tcxBinaryPath = buildTcxBinary()
+	})
+	return tcxBinaryPath
+}
+
+// cleanupTcxBinary removes the tcx binary if it was built.
+func cleanupTcxBinary() {
+	if tcxBinaryPath != "" {
+		os.Remove(tcxBinaryPath)
+	}
+}
 
 func TestMain(m *testing.M) {
 	// Skip everything if no LLM provider key is set.
@@ -100,11 +117,8 @@ func TestMain(m *testing.M) {
 		}
 	}()
 	// Give the worker a moment to register with the server
-	time.Sleep(time.Second)
+	time.Sleep(200 * time.Millisecond)
 	log.Println("E2E: Worker started")
-
-	// 5b. Build tcx binary for TUI tests (non-fatal: TUI tests skip if missing)
-	tcxBinaryPath = buildTcxBinary()
 
 	// 6. Run tests
 	code := m.Run()
@@ -116,9 +130,7 @@ func TestMain(m *testing.M) {
 
 	// 7. Tear down
 	log.Println("E2E: Tearing down...")
-	if tcxBinaryPath != "" {
-		os.Remove(tcxBinaryPath)
-	}
+	cleanupTcxBinary()
 	testWorker.Stop()
 	temporalClient.Close()
 	temporalCmd.Process.Kill()
@@ -287,7 +299,7 @@ func dialTemporal(t *testing.T) client.Client {
 func waitForTurnComplete(t *testing.T, ctx context.Context, c client.Client, workflowID string, expectedTurnCount int) []models.ConversationItem {
 	t.Helper()
 	deadline := time.After(2 * time.Minute)
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
@@ -365,7 +377,7 @@ func startWorkflow(t *testing.T, ctx context.Context, c client.Client, input wor
 func waitForCompactionAndTurnComplete(t *testing.T, ctx context.Context, c client.Client, workflowID string) []models.ConversationItem {
 	t.Helper()
 	deadline := time.After(2 * time.Minute)
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
@@ -408,6 +420,7 @@ func waitForCompactionAndTurnComplete(t *testing.T, ctx context.Context, c clien
 
 // TestAgenticWorkflow_SingleTurn tests a simple conversation without tools
 func TestAgenticWorkflow_SingleTurn(t *testing.T) {
+	t.Parallel()
 	c := dialTemporal(t)
 
 	workflowID := "test-single-turn-" + uuid.New().String()[:8]
@@ -443,6 +456,7 @@ func TestAgenticWorkflow_SingleTurn(t *testing.T) {
 
 // TestAgenticWorkflow_WithShellTool tests LLM calling the shell tool
 func TestAgenticWorkflow_WithShellTool(t *testing.T) {
+	t.Parallel()
 	c := dialTemporal(t)
 
 	workflowID := "test-shell-tool-" + uuid.New().String()[:8]
@@ -475,6 +489,7 @@ func TestAgenticWorkflow_WithShellTool(t *testing.T) {
 
 // TestAgenticWorkflow_MultiTurn tests a multi-turn conversation with tools
 func TestAgenticWorkflow_MultiTurn(t *testing.T) {
+	t.Parallel()
 	c := dialTemporal(t)
 
 	workflowID := "test-multi-turn-" + uuid.New().String()[:8]
@@ -514,6 +529,7 @@ func TestAgenticWorkflow_MultiTurn(t *testing.T) {
 
 // TestAgenticWorkflow_ReadFile tests the read_file tool specifically
 func TestAgenticWorkflow_ReadFile(t *testing.T) {
+	t.Parallel()
 	c := dialTemporal(t)
 
 	testFile := "/tmp/codex-read-test-" + uuid.New().String()[:8] + ".txt"
@@ -553,6 +569,7 @@ func TestAgenticWorkflow_ReadFile(t *testing.T) {
 
 // TestAgenticWorkflow_ListDir tests the list_dir tool
 func TestAgenticWorkflow_ListDir(t *testing.T) {
+	t.Parallel()
 	c := dialTemporal(t)
 
 	testDir := "/tmp/codex-listdir-test-" + uuid.New().String()[:8]
@@ -593,6 +610,7 @@ func TestAgenticWorkflow_ListDir(t *testing.T) {
 
 // TestAgenticWorkflow_GrepFiles tests the grep_files tool
 func TestAgenticWorkflow_GrepFiles(t *testing.T) {
+	t.Parallel()
 	c := dialTemporal(t)
 
 	testDir := "/tmp/codex-grep-test-" + uuid.New().String()[:8]
@@ -633,6 +651,7 @@ func TestAgenticWorkflow_GrepFiles(t *testing.T) {
 
 // TestAgenticWorkflow_WriteFile tests the write_file tool
 func TestAgenticWorkflow_WriteFile(t *testing.T) {
+	t.Parallel()
 	c := dialTemporal(t)
 
 	testFile := "/tmp/codex-write-test-" + uuid.New().String()[:8] + ".txt"
@@ -680,6 +699,7 @@ func TestAgenticWorkflow_WriteFile(t *testing.T) {
 
 // TestAgenticWorkflow_ApplyPatch tests the apply_patch tool
 func TestAgenticWorkflow_ApplyPatch(t *testing.T) {
+	t.Parallel()
 	c := dialTemporal(t)
 
 	testFile := "/tmp/codex-patch-test-" + uuid.New().String()[:8] + ".txt"
@@ -726,6 +746,7 @@ func TestAgenticWorkflow_ApplyPatch(t *testing.T) {
 
 // TestAgenticWorkflow_QueryHistory tests the get_conversation_items query handler
 func TestAgenticWorkflow_QueryHistory(t *testing.T) {
+	t.Parallel()
 	c := dialTemporal(t)
 
 	workflowID := "test-query-history-" + uuid.New().String()[:8]
@@ -768,6 +789,7 @@ func TestAgenticWorkflow_QueryHistory(t *testing.T) {
 
 // TestAgenticWorkflow_MultiTurnInteractive tests sending a second user message
 func TestAgenticWorkflow_MultiTurnInteractive(t *testing.T) {
+	t.Parallel()
 	c := dialTemporal(t)
 
 	workflowID := "test-multi-interactive-" + uuid.New().String()[:8]
@@ -814,6 +836,7 @@ func TestAgenticWorkflow_MultiTurnInteractive(t *testing.T) {
 
 // TestAgenticWorkflow_Shutdown tests clean shutdown
 func TestAgenticWorkflow_Shutdown(t *testing.T) {
+	t.Parallel()
 	c := dialTemporal(t)
 
 	workflowID := "test-shutdown-" + uuid.New().String()[:8]
@@ -842,6 +865,7 @@ func TestAgenticWorkflow_Shutdown(t *testing.T) {
 
 // TestAgenticWorkflow_AnthropicProvider tests using Anthropic Claude models
 func TestAgenticWorkflow_AnthropicProvider(t *testing.T) {
+	t.Parallel()
 	c := dialTemporal(t)
 
 	if os.Getenv("ANTHROPIC_API_KEY") == "" {
@@ -890,6 +914,7 @@ func TestAgenticWorkflow_AnthropicProvider(t *testing.T) {
 
 // TestAgenticWorkflow_AnthropicWithTools tests Anthropic with tool calling
 func TestAgenticWorkflow_AnthropicWithTools(t *testing.T) {
+	t.Parallel()
 	c := dialTemporal(t)
 
 	if os.Getenv("ANTHROPIC_API_KEY") == "" {
@@ -947,6 +972,7 @@ func TestAgenticWorkflow_AnthropicWithTools(t *testing.T) {
 // to trigger compaction on the second turn. Verifies the conversation continues
 // successfully with a compaction marker in history.
 func TestAgenticWorkflow_ProactiveCompaction(t *testing.T) {
+	t.Parallel()
 	c := dialTemporal(t)
 
 	workflowID := "test-compaction-" + uuid.New().String()[:8]
@@ -1048,6 +1074,7 @@ func TestAgenticWorkflow_ProactiveCompaction(t *testing.T) {
 //  4. Send another user message to verify the workflow resumes normally.
 //  5. Shutdown and verify result.
 func TestAgenticWorkflow_ManualCompact(t *testing.T) {
+	t.Parallel()
 	c := dialTemporal(t)
 
 	workflowID := "test-manual-compact-" + uuid.New().String()[:8]
@@ -1088,7 +1115,7 @@ func TestAgenticWorkflow_ManualCompact(t *testing.T) {
 
 	// 3. Wait for compaction marker in history
 	deadline := time.After(time.Minute)
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
 	var items []models.ConversationItem
@@ -1147,6 +1174,7 @@ func TestAgenticWorkflow_ManualCompact(t *testing.T) {
 // Parent spawns an explorer child to answer a question, waits for completion,
 // and reports the result. Verifies child workflow appears and results flow back.
 func TestAgenticWorkflow_SpawnAndWait(t *testing.T) {
+	t.Parallel()
 	c := dialTemporal(t)
 
 	workflowID := "test-spawn-wait-" + uuid.New().String()[:8]
@@ -1221,6 +1249,7 @@ func TestAgenticWorkflow_SpawnAndWait(t *testing.T) {
 // 4. Shutdown the planner child
 // 5. Verify the plan text flows back from the child
 func TestAgenticWorkflow_PlanMode(t *testing.T) {
+	t.Parallel()
 	c := dialTemporal(t)
 
 	workflowID := "test-plan-mode-" + uuid.New().String()[:8]
@@ -1337,6 +1366,7 @@ func TestAgenticWorkflow_PlanMode(t *testing.T) {
 // the GenerateSuggestions activity runs and produces a suggestion visible
 // via the get_turn_status query.
 func TestAgenticWorkflow_PromptSuggestion(t *testing.T) {
+	t.Parallel()
 	c := dialTemporal(t)
 
 	workflowID := "test-suggestion-" + uuid.New().String()[:8]
@@ -1419,6 +1449,7 @@ done:
 // TestAgenticWorkflow_SuggestionDisabledE2E tests that with DisableSuggestions=true,
 // no suggestion appears after turn completion.
 func TestAgenticWorkflow_SuggestionDisabledE2E(t *testing.T) {
+	t.Parallel()
 	c := dialTemporal(t)
 
 	workflowID := "test-no-suggestion-" + uuid.New().String()[:8]
@@ -1441,7 +1472,7 @@ func TestAgenticWorkflow_SuggestionDisabledE2E(t *testing.T) {
 	waitForTurnComplete(t, ctx, c, workflowID, 1)
 
 	// Wait a moment for any async suggestion to arrive (it shouldn't)
-	time.Sleep(2 * time.Second)
+	time.Sleep(500 * time.Millisecond)
 
 	// Query turn status — suggestion should be empty
 	resp, err := c.QueryWorkflow(ctx, workflowID, "", workflow.QueryGetTurnStatus)
@@ -1464,6 +1495,7 @@ func TestAgenticWorkflow_SuggestionDisabledE2E(t *testing.T) {
 // - Anthropic models have DisplayName set
 // - OpenAI models are filtered to chat-capable models only
 func TestFetchAvailableModels_E2E(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping E2E test in short mode")
 	}
@@ -1543,6 +1575,7 @@ func TestFetchAvailableModels_E2E(t *testing.T) {
 // Codex models are code-specialized reasoning models that may require different
 // API parameters (e.g., reasoning effort instead of temperature).
 func TestAgenticWorkflow_CodexModel(t *testing.T) {
+	t.Parallel()
 	c := dialTemporal(t)
 
 	workflowID := "test-codex-model-" + uuid.New().String()[:8]
@@ -1589,6 +1622,7 @@ func TestAgenticWorkflow_CodexModel(t *testing.T) {
 
 // TestAgenticWorkflow_CodexModelWithTools tests Codex model with tool calling.
 func TestAgenticWorkflow_CodexModelWithTools(t *testing.T) {
+	t.Parallel()
 	c := dialTemporal(t)
 
 	workflowID := "test-codex-tools-" + uuid.New().String()[:8]
@@ -1631,6 +1665,7 @@ func TestAgenticWorkflow_CodexModelWithTools(t *testing.T) {
 // TestAgenticWorkflow_UpdatePlan tests the update_plan intercepted tool.
 // The LLM is asked to create a plan, and we verify the plan is visible in TurnStatus.
 func TestAgenticWorkflow_UpdatePlan(t *testing.T) {
+	t.Parallel()
 	c := dialTemporal(t)
 
 	workflowID := "test-update-plan-" + uuid.New().String()[:8]
