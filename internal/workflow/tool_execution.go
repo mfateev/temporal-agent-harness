@@ -113,8 +113,10 @@ func executeToolsInParallel(ctx workflow.Context, functionCalls []models.Convers
 	return results, nil
 }
 
-// buildToolSpecs builds tool specifications based on configuration.
-func buildToolSpecs(config models.ToolsConfig) []tools.ToolSpec {
+// buildToolSpecs builds tool specifications based on configuration and profile.
+// After building the base set from ToolsConfig, it filters out any tools
+// listed in the profile's ToolOverrides.Disable list.
+func buildToolSpecs(config models.ToolsConfig, profile models.ResolvedProfile) []tools.ToolSpec {
 	specs := []tools.ToolSpec{}
 
 	switch config.ResolvedShellType() {
@@ -158,6 +160,21 @@ func buildToolSpecs(config models.ToolsConfig) []tools.ToolSpec {
 			tools.NewCloseAgentToolSpec(),
 			tools.NewResumeAgentToolSpec(),
 		)
+	}
+
+	// Filter out tools disabled by the profile
+	if profile.Tools != nil && len(profile.Tools.Disable) > 0 {
+		disabled := make(map[string]bool, len(profile.Tools.Disable))
+		for _, name := range profile.Tools.Disable {
+			disabled[name] = true
+		}
+		filtered := specs[:0]
+		for _, spec := range specs {
+			if !disabled[spec.Name] {
+				filtered = append(filtered, spec)
+			}
+		}
+		specs = filtered
 	}
 
 	return specs

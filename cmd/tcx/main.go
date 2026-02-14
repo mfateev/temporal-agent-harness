@@ -82,7 +82,7 @@ func main() {
 	cwd, _ := os.Getwd()
 	var cliProjectDocs string
 	if gitRoot, err := instructions.FindGitRoot(cwd); err == nil && gitRoot != "" {
-		cliProjectDocs, _ = instructions.LoadProjectDocs(gitRoot, cwd)
+		cliProjectDocs, _ = instructions.LoadProjectDocs(gitRoot, cwd, nil)
 	}
 
 	// Load user personal instructions (~/.codex/instructions.md)
