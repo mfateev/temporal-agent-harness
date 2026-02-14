@@ -1220,6 +1220,8 @@ func TestAgenticWorkflow_SpawnAndWait(t *testing.T) {
 
 	hasSpawnCall := false
 	hasWaitCall := false
+	waitTimedOut := false
+	childCompleted := false
 	for _, item := range items {
 		if item.Type == models.ItemTypeFunctionCall {
 			t.Logf("Tool call: %s (call_id: %s)", item.Name, item.CallID)
@@ -1232,11 +1234,19 @@ func TestAgenticWorkflow_SpawnAndWait(t *testing.T) {
 		}
 		if item.Type == models.ItemTypeFunctionCallOutput {
 			t.Logf("Tool output (call_id: %s): %s", item.CallID, truncateStr(item.Output.Content, 200))
+			if item.Output != nil && strings.Contains(item.Output.Content, `"timed_out":true`) {
+				waitTimedOut = true
+			}
+			if item.Output != nil && strings.Contains(item.Output.Content, `"completed"`) {
+				childCompleted = true
+			}
 		}
 	}
 
 	assert.True(t, hasSpawnCall, "LLM should have called spawn_agent")
-	// wait is optional — the LLM may or may not call it depending on how it interprets the results
+	assert.True(t, hasWaitCall, "LLM should have called wait")
+	assert.False(t, waitTimedOut, "wait tool should not time out — child should auto-complete after first turn")
+	assert.True(t, childCompleted, "child agent should reach completed status")
 
 	t.Logf("Spawn-and-wait test - Total tokens: %d, spawn_agent: %v, wait: %v",
 		result.TotalTokens, hasSpawnCall, hasWaitCall)

@@ -192,6 +192,22 @@ func (s *SessionState) runMultiTurnLoop(ctx workflow.Context) (WorkflowResult, e
 			})
 		}
 
+		// Child workflows auto-complete after their first turn.
+		// They are one-shot: the parent sends a task, the child does it and returns.
+		if s.AgentCtl != nil && s.AgentCtl.ParentDepth > 0 {
+			logger.Info("Child workflow completing after first turn", "depth", s.AgentCtl.ParentDepth)
+			items, _ := s.History.GetRawItems()
+			return WorkflowResult{
+				ConversationID:    s.ConversationID,
+				TotalIterations:   s.IterationCount,
+				TotalTokens:       s.TotalTokens,
+				TotalCachedTokens: s.TotalCachedTokens,
+				ToolCallsExecuted: s.ToolCallsExecuted,
+				EndReason:         "completed",
+				FinalMessage:      extractFinalMessage(items),
+			}, nil
+		}
+
 		s.Phase = PhaseWaitingForInput
 		s.ToolsInFlight = nil
 
