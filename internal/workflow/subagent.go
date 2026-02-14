@@ -10,6 +10,7 @@ package workflow
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.temporal.io/sdk/workflow"
@@ -17,6 +18,10 @@ import (
 	"github.com/mfateev/temporal-agent-harness/internal/instructions"
 	"github.com/mfateev/temporal-agent-harness/internal/models"
 )
+
+// ExplorerModel is the cheaper model used for explorer agents on OpenAI.
+// Maps to: codex-rs/core/src/agent/role.rs EXPLORER_MODEL
+const ExplorerModel = "gpt-5.1-codex-mini"
 
 // ---------------------------------------------------------------------------
 // Constants — match Codex Rust guards.rs / collab.rs
@@ -176,6 +181,50 @@ func isCollabToolCall(name string) bool {
 }
 
 // ---------------------------------------------------------------------------
+// collabInputItem — structured content item for spawn_agent / send_input.
+// Maps to: codex-rs/core/src/agent/collab.rs ContentItem
+// ---------------------------------------------------------------------------
+
+type collabInputItem struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
+	Path     string `json:"path,omitempty"`
+	Name     string `json:"name,omitempty"`
+}
+
+// parseCollabInput validates that exactly one of message or items is provided
+// and returns the resolved plain-text message. For items, only text items are
+// extracted (images and paths are not yet supported as message content).
+func parseCollabInput(message *string, items []collabInputItem) (string, error) {
+	hasMessage := message != nil && *message != ""
+	hasItems := len(items) > 0
+
+	if hasMessage && hasItems {
+		return "", fmt.Errorf("provide either message or items, not both")
+	}
+	if !hasMessage && !hasItems {
+		return "", fmt.Errorf("either message or items is required")
+	}
+
+	if hasMessage {
+		return *message, nil
+	}
+
+	// Extract text from items
+	var texts []string
+	for _, item := range items {
+		if item.Type == "text" && item.Text != "" {
+			texts = append(texts, item.Text)
+		}
+	}
+	if len(texts) == 0 {
+		return "", fmt.Errorf("items must contain at least one text item")
+	}
+	return strings.Join(texts, "\n"), nil
+}
+
+// ---------------------------------------------------------------------------
 // handleCollabToolCall dispatches to the correct collab handler.
 // ---------------------------------------------------------------------------
 
@@ -206,14 +255,17 @@ func (s *SessionState) handleSpawnAgent(ctx workflow.Context, fc models.Conversa
 
 	// Parse arguments
 	var args struct {
-		Message   string `json:"message"`
-		AgentType string `json:"agent_type"`
+		Message   *string          `json:"message"`
+		Items     []collabInputItem `json:"items"`
+		AgentType string           `json:"agent_type"`
 	}
 	if err := json.Unmarshal([]byte(fc.Arguments), &args); err != nil {
 		return collabErrorOutput(fc.CallID, fmt.Sprintf("invalid arguments: %v", err)), nil
 	}
-	if args.Message == "" {
-		return collabErrorOutput(fc.CallID, "message is required"), nil
+
+	msg, err := parseCollabInput(args.Message, args.Items)
+	if err != nil {
+		return collabErrorOutput(fc.CallID, err.Error()), nil
 	}
 
 	// Check depth limit
@@ -227,14 +279,14 @@ func (s *SessionState) handleSpawnAgent(ctx workflow.Context, fc models.Conversa
 	agentID := nextAgentID(ctx)
 
 	// Build child workflow input
-	childInput := buildAgentSpawnConfig(s.Config, role, args.Message, childDepth)
+	childInput := buildAgentSpawnConfig(s.Config, role, msg, childDepth)
 
 	// Register agent info before starting the child
 	info := &AgentInfo{
 		AgentID:     agentID,
 		Role:        role,
 		Status:      AgentStatusPendingInit,
-		TaskMessage: args.Message,
+		TaskMessage: msg,
 	}
 	s.AgentCtl.Agents[agentID] = info
 
@@ -283,9 +335,10 @@ func (s *SessionState) handleSendInput(ctx workflow.Context, fc models.Conversat
 	logger := workflow.GetLogger(ctx)
 
 	var args struct {
-		ID        string `json:"id"`
-		Message   string `json:"message"`
-		Interrupt bool   `json:"interrupt"`
+		ID        string           `json:"id"`
+		Message   *string          `json:"message"`
+		Items     []collabInputItem `json:"items"`
+		Interrupt bool             `json:"interrupt"`
 	}
 	if err := json.Unmarshal([]byte(fc.Arguments), &args); err != nil {
 		return collabErrorOutput(fc.CallID, fmt.Sprintf("invalid arguments: %v", err)), nil
@@ -293,8 +346,10 @@ func (s *SessionState) handleSendInput(ctx workflow.Context, fc models.Conversat
 	if args.ID == "" {
 		return collabErrorOutput(fc.CallID, "id is required"), nil
 	}
-	if args.Message == "" {
-		return collabErrorOutput(fc.CallID, "message is required"), nil
+
+	msg, err := parseCollabInput(args.Message, args.Items)
+	if err != nil {
+		return collabErrorOutput(fc.CallID, err.Error()), nil
 	}
 
 	info, ok := s.AgentCtl.Agents[args.ID]
@@ -306,14 +361,14 @@ func (s *SessionState) handleSendInput(ctx workflow.Context, fc models.Conversat
 	}
 
 	signal := AgentInputSignal{
-		Content:   args.Message,
+		Content:   msg,
 		Interrupt: args.Interrupt,
 	}
 
-	err := workflow.SignalExternalWorkflow(ctx, info.WorkflowID, info.RunID, SignalAgentInput, signal).Get(ctx, nil)
-	if err != nil {
-		logger.Warn("Failed to signal child agent", "agent_id", args.ID, "error", err)
-		return collabErrorOutput(fc.CallID, fmt.Sprintf("failed to send input to agent %q: %v", args.ID, err)), nil
+	signalErr := workflow.SignalExternalWorkflow(ctx, info.WorkflowID, info.RunID, SignalAgentInput, signal).Get(ctx, nil)
+	if signalErr != nil {
+		logger.Warn("Failed to signal child agent", "agent_id", args.ID, "error", signalErr)
+		return collabErrorOutput(fc.CallID, fmt.Sprintf("failed to send input to agent %q: %v", args.ID, signalErr)), nil
 	}
 
 	logger.Info("Sent input to child agent", "agent_id", args.ID, "interrupt", args.Interrupt)
@@ -539,6 +594,10 @@ func applyRoleOverrides(cfg *models.SessionConfiguration, role AgentRole) {
 		cfg.Model.ReasoningEffort = "medium"
 		cfg.Tools.EnableWriteFile = false
 		cfg.Tools.EnableApplyPatch = false
+		// Override to cheaper model for OpenAI providers
+		if cfg.Model.Provider == "openai" {
+			cfg.Model.Model = ExplorerModel
+		}
 		// Keep read tools: shell (for read commands), read_file, list_dir, grep_files
 	case AgentRolePlanner:
 		// Planner: read-only tools, no collab, custom base instructions.
@@ -550,10 +609,11 @@ func applyRoleOverrides(cfg *models.SessionConfiguration, role AgentRole) {
 		// Replace base instructions with planner-specific prompt
 		cfg.BaseInstructions = instructions.PlannerBaseInstructions
 	case AgentRoleOrchestrator:
-		// Orchestrator: coordination focus, no write tools
+		// Orchestrator: coordination focus, no write tools, keeps shell for read commands.
+		// Matches Codex behavior where orchestrators retain shell access.
 		cfg.Tools.EnableWriteFile = false
 		cfg.Tools.EnableApplyPatch = false
-		cfg.Tools.EnableShell = false
+		cfg.BaseInstructions = instructions.OrchestratorBaseInstructions
 	case AgentRoleWorker:
 		// Worker: full tool access, same as parent
 	case AgentRoleDefault:

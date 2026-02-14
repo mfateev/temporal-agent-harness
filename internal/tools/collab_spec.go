@@ -4,28 +4,68 @@
 // See also: codex-rs/core/src/agent/collab.rs, codex-rs/core/src/agent/control.rs
 package tools
 
+// collabInputItemsSchema is the JSON schema for the items parameter shared by
+// spawn_agent and send_input. Each item is an object with a type discriminator.
+var collabInputItemsSchema = map[string]interface{}{
+	"type": "object",
+	"properties": map[string]interface{}{
+		"type": map[string]interface{}{
+			"type":        "string",
+			"description": "The type of this content item.",
+			"enum":        []string{"text", "image_url", "path"},
+		},
+		"text": map[string]interface{}{
+			"type":        "string",
+			"description": "Text content (when type is 'text').",
+		},
+		"image_url": map[string]interface{}{
+			"type":        "string",
+			"description": "URL of the image (when type is 'image_url').",
+		},
+		"path": map[string]interface{}{
+			"type":        "string",
+			"description": "File path (when type is 'path').",
+		},
+		"name": map[string]interface{}{
+			"type":        "string",
+			"description": "Optional display name for this item.",
+		},
+	},
+	"required": []string{"type"},
+}
+
 // NewSpawnAgentToolSpec creates the specification for the spawn_agent tool.
 // This tool is intercepted by the workflow (not dispatched as an activity).
 //
 // Maps to: codex-rs/core/src/tools/spec.rs create_spawn_agent_tool
 func NewSpawnAgentToolSpec() ToolSpec {
 	return ToolSpec{
-		Name: "spawn_agent",
-		Description: `Spawn a new child agent to work on a task. The child runs independently ` +
-			`with its own conversation history. Use this when a subtask can be worked on in parallel ` +
-			`or when you want to delegate focused work (e.g., code exploration, research).`,
+		Name:        "spawn_agent",
+		Description: `Spawn a sub-agent for a well-scoped task. Returns the agent id to use to communicate with this agent.`,
 		Parameters: []ToolParameter{
 			{
 				Name:        "message",
 				Type:        "string",
-				Description: "The task message to give to the child agent.",
-				Required:    true,
+				Description: "Initial plain-text task for the new agent. Use either message or items.",
+				Required:    false,
 			},
 			{
-				Name:        "agent_type",
-				Type:        "string",
-				Description: "The type of agent to spawn. Options: 'default', 'orchestrator', 'worker', 'explorer'. Default: 'default'.",
+				Name:        "items",
+				Type:        "array",
+				Description: "Structured content items for the new agent's task. Use either message or items.",
 				Required:    false,
+				Items:       collabInputItemsSchema,
+			},
+			{
+				Name: "agent_type",
+				Type: "string",
+				Description: "The type of agent to spawn. Options: " +
+					"'explorer' — Use explorer for all codebase questions, searches, reading files, and understanding code. Explorers are fast and cheap. " +
+					"'worker' — Use for execution and production work: writing code, running tests, creating files, and making commits. " +
+					"'orchestrator' — Use for coordination of multiple sub-agents. " +
+					"'default' — Inherits parent configuration. " +
+					"Default: 'default'.",
+				Required: false,
 			},
 		},
 	}
@@ -37,26 +77,32 @@ func NewSpawnAgentToolSpec() ToolSpec {
 // Maps to: codex-rs/core/src/tools/spec.rs create_send_input_tool
 func NewSendInputToolSpec() ToolSpec {
 	return ToolSpec{
-		Name: "send_input",
-		Description: `Send a message to a running child agent. The message is delivered ` +
-			`as a new user input to the child's conversation.`,
+		Name:        "send_input",
+		Description: `Send a message to an existing agent. Use interrupt=true to redirect work immediately.`,
 		Parameters: []ToolParameter{
 			{
 				Name:        "id",
 				Type:        "string",
-				Description: "The agent ID returned by spawn_agent.",
+				Description: "Agent id to message (from spawn_agent).",
 				Required:    true,
 			},
 			{
 				Name:        "message",
 				Type:        "string",
-				Description: "The message to send to the child agent.",
-				Required:    true,
+				Description: "Plain-text message to send to the agent. Use either message or items.",
+				Required:    false,
+			},
+			{
+				Name:        "items",
+				Type:        "array",
+				Description: "Structured content items to send to the agent. Use either message or items.",
+				Required:    false,
+				Items:       collabInputItemsSchema,
 			},
 			{
 				Name:        "interrupt",
 				Type:        "boolean",
-				Description: "If true, interrupt the child's current turn before delivering the message.",
+				Description: "When true, stop the agent's current task and handle this immediately. When false (default), queue this message.",
 				Required:    false,
 			},
 		},
@@ -69,14 +115,13 @@ func NewSendInputToolSpec() ToolSpec {
 // Maps to: codex-rs/core/src/tools/spec.rs create_wait_tool
 func NewWaitToolSpec() ToolSpec {
 	return ToolSpec{
-		Name: "wait",
-		Description: `Wait for one or more child agents to reach a terminal state (completed, errored, shutdown). ` +
-			`Returns the status of each requested agent. Times out if agents don't finish within the timeout.`,
+		Name:        "wait",
+		Description: `Wait for agents to reach a final status. Completed statuses may include the agent's final message. Returns empty status when timed out.`,
 		Parameters: []ToolParameter{
 			{
 				Name:        "ids",
 				Type:        "array",
-				Description: "Array of agent IDs to wait for.",
+				Description: "Agent ids to wait on. Pass multiple ids to wait for whichever finishes first.",
 				Required:    true,
 				Items: map[string]interface{}{
 					"type": "string",
@@ -85,7 +130,7 @@ func NewWaitToolSpec() ToolSpec {
 			{
 				Name:        "timeout_ms",
 				Type:        "number",
-				Description: "Maximum time to wait in milliseconds. Range: 10000-300000. Default: 30000.",
+				Description: "Maximum time to wait in milliseconds. Min: 10000, Max: 300000, Default: 30000. Prefer longer waits (minutes) to avoid busy polling.",
 				Required:    false,
 			},
 		},
@@ -98,14 +143,13 @@ func NewWaitToolSpec() ToolSpec {
 // Maps to: codex-rs/core/src/tools/spec.rs create_close_agent_tool
 func NewCloseAgentToolSpec() ToolSpec {
 	return ToolSpec{
-		Name: "close_agent",
-		Description: `Shut down a running child agent. Sends a shutdown signal and waits briefly ` +
-			`for the child to complete. Returns the child's final status.`,
+		Name:        "close_agent",
+		Description: `Close an agent when it is no longer needed and return its last known status.`,
 		Parameters: []ToolParameter{
 			{
 				Name:        "id",
 				Type:        "string",
-				Description: "The agent ID to shut down.",
+				Description: "Agent id to close (from spawn_agent).",
 				Required:    true,
 			},
 		},
@@ -118,14 +162,13 @@ func NewCloseAgentToolSpec() ToolSpec {
 // Maps to: codex-rs/core/src/tools/spec.rs create_resume_agent_tool
 func NewResumeAgentToolSpec() ToolSpec {
 	return ToolSpec{
-		Name: "resume_agent",
-		Description: `Resume a previously completed or shut down agent with its conversation history preserved. ` +
-			`Note: This feature is not yet implemented.`,
+		Name:        "resume_agent",
+		Description: `Resume a previously closed agent by id so it can receive send_input and wait calls.`,
 		Parameters: []ToolParameter{
 			{
 				Name:        "id",
 				Type:        "string",
-				Description: "The agent ID to resume.",
+				Description: "Agent id to resume.",
 				Required:    true,
 			},
 		},

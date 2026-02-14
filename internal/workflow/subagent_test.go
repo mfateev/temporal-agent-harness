@@ -177,7 +177,7 @@ func TestBuildAgentSharedConfig(t *testing.T) {
 func TestApplyRoleOverrides(t *testing.T) {
 	t.Run("explorer: read-only, medium reasoning", func(t *testing.T) {
 		cfg := models.SessionConfiguration{
-			Model: models.ModelConfig{Model: "gpt-4o"},
+			Model: models.ModelConfig{Provider: "openai", Model: "gpt-4o"},
 			Tools: models.ToolsConfig{
 				EnableShell:      true,
 				EnableReadFile:   true,
@@ -195,9 +195,25 @@ func TestApplyRoleOverrides(t *testing.T) {
 		assert.True(t, cfg.Tools.EnableReadFile, "explorer keeps read_file")
 		assert.True(t, cfg.Tools.EnableListDir, "explorer keeps list_dir")
 		assert.True(t, cfg.Tools.EnableGrepFiles, "explorer keeps grep_files")
+		assert.Equal(t, ExplorerModel, cfg.Model.Model, "explorer on openai should use cheaper model")
 	})
 
-	t.Run("orchestrator: no write tools, no shell", func(t *testing.T) {
+	t.Run("explorer: anthropic provider keeps original model", func(t *testing.T) {
+		cfg := models.SessionConfiguration{
+			Model: models.ModelConfig{Provider: "anthropic", Model: "claude-sonnet-4-5-20250929"},
+			Tools: models.ToolsConfig{
+				EnableShell:      true,
+				EnableReadFile:   true,
+				EnableWriteFile:  true,
+				EnableApplyPatch: true,
+			},
+		}
+		applyRoleOverrides(&cfg, AgentRoleExplorer)
+		assert.Equal(t, "claude-sonnet-4-5-20250929", cfg.Model.Model, "explorer on anthropic should NOT override model")
+		assert.Equal(t, "medium", cfg.Model.ReasoningEffort)
+	})
+
+	t.Run("orchestrator: no write tools, keeps shell, has base instructions", func(t *testing.T) {
 		cfg := models.SessionConfiguration{
 			Tools: models.ToolsConfig{
 				EnableShell:      true,
@@ -209,8 +225,10 @@ func TestApplyRoleOverrides(t *testing.T) {
 		applyRoleOverrides(&cfg, AgentRoleOrchestrator)
 		assert.False(t, cfg.Tools.EnableWriteFile)
 		assert.False(t, cfg.Tools.EnableApplyPatch)
-		assert.False(t, cfg.Tools.EnableShell)
+		assert.True(t, cfg.Tools.EnableShell, "orchestrator keeps shell for read commands")
 		assert.True(t, cfg.Tools.EnableReadFile, "orchestrator keeps read_file")
+		assert.Contains(t, cfg.BaseInstructions, "Sub-agents",
+			"orchestrator should have base instructions with sub-agent guidance")
 	})
 
 	t.Run("worker: keeps everything", func(t *testing.T) {
@@ -421,7 +439,9 @@ func TestBuildAgentSpawnConfig(t *testing.T) {
 		input := buildAgentSpawnConfig(parentConfig, AgentRoleOrchestrator, "orchestrate", 1)
 		assert.False(t, input.Config.Tools.EnableWriteFile)
 		assert.False(t, input.Config.Tools.EnableApplyPatch)
-		assert.False(t, input.Config.Tools.EnableShell)
+		assert.True(t, input.Config.Tools.EnableShell, "orchestrator keeps shell for read commands")
+		assert.Contains(t, input.Config.BaseInstructions, "Sub-agents",
+			"orchestrator should have base instructions")
 	})
 
 	t.Run("planner role", func(t *testing.T) {
@@ -541,22 +561,30 @@ func TestCollabToolSpecs(t *testing.T) {
 		spec := tools.NewSpawnAgentToolSpec()
 		assert.Equal(t, "spawn_agent", spec.Name)
 		assert.NotEmpty(t, spec.Description)
-		assert.Len(t, spec.Parameters, 2) // message, agent_type
+		assert.Len(t, spec.Parameters, 3) // message, items, agent_type
 
 		paramNames := make([]string, len(spec.Parameters))
 		for i, p := range spec.Parameters {
 			paramNames[i] = p.Name
 		}
 		assert.Contains(t, paramNames, "message")
+		assert.Contains(t, paramNames, "items")
 		assert.Contains(t, paramNames, "agent_type")
 
-		// message should be required
+		// message should NOT be required (either message or items)
 		for _, p := range spec.Parameters {
 			if p.Name == "message" {
-				assert.True(t, p.Required)
+				assert.False(t, p.Required, "message should not be required")
+			}
+			if p.Name == "items" {
+				assert.False(t, p.Required, "items should not be required")
+				assert.Equal(t, "array", p.Type)
+				assert.NotNil(t, p.Items, "items should have schema")
 			}
 			if p.Name == "agent_type" {
 				assert.False(t, p.Required)
+				assert.Contains(t, p.Description, "explorer", "agent_type should describe explorer role")
+				assert.Contains(t, p.Description, "worker", "agent_type should describe worker role")
 			}
 		}
 	})
@@ -564,7 +592,7 @@ func TestCollabToolSpecs(t *testing.T) {
 	t.Run("send_input spec", func(t *testing.T) {
 		spec := tools.NewSendInputToolSpec()
 		assert.Equal(t, "send_input", spec.Name)
-		assert.Len(t, spec.Parameters, 3) // id, message, interrupt
+		assert.Len(t, spec.Parameters, 4) // id, message, items, interrupt
 
 		for _, p := range spec.Parameters {
 			switch p.Name {
@@ -572,8 +600,12 @@ func TestCollabToolSpecs(t *testing.T) {
 				assert.True(t, p.Required)
 				assert.Equal(t, "string", p.Type)
 			case "message":
-				assert.True(t, p.Required)
+				assert.False(t, p.Required, "message should not be required")
 				assert.Equal(t, "string", p.Type)
+			case "items":
+				assert.False(t, p.Required)
+				assert.Equal(t, "array", p.Type)
+				assert.NotNil(t, p.Items, "items should have schema")
 			case "interrupt":
 				assert.False(t, p.Required)
 				assert.Equal(t, "boolean", p.Type)
@@ -611,5 +643,79 @@ func TestCollabToolSpecs(t *testing.T) {
 		assert.Equal(t, "resume_agent", spec.Name)
 		assert.Len(t, spec.Parameters, 1) // id
 		assert.True(t, spec.Parameters[0].Required)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// parseCollabInput tests
+// ---------------------------------------------------------------------------
+
+func TestParseCollabInput(t *testing.T) {
+	strPtr := func(s string) *string { return &s }
+
+	t.Run("message only", func(t *testing.T) {
+		msg, err := parseCollabInput(strPtr("hello"), nil)
+		require.NoError(t, err)
+		assert.Equal(t, "hello", msg)
+	})
+
+	t.Run("items only with single text", func(t *testing.T) {
+		items := []collabInputItem{
+			{Type: "text", Text: "explore the codebase"},
+		}
+		msg, err := parseCollabInput(nil, items)
+		require.NoError(t, err)
+		assert.Equal(t, "explore the codebase", msg)
+	})
+
+	t.Run("items with multiple text items concatenated", func(t *testing.T) {
+		items := []collabInputItem{
+			{Type: "text", Text: "first part"},
+			{Type: "text", Text: "second part"},
+		}
+		msg, err := parseCollabInput(nil, items)
+		require.NoError(t, err)
+		assert.Equal(t, "first part\nsecond part", msg)
+	})
+
+	t.Run("both message and items rejected", func(t *testing.T) {
+		items := []collabInputItem{
+			{Type: "text", Text: "some text"},
+		}
+		_, err := parseCollabInput(strPtr("hello"), items)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not both")
+	})
+
+	t.Run("neither message nor items rejected", func(t *testing.T) {
+		_, err := parseCollabInput(nil, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "required")
+	})
+
+	t.Run("empty message rejected", func(t *testing.T) {
+		_, err := parseCollabInput(strPtr(""), nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "required")
+	})
+
+	t.Run("items with no text items rejected", func(t *testing.T) {
+		items := []collabInputItem{
+			{Type: "image_url", ImageURL: "https://example.com/img.png"},
+		}
+		_, err := parseCollabInput(nil, items)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "text item")
+	})
+
+	t.Run("items skips non-text items", func(t *testing.T) {
+		items := []collabInputItem{
+			{Type: "image_url", ImageURL: "https://example.com/img.png"},
+			{Type: "text", Text: "the actual task"},
+			{Type: "path", Path: "/some/file"},
+		}
+		msg, err := parseCollabInput(nil, items)
+		require.NoError(t, err)
+		assert.Equal(t, "the actual task", msg)
 	})
 }
