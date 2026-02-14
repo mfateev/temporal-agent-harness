@@ -357,6 +357,7 @@ func TestItemRenderer_RenderFunctionCall_WriteFile(t *testing.T) {
 
 func TestItemRenderer_RenderFunctionCall_ApplyPatch(t *testing.T) {
 	r := newTestRenderer()
+	// Without parseable input, falls back to "Patched"
 	result := r.RenderItem(models.ConversationItem{
 		Type:      models.ItemTypeFunctionCall,
 		Name:      "apply_patch",
@@ -365,6 +366,37 @@ func TestItemRenderer_RenderFunctionCall_ApplyPatch(t *testing.T) {
 
 	assert.Contains(t, result, "●")
 	assert.Contains(t, result, "Patched")
+}
+
+func TestItemRenderer_RenderFunctionCall_ApplyPatchWithInput(t *testing.T) {
+	r := newTestRenderer()
+	input := "*** Begin Patch\n*** Update File: ./internal/cli/renderer.go\n-old line\n+new line\n*** End Patch"
+	args := fmt.Sprintf(`{"input": %q}`, input)
+	result := r.RenderItem(models.ConversationItem{
+		Type:      models.ItemTypeFunctionCall,
+		Name:      "apply_patch",
+		Arguments: args,
+	}, false)
+
+	assert.Contains(t, result, "●")
+	assert.Contains(t, result, "Update")
+	assert.Contains(t, result, "./internal/cli/renderer.go")
+}
+
+func TestItemRenderer_RenderFunctionCall_ApplyPatchMultiFile(t *testing.T) {
+	r := newTestRenderer()
+	input := "*** Begin Patch\n*** Update File: a.go\n-x\n+y\n*** Update File: b.go\n-m\n+n\n*** End Patch"
+	args := fmt.Sprintf(`{"input": %q}`, input)
+	result := r.RenderItem(models.ConversationItem{
+		Type:      models.ItemTypeFunctionCall,
+		Name:      "apply_patch",
+		Arguments: args,
+	}, false)
+
+	assert.Contains(t, result, "●")
+	assert.Contains(t, result, "Update")
+	assert.Contains(t, result, "a.go")
+	assert.Contains(t, result, "+1 files")
 }
 
 func TestItemRenderer_RenderFunctionCall_ListDir(t *testing.T) {
@@ -627,7 +659,7 @@ func TestFormatToolCall(t *testing.T) {
 		{"shell", "shell", `{"command": "echo hello"}`, "Ran", "echo hello"},
 		{"read_file", "read_file", `{"file_path": "/tmp/foo.txt"}`, "Read", "/tmp/foo.txt"},
 		{"write_file", "write_file", `{"file_path": "/tmp/bar.txt"}`, "Wrote", "/tmp/bar.txt"},
-		{"apply_patch", "apply_patch", `{"file_path": "/tmp/x.go"}`, "Patched", ""},
+		{"apply_patch_no_input", "apply_patch", `{"file_path": "/tmp/x.go"}`, "Patched", ""},
 		{"list_dir", "list_dir", `{"dir_path": "/tmp"}`, "Listed", "/tmp"},
 		{"grep_files", "grep_files", `{"pattern": "TODO", "path": "src/"}`, "Searched", `"TODO" in src/`},
 		{"unknown", "my_tool", `{"x": 1}`, "Ran", `my_tool({"x": 1})`},
@@ -640,6 +672,23 @@ func TestFormatToolCall(t *testing.T) {
 			assert.Equal(t, tt.wantDetail, detail)
 		})
 	}
+}
+
+func TestFormatToolCall_ApplyPatchWithInput(t *testing.T) {
+	input := "*** Begin Patch\n*** Update File: src/main.go\n-old\n+new\n*** End Patch"
+	args := fmt.Sprintf(`{"input": %q}`, input)
+	verb, detail := formatToolCall("apply_patch", args)
+	assert.Equal(t, "Update", verb)
+	assert.Equal(t, "src/main.go", detail)
+}
+
+func TestFormatToolCall_ApplyPatchMultiFile(t *testing.T) {
+	input := "*** Begin Patch\n*** Update File: a.go\n-x\n+y\n*** Add File: b.go\n+content\n*** End Patch"
+	args := fmt.Sprintf(`{"input": %q}`, input)
+	verb, detail := formatToolCall("apply_patch", args)
+	assert.Equal(t, "Update", verb)
+	assert.Contains(t, detail, "a.go")
+	assert.Contains(t, detail, "+1 files")
 }
 
 // --- Compaction rendering tests ---

@@ -7,6 +7,10 @@ type MergeInput struct {
 	// BaseOverride replaces the default base system prompt if non-empty.
 	BaseOverride string
 
+	// PromptSuffix is appended after the base prompt. Comes from the
+	// resolved model profile (additive across layers).
+	PromptSuffix string
+
 	// CLIProjectDocs contains AGENTS.md content discovered from the CLI's
 	// local project directory. Used as fallback when worker docs are empty.
 	CLIProjectDocs string
@@ -50,6 +54,9 @@ type MergedInstructions struct {
 //     + UserPersonalInstructions (always appended)
 func MergeInstructions(input MergeInput) MergedInstructions {
 	base := GetBaseInstructions(input.BaseOverride)
+	if input.PromptSuffix != "" {
+		base += "\n\n" + input.PromptSuffix
+	}
 	developer := ComposeDeveloperInstructions(input.ApprovalMode, input.Cwd)
 
 	// Assemble user instructions: project docs + personal preferences

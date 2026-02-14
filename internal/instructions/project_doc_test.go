@@ -58,7 +58,7 @@ func TestLoadProjectDocs_SingleFile(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("root instructions"), 0o644))
 
-	docs, err := LoadProjectDocs(dir, dir)
+	docs, err := LoadProjectDocs(dir, dir, nil)
 	require.NoError(t, err)
 	assert.Contains(t, docs, "root instructions")
 	assert.Contains(t, docs, "AGENTS.md")
@@ -73,7 +73,7 @@ func TestLoadProjectDocs_NestedDirs(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("root docs"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(sub, "AGENTS.md"), []byte("sub docs"), 0o644))
 
-	docs, err := LoadProjectDocs(dir, sub)
+	docs, err := LoadProjectDocs(dir, sub, nil)
 	require.NoError(t, err)
 	assert.Contains(t, docs, "root docs")
 	assert.Contains(t, docs, "sub docs")
@@ -90,7 +90,7 @@ func TestLoadProjectDocs_OverridePrecedence(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("normal"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "AGENTS.override.md"), []byte("override"), 0o644))
 
-	docs, err := LoadProjectDocs(dir, dir)
+	docs, err := LoadProjectDocs(dir, dir, nil)
 	require.NoError(t, err)
 	assert.Contains(t, docs, "override")
 	assert.NotContains(t, docs, "normal")
@@ -101,7 +101,7 @@ func TestLoadProjectDocs_CLAUDEmd(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("claude instructions"), 0o644))
 
-	docs, err := LoadProjectDocs(dir, dir)
+	docs, err := LoadProjectDocs(dir, dir, nil)
 	require.NoError(t, err)
 	assert.Contains(t, docs, "claude instructions")
 }
@@ -112,7 +112,7 @@ func TestLoadProjectDocs_AGENTSBeforeCLAUDE(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("agents"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("claude"), 0o644))
 
-	docs, err := LoadProjectDocs(dir, dir)
+	docs, err := LoadProjectDocs(dir, dir, nil)
 	require.NoError(t, err)
 	assert.Contains(t, docs, "agents")
 	assert.NotContains(t, docs, "claude")
@@ -120,7 +120,7 @@ func TestLoadProjectDocs_AGENTSBeforeCLAUDE(t *testing.T) {
 
 func TestLoadProjectDocs_NoFiles(t *testing.T) {
 	dir := t.TempDir()
-	docs, err := LoadProjectDocs(dir, dir)
+	docs, err := LoadProjectDocs(dir, dir, nil)
 	require.NoError(t, err)
 	assert.Empty(t, docs)
 }
@@ -138,7 +138,7 @@ func TestLoadProjectDocs_SizeCap(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte(bigContent), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(sub, "AGENTS.md"), []byte("should be skipped"), 0o644))
 
-	docs, err := LoadProjectDocs(dir, sub)
+	docs, err := LoadProjectDocs(dir, sub, nil)
 	require.NoError(t, err)
 	// First file is included (big content)
 	assert.True(t, len(docs) > 1000, "should include the large first file")
@@ -155,7 +155,7 @@ func TestLoadProjectDocs_DeeplyNested(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("root level"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(deep, "AGENTS.md"), []byte("deep level"), 0o644))
 
-	docs, err := LoadProjectDocs(dir, deep)
+	docs, err := LoadProjectDocs(dir, deep, nil)
 	require.NoError(t, err)
 	assert.Contains(t, docs, "root level")
 	assert.Contains(t, docs, "deep level")
@@ -170,7 +170,7 @@ func TestLoadProjectDocs_ContributingNotLoaded(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("agent rules"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "CONTRIBUTING.md"), []byte("how to contribute"), 0o644))
 
-	docs, err := LoadProjectDocs(dir, dir)
+	docs, err := LoadProjectDocs(dir, dir, nil)
 	require.NoError(t, err)
 	assert.Contains(t, docs, "agent rules")
 	assert.NotContains(t, docs, "how to contribute")
@@ -181,7 +181,7 @@ func TestLoadProjectDocs_ReadmeNotLoaded(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("agent rules"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("project overview"), 0o644))
 
-	docs, err := LoadProjectDocs(dir, dir)
+	docs, err := LoadProjectDocs(dir, dir, nil)
 	require.NoError(t, err)
 	assert.Contains(t, docs, "agent rules")
 	assert.NotContains(t, docs, "project overview")
@@ -194,7 +194,7 @@ func TestLoadProjectDocs_OnlyAgentsFiles(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "CONTRIBUTING.md"), []byte("contrib guide"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("project overview"), 0o644))
 
-	docs, err := LoadProjectDocs(dir, dir)
+	docs, err := LoadProjectDocs(dir, dir, nil)
 	require.NoError(t, err)
 	assert.Contains(t, docs, "agent rules")
 	assert.NotContains(t, docs, "contrib guide")

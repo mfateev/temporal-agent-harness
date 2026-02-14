@@ -12,7 +12,27 @@ import (
 
 	"github.com/mfateev/temporal-agent-harness/internal/activities"
 	"github.com/mfateev/temporal-agent-harness/internal/instructions"
+	"github.com/mfateev/temporal-agent-harness/internal/models"
 )
+
+// resolveProfile resolves the model profile from the registry.
+// Pure computation — no activity needed. Must be called before
+// resolveInstructions and buildToolSpecs.
+func (s *SessionState) resolveProfile() {
+	registry := models.NewDefaultRegistry()
+	s.ResolvedProfile = registry.Resolve(s.Config.Model.Provider, s.Config.Model.Model)
+
+	// Apply model parameter overrides from the profile
+	if s.ResolvedProfile.Temperature != nil {
+		s.Config.Model.Temperature = *s.ResolvedProfile.Temperature
+	}
+	if s.ResolvedProfile.MaxTokens != nil {
+		s.Config.Model.MaxTokens = *s.ResolvedProfile.MaxTokens
+	}
+	if s.ResolvedProfile.ContextWindow != nil {
+		s.Config.Model.ContextWindow = *s.ResolvedProfile.ContextWindow
+	}
+}
 
 // resolveInstructions loads worker-side AGENTS.md files and merges all
 // instruction sources into the session configuration. Called once before
@@ -23,7 +43,8 @@ func (s *SessionState) resolveInstructions(ctx workflow.Context) {
 	// Load worker-side project docs via activity (runs on session task queue)
 	var workerDocs string
 	loadInput := activities.LoadWorkerInstructionsInput{
-		Cwd: s.Config.Cwd,
+		Cwd:             s.Config.Cwd,
+		AgentsFileNames: s.ResolvedProfile.AgentsFileNames,
 	}
 
 	actOpts := workflow.ActivityOptions{
@@ -45,9 +66,10 @@ func (s *SessionState) resolveInstructions(ctx workflow.Context) {
 		workerDocs = loadResult.ProjectDocs
 	}
 
-	// Merge all instruction sources
+	// Merge all instruction sources, including profile's PromptSuffix
 	merged := instructions.MergeInstructions(instructions.MergeInput{
 		BaseOverride:             s.Config.BaseInstructions,
+		PromptSuffix:             s.ResolvedProfile.PromptSuffix,
 		CLIProjectDocs:           s.Config.CLIProjectDocs,
 		WorkerProjectDocs:        workerDocs,
 		UserPersonalInstructions: s.Config.UserPersonalInstructions,

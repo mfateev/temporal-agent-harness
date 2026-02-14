@@ -8,6 +8,7 @@ import (
 
 	"go.temporal.io/api/serviceerror"
 
+	"github.com/mfateev/temporal-agent-harness/internal/tools/patch"
 	"github.com/mfateev/temporal-agent-harness/internal/workflow"
 )
 
@@ -192,6 +193,12 @@ func formatApprovalInfo(toolName, arguments string) approvalInfo {
 				return info
 			}
 		case "apply_patch":
+			if input, ok := args["input"].(string); ok && input != "" {
+				if info := formatPatchDiff(input, 100); info != nil {
+					return *info
+				}
+			}
+			// Fallback: raw preview
 			info := approvalInfo{Title: "Patch"}
 			if path := stringArg(args, "file_path"); path != "" {
 				info.Title = "Patch: " + path
@@ -241,6 +248,137 @@ func stringArg(args map[string]interface{}, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+// formatPatchDiff parses apply_patch input and returns a structured approvalInfo
+// with a unified diff preview. Returns nil if the patch cannot be parsed.
+func formatPatchDiff(input string, maxLines int) *approvalInfo {
+	p, err := patch.Parse(input)
+	if err != nil || len(p.Hunks) == 0 {
+		return nil
+	}
+
+	title := patchHunkTitle(p.Hunks[0])
+	if len(p.Hunks) > 1 {
+		title += fmt.Sprintf(" +%d files", len(p.Hunks)-1)
+	}
+
+	preview := rawPatchPreview(input, p)
+	truncated, _ := truncateMiddle(preview, maxLines)
+	return &approvalInfo{Title: title, Preview: truncated}
+}
+
+// rawPatchPreview extracts unified diff preview lines from raw patch text.
+// It uses the parsed Patch for metadata (file type, summaries) and preserves
+// +/-/space diff lines directly from the input.
+func rawPatchPreview(input string, p *patch.Patch) []string {
+	var result []string
+	lines := strings.Split(input, "\n")
+	hunkIdx := -1
+	var diffLines []string
+
+	flushHunk := func() {
+		if hunkIdx < 0 || hunkIdx >= len(p.Hunks) {
+			return
+		}
+		h := p.Hunks[hunkIdx]
+		if hunkIdx > 0 {
+			result = append(result, patchHunkTitle(h))
+		}
+		result = append(result, patchHunkSummary(h.Type, diffLines))
+		result = append(result, diffLines...)
+		diffLines = nil
+	}
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		if trimmed == "*** Begin Patch" || trimmed == "*** End Patch" {
+			continue
+		}
+
+		isFileHeader := strings.HasPrefix(trimmed, "*** Add File: ") ||
+			strings.HasPrefix(trimmed, "*** Delete File: ") ||
+			strings.HasPrefix(trimmed, "*** Update File: ")
+		if isFileHeader {
+			flushHunk()
+			hunkIdx++
+			continue
+		}
+
+		// Skip structural markers.
+		if strings.HasPrefix(trimmed, "@@ ") || trimmed == "@@" ||
+			strings.HasPrefix(trimmed, "*** Move to: ") ||
+			trimmed == "*** End of File" {
+			continue
+		}
+
+		// Preserve diff lines (+/-/space prefix).
+		if len(line) > 0 && (line[0] == '+' || line[0] == '-' || line[0] == ' ') {
+			diffLines = append(diffLines, line)
+		}
+	}
+	flushHunk()
+	return result
+}
+
+// patchHunkSummary returns a human-readable summary for a hunk based on its diff lines.
+func patchHunkSummary(typ patch.HunkType, diffLines []string) string {
+	switch typ {
+	case patch.HunkAdd:
+		return fmt.Sprintf("  New file, %d lines", len(diffLines))
+	case patch.HunkDelete:
+		return "  Deleted file"
+	default: // HunkUpdate
+		added, removed := 0, 0
+		for _, l := range diffLines {
+			if len(l) > 0 {
+				switch l[0] {
+				case '+':
+					added++
+				case '-':
+					removed++
+				}
+			}
+		}
+		var parts []string
+		if removed > 0 {
+			parts = append(parts, fmt.Sprintf("removed %d lines", removed))
+		}
+		if added > 0 {
+			parts = append(parts, fmt.Sprintf("added %d lines", added))
+		}
+		if len(parts) == 0 {
+			return "  No changes"
+		}
+		return "  " + strings.Join(parts, ", ")
+	}
+}
+
+// patchHunkTitle returns a display title for a hunk, e.g. "Update(path)".
+func patchHunkTitle(h patch.Hunk) string {
+	switch h.Type {
+	case patch.HunkAdd:
+		return "Add(" + h.Path + ")"
+	case patch.HunkDelete:
+		return "Delete(" + h.Path + ")"
+	default:
+		return "Update(" + h.Path + ")"
+	}
+}
+
+// patchFilePaths extracts file paths from parsed patch input.
+// Returns nil if parsing fails.
+func patchFilePaths(input string) []string {
+	p, err := patch.Parse(input)
+	if err != nil {
+		return nil
+	}
+	paths := make([]string, len(p.Hunks))
+	for i, h := range p.Hunks {
+		paths[i] = h.Path
+	}
+	return paths
 }
 
 // pollErrorKind classifies errors from workflow queries.

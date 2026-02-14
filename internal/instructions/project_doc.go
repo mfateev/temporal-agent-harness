@@ -55,12 +55,16 @@ func FindGitRoot(dir string) (string, error) {
 // LoadProjectDocs discovers instruction files from rootDir down to targetDir.
 //
 // At each directory level between rootDir and targetDir (inclusive), it checks
-// AgentsFileNames in priority order. If AGENTS.override.md exists at a level,
-// only that file is used for that level. Files are concatenated with labeled
-// separators. Stops if total exceeds MaxProjectDocsBytes.
+// the provided agentsFileNames in priority order (or the global AgentsFileNames
+// if nil). If AGENTS.override.md exists at a level, only that file is used for
+// that level. Files are concatenated with labeled separators. Stops if total
+// exceeds MaxProjectDocsBytes.
 //
 // Returns empty string if no files found (not an error).
-func LoadProjectDocs(rootDir, targetDir string) (string, error) {
+func LoadProjectDocs(rootDir, targetDir string, agentsFileNames []string) (string, error) {
+	if len(agentsFileNames) == 0 {
+		agentsFileNames = AgentsFileNames
+	}
 	rootDir, err := filepath.Abs(rootDir)
 	if err != nil {
 		return "", fmt.Errorf("cannot resolve rootDir: %w", err)
@@ -81,7 +85,7 @@ func LoadProjectDocs(rootDir, targetDir string) (string, error) {
 
 	for _, dir := range dirs {
 		// Load primary agent instruction file (first match wins)
-		content, filename, err := findInstructionFile(dir)
+		content, filename, err := findInstructionFile(dir, agentsFileNames)
 		if err != nil {
 			return "", err
 		}
@@ -172,10 +176,10 @@ func pathSegments(rootDir, targetDir string) ([]string, error) {
 	return dirs, nil
 }
 
-// findInstructionFile checks AgentsFileNames in priority order at dir.
+// findInstructionFile checks the given names in priority order at dir.
 // Returns file content and filename, or empty strings if nothing found.
-func findInstructionFile(dir string) (string, string, error) {
-	for _, name := range AgentsFileNames {
+func findInstructionFile(dir string, names []string) (string, string, error) {
+	for _, name := range names {
 		path := filepath.Join(dir, name)
 		data, err := os.ReadFile(path)
 		if err != nil {

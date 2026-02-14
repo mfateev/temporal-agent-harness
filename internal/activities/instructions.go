@@ -11,7 +11,8 @@ import (
 
 // LoadWorkerInstructionsInput is the input for the LoadWorkerInstructions activity.
 type LoadWorkerInstructionsInput struct {
-	Cwd string `json:"cwd"`
+	Cwd             string   `json:"cwd"`
+	AgentsFileNames []string `json:"agents_file_names,omitempty"`
 }
 
 // LoadWorkerInstructionsOutput is the output from the LoadWorkerInstructions activity.
@@ -48,7 +49,7 @@ func (a *InstructionActivities) LoadWorkerInstructions(
 		return LoadWorkerInstructionsOutput{}, nil
 	}
 
-	projectDocs, err := instructions.LoadProjectDocs(gitRoot, input.Cwd)
+	projectDocs, err := instructions.LoadProjectDocs(gitRoot, input.Cwd, input.AgentsFileNames)
 	if err != nil {
 		return LoadWorkerInstructionsOutput{}, nil // non-fatal
 	}

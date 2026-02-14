@@ -38,8 +38,11 @@ func AgenticWorkflow(ctx workflow.Context, input WorkflowInput) (WorkflowResult,
 		AgentCtl:       NewAgentControl(input.Depth),
 	}
 
-	// Build tool specs based on configuration
-	state.ToolSpecs = buildToolSpecs(input.Config.Tools)
+	// Resolve model profile (pure computation — must come first)
+	state.resolveProfile()
+
+	// Build tool specs based on configuration and profile
+	state.ToolSpecs = buildToolSpecs(input.Config.Tools, state.ResolvedProfile)
 
 	// Resolve instructions (load worker-side AGENTS.md, merge all sources)
 	state.resolveInstructions(ctx)

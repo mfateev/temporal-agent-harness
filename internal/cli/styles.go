@@ -60,6 +60,10 @@ type Styles struct {
 	PlanCompleted lipgloss.Style
 	// Plan pending step marker (○ dimmed)
 	PlanPending lipgloss.Style
+	// Diff added line (green)
+	DiffAdd lipgloss.Style
+	// Diff removed line (red)
+	DiffRemove lipgloss.Style
 }
 
 // DefaultStyles returns styles with colors enabled.
@@ -93,6 +97,8 @@ func DefaultStyles() Styles {
 		PlanBullet:       lipgloss.NewStyle().Foreground(lipgloss.Color("5")),   // magenta
 		PlanCompleted:    lipgloss.NewStyle().Foreground(lipgloss.Color("2")),   // green
 		PlanPending:      lipgloss.NewStyle().Faint(true),
+		DiffAdd:          lipgloss.NewStyle().Foreground(lipgloss.Color("2")), // green
+		DiffRemove:       lipgloss.NewStyle().Foreground(lipgloss.Color("1")), // red
 	}
 }
 
@@ -127,5 +133,7 @@ func NoColorStyles() Styles {
 		PlanBullet:       lipgloss.NewStyle(),
 		PlanCompleted:    lipgloss.NewStyle(),
 		PlanPending:      lipgloss.NewStyle(),
+		DiffAdd:          lipgloss.NewStyle(),
+		DiffRemove:       lipgloss.NewStyle(),
 	}
 }

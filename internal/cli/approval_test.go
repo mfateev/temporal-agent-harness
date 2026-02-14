@@ -178,18 +178,105 @@ func TestFormatApprovalInfo_WriteFileMultiLine(t *testing.T) {
 }
 
 func TestFormatApprovalInfo_ApplyPatch(t *testing.T) {
+	// No input field: falls back to file_path-based title
 	info := formatApprovalInfo("apply_patch", `{"file_path": "/home/user/test.txt"}`)
 	assert.Equal(t, "Patch: /home/user/test.txt", info.Title)
 	assert.Nil(t, info.Preview)
 }
 
 func TestFormatApprovalInfo_ApplyPatchWithInput(t *testing.T) {
-	input := "*** Begin Patch\n*** Update File: test.go\n@@ line1 @@\n- old\n+ new\n*** End Patch"
+	input := "*** Begin Patch\n*** Update File: test.go\n-old\n+new\n*** End Patch"
+	args := fmt.Sprintf(`{"input": %q}`, input)
+	info := formatApprovalInfo("apply_patch", args)
+	assert.Equal(t, "Update(test.go)", info.Title)
+	require.NotNil(t, info.Preview)
+	// Preview should contain diff lines, not raw patch markers
+	assert.Contains(t, info.Preview, "-old")
+	assert.Contains(t, info.Preview, "+new")
+}
+
+func TestFormatApprovalInfo_ApplyPatchMultiFile(t *testing.T) {
+	input := "*** Begin Patch\n*** Update File: a.go\n-old\n+new\n*** Update File: b.go\n-x\n+y\n*** End Patch"
+	args := fmt.Sprintf(`{"input": %q}`, input)
+	info := formatApprovalInfo("apply_patch", args)
+	assert.Equal(t, "Update(a.go) +1 files", info.Title)
+	require.NotNil(t, info.Preview)
+	// Should contain both files' diff lines
+	found := false
+	for _, line := range info.Preview {
+		if strings.Contains(line, "Update(b.go)") {
+			found = true
+		}
+	}
+	assert.True(t, found, "preview should contain second file header")
+}
+
+func TestFormatApprovalInfo_ApplyPatchAddFile(t *testing.T) {
+	input := "*** Begin Patch\n*** Add File: newfile.txt\n+hello\n+world\n*** End Patch"
+	args := fmt.Sprintf(`{"input": %q}`, input)
+	info := formatApprovalInfo("apply_patch", args)
+	assert.Equal(t, "Add(newfile.txt)", info.Title)
+	require.NotNil(t, info.Preview)
+	// Should have summary and diff lines
+	assert.Contains(t, info.Preview, "  New file, 2 lines")
+	assert.Contains(t, info.Preview, "+hello")
+	assert.Contains(t, info.Preview, "+world")
+}
+
+func TestFormatApprovalInfo_ApplyPatchDeleteFile(t *testing.T) {
+	input := "*** Begin Patch\n*** Delete File: old.txt\n*** End Patch"
+	args := fmt.Sprintf(`{"input": %q}`, input)
+	info := formatApprovalInfo("apply_patch", args)
+	assert.Equal(t, "Delete(old.txt)", info.Title)
+	require.NotNil(t, info.Preview)
+	assert.Contains(t, info.Preview, "  Deleted file")
+}
+
+func TestFormatApprovalInfo_ApplyPatchDiffLines(t *testing.T) {
+	input := "*** Begin Patch\n*** Update File: main.go\n func main() {\n-\tfmt.Println(\"old\")\n+\tfmt.Println(\"new\")\n }\n*** End Patch"
+	args := fmt.Sprintf(`{"input": %q}`, input)
+	info := formatApprovalInfo("apply_patch", args)
+	assert.Equal(t, "Update(main.go)", info.Title)
+	require.NotNil(t, info.Preview)
+	// Verify +/-/space lines are preserved
+	assert.Contains(t, info.Preview, " func main() {")
+	assert.Contains(t, info.Preview, "-\tfmt.Println(\"old\")")
+	assert.Contains(t, info.Preview, "+\tfmt.Println(\"new\")")
+	assert.Contains(t, info.Preview, " }")
+}
+
+func TestFormatApprovalInfo_ApplyPatchTruncation(t *testing.T) {
+	// Build a large patch exceeding 100 lines
+	var lines []string
+	lines = append(lines, "*** Begin Patch", "*** Add File: big.txt")
+	for i := 0; i < 120; i++ {
+		lines = append(lines, fmt.Sprintf("+line %d", i))
+	}
+	lines = append(lines, "*** End Patch")
+	input := strings.Join(lines, "\n")
+	args := fmt.Sprintf(`{"input": %q}`, input)
+	info := formatApprovalInfo("apply_patch", args)
+	assert.Equal(t, "Add(big.txt)", info.Title)
+	require.NotNil(t, info.Preview)
+	// Preview lines = summary (1) + 120 diff lines = 121, truncated to 100
+	assert.LessOrEqual(t, len(info.Preview), 100)
+	// Should have truncation marker
+	found := false
+	for _, line := range info.Preview {
+		if strings.HasPrefix(line, "…") {
+			found = true
+		}
+	}
+	assert.True(t, found, "expected truncation marker for large patch")
+}
+
+func TestFormatApprovalInfo_ApplyPatchInvalidInput(t *testing.T) {
+	// Invalid patch falls back to raw preview
+	input := "this is not a valid patch"
 	args := fmt.Sprintf(`{"input": %q}`, input)
 	info := formatApprovalInfo("apply_patch", args)
 	assert.Equal(t, "Patch", info.Title)
 	require.NotNil(t, info.Preview)
-	assert.Equal(t, "*** Begin Patch", info.Preview[0])
 }
 
 func TestFormatApprovalInfo_UnknownTool(t *testing.T) {

@@ -273,8 +273,9 @@ type SessionState struct {
 	ConversationID string                      `json:"conversation_id"`
 	History        history.ContextManager      `json:"-"`             // Not serialized directly; see note below
 	HistoryItems   []models.ConversationItem   `json:"history_items"` // Serialized form for ContinueAsNew
-	ToolSpecs      []tools.ToolSpec            `json:"tool_specs"`
-	Config         models.SessionConfiguration `json:"config"`
+	ToolSpecs       []tools.ToolSpec            `json:"tool_specs"`
+	Config          models.SessionConfiguration `json:"config"`
+	ResolvedProfile models.ResolvedProfile      `json:"resolved_profile"`
 
 	// Iteration tracking
 	IterationCount int `json:"iteration_count"`

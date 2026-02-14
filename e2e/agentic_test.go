@@ -46,6 +46,7 @@ var (
 	temporalCmd    *exec.Cmd
 	testWorker     worker.Worker
 	temporalClient client.Client
+	tcxBinaryPath  string // Path to tcx binary built for TUI tests; empty if build failed.
 )
 
 func TestMain(m *testing.M) {
@@ -102,6 +103,9 @@ func TestMain(m *testing.M) {
 	time.Sleep(time.Second)
 	log.Println("E2E: Worker started")
 
+	// 5b. Build tcx binary for TUI tests (non-fatal: TUI tests skip if missing)
+	tcxBinaryPath = buildTcxBinary()
+
 	// 6. Run tests
 	code := m.Run()
 
@@ -112,6 +116,9 @@ func TestMain(m *testing.M) {
 
 	// 7. Tear down
 	log.Println("E2E: Tearing down...")
+	if tcxBinaryPath != "" {
+		os.Remove(tcxBinaryPath)
+	}
 	testWorker.Stop()
 	temporalClient.Close()
 	temporalCmd.Process.Kill()
@@ -136,6 +143,29 @@ func findTemporalBin() string {
 		return p
 	}
 	return ""
+}
+
+// buildTcxBinary builds the tcx binary for TUI tests. Returns the absolute path
+// on success, or empty string on failure (logged but not fatal).
+func buildTcxBinary() string {
+	rootOut, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		log.Printf("E2E: Failed to find repo root for tcx build: %v", err)
+		return ""
+	}
+	root := strings.TrimSpace(string(rootOut))
+	binPath := filepath.Join(root, "tcx-e2e-test")
+
+	cmd := exec.Command("go", "build", "-o", binPath, "./cmd/tcx")
+	cmd.Dir = root
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		log.Printf("E2E: Failed to build tcx binary: %v", err)
+		return ""
+	}
+	log.Printf("E2E: Built tcx binary: %s", binPath)
+	return binPath
 }
 
 // writeE2EPassedMarker writes the current HEAD SHA to <repo-root>/.e2e-passed

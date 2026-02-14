@@ -298,7 +298,7 @@ func TestBuildToolSpecs_WithCollabTools(t *testing.T) {
 			EnableShell:    true,
 			EnableReadFile: true,
 			EnableCollab:   false,
-		})
+		}, models.ResolvedProfile{})
 
 		names := specNames(specs)
 		assert.Contains(t, names, "shell_command", "EnableShell=true resolves to shell_command")
@@ -316,7 +316,7 @@ func TestBuildToolSpecs_WithCollabTools(t *testing.T) {
 			EnableShell:    true,
 			EnableReadFile: true,
 			EnableCollab:   true,
-		})
+		}, models.ResolvedProfile{})
 
 		names := specNames(specs)
 		assert.Contains(t, names, "shell_command", "EnableShell=true resolves to shell_command")
@@ -342,7 +342,7 @@ func TestCollabToolsDisabledForChildren(t *testing.T) {
 
 	// Build child config at max depth — collab should be disabled
 	childConfig := buildAgentSharedConfig(parentConfig, MaxThreadSpawnDepth)
-	specs := buildToolSpecs(childConfig.Tools)
+	specs := buildToolSpecs(childConfig.Tools, models.ResolvedProfile{})
 
 	names := specNames(specs)
 	assert.NotContains(t, names, "spawn_agent", "child at max depth should not have spawn_agent")

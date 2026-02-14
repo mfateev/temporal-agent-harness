@@ -184,7 +184,8 @@ func (r *ItemRenderer) renderApprovalEntry(b *strings.Builder, index int, info a
 	if len(info.Preview) > 0 {
 		b.WriteString("      " + r.styles.OutputPrefix.Render("╭─") + "\n")
 		for _, line := range info.Preview {
-			b.WriteString("      " + r.styles.OutputPrefix.Render("│") + " " + r.styles.OutputDim.Render(line) + "\n")
+			styled := r.styleDiffLine(line)
+			b.WriteString("      " + r.styles.OutputPrefix.Render("│") + " " + styled + "\n")
 		}
 		b.WriteString("      " + r.styles.OutputPrefix.Render("╰─") + "\n")
 	}
@@ -192,6 +193,19 @@ func (r *ItemRenderer) renderApprovalEntry(b *strings.Builder, index int, info a
 		reasonStr := r.styles.ApprovalReason.Render("Reason:") + " " + reason
 		b.WriteString(fmt.Sprintf("      %s\n", reasonStr))
 	}
+}
+
+// styleDiffLine applies DiffAdd/DiffRemove/OutputDim styling based on line prefix.
+func (r *ItemRenderer) styleDiffLine(line string) string {
+	if len(line) > 0 {
+		switch line[0] {
+		case '+':
+			return r.styles.DiffAdd.Render(line)
+		case '-':
+			return r.styles.DiffRemove.Render(line)
+		}
+	}
+	return r.styles.OutputDim.Render(line)
 }
 
 // RenderApprovalPrompt renders the approval prompt for pending tool calls.
@@ -382,7 +396,7 @@ func PhaseMessage(phase workflow.TurnPhase, toolsInFlight []string) string {
 //	shell        → ("Ran", "echo hello")
 //	read_file    → ("Read", "/tmp/foo.txt")
 //	write_file   → ("Wrote", "/tmp/bar.txt")
-//	apply_patch  → ("Patched", "")
+//	apply_patch  → ("Update", "path/to/file") or ("Patched", "")
 //	list_dir     → ("Listed", "/tmp")
 //	grep_files   → ("Searched", `"TODO" in src/`)
 //	unknown      → ("Ran", "unknown_tool(…)")
@@ -407,6 +421,15 @@ func formatToolCall(name, argsJSON string) (verb, detail string) {
 		}
 		return "Wrote", ""
 	case "apply_patch":
+		if input, _ := args["input"].(string); input != "" {
+			paths := patchFilePaths(input)
+			if len(paths) == 1 {
+				return "Update", paths[0]
+			}
+			if len(paths) > 1 {
+				return "Update", paths[0] + fmt.Sprintf(" +%d files", len(paths)-1)
+			}
+		}
 		return "Patched", ""
 	case "list_dir":
 		if dp, ok := args["dir_path"].(string); ok {
