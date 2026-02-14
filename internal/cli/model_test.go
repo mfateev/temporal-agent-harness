@@ -172,9 +172,10 @@ func TestModel_PollResultUpdatesStatus(t *testing.T) {
 				{Type: models.ItemTypeAssistantMessage, Seq: 0, Content: "Hello"},
 			},
 			Status: workflow.TurnStatus{
-				Phase:       workflow.PhaseLLMCalling,
-				TotalTokens: 500,
-				TurnCount:   1,
+				Phase:             workflow.PhaseLLMCalling,
+				TotalTokens:      500,
+				TotalCachedTokens: 150,
+				TurnCount:        1,
 			},
 		},
 	}
@@ -182,6 +183,7 @@ func TestModel_PollResultUpdatesStatus(t *testing.T) {
 	result, _ := m.handlePollResult(msg)
 	rm := result.(*Model)
 	assert.Equal(t, 500, rm.totalTokens)
+	assert.Equal(t, 150, rm.totalCachedTokens)
 	assert.Equal(t, 1, rm.turnCount)
 	assert.Equal(t, 0, rm.lastRenderedSeq)
 }
@@ -738,6 +740,48 @@ func TestModel_SuggestionPollEmptyIgnored(t *testing.T) {
 	result, _ := m.handleSuggestionPoll(SuggestionPollMsg{Suggestion: ""})
 	rm := result.(*Model)
 	assert.Equal(t, "", rm.suggestion, "empty suggestion should be ignored")
+}
+
+func TestModel_StatusBarShowsCachedTokens(t *testing.T) {
+	m := newTestModel()
+	m.totalTokens = 5000
+	m.totalCachedTokens = 1200
+	m.turnCount = 3
+	m.state = StateInput
+	m.modelName = "gpt-4o-mini"
+
+	bar := m.renderStatusBar()
+	assert.Contains(t, bar, "5,000")
+	assert.Contains(t, bar, "(1,200 cached)")
+}
+
+func TestModel_StatusBarNoCachedWhenZero(t *testing.T) {
+	m := newTestModel()
+	m.totalTokens = 500
+	m.totalCachedTokens = 0
+	m.turnCount = 1
+	m.state = StateInput
+	m.modelName = "gpt-4o-mini"
+
+	bar := m.renderStatusBar()
+	assert.Contains(t, bar, "500")
+	assert.NotContains(t, bar, "cached")
+}
+
+func TestModel_SessionEndedShowsCachedTokens(t *testing.T) {
+	m := newTestModel()
+	m.state = StateWatching
+
+	updated, _ := m.Update(SessionCompletedMsg{Result: &workflow.WorkflowResult{
+		TotalTokens:       1500,
+		TotalCachedTokens: 400,
+		ToolCallsExecuted: []string{"shell"},
+	}})
+	um := updated.(*Model)
+	assert.True(t, um.quitting)
+	assert.Contains(t, um.viewportContent, "Session ended")
+	assert.Contains(t, um.viewportContent, "1500")
+	assert.Contains(t, um.viewportContent, "400 cached")
 }
 
 func TestModel_ClearSuggestionRestoresPlaceholder(t *testing.T) {

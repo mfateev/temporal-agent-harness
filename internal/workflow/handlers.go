@@ -38,6 +38,7 @@ func (s *SessionState) registerHandlers(ctx workflow.Context) {
 			PendingUserInputRequest: s.PendingUserInputReq,
 			IterationCount:          s.IterationCount,
 			TotalTokens:             s.TotalTokens,
+			TotalCachedTokens:       s.TotalCachedTokens,
 			TurnCount:               turnCount,
 			WorkerVersion:           version.GitCommit,
 			Suggestion:              s.Suggestion,

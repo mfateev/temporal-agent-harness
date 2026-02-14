@@ -85,6 +85,7 @@ func (c *OpenAIClient) Call(ctx context.Context, request LLMRequest) (LLMRespons
 			PromptTokens:     int(resp.Usage.InputTokens),
 			CompletionTokens: int(resp.Usage.OutputTokens),
 			TotalTokens:      int(resp.Usage.TotalTokens),
+			CachedTokens:     int(resp.Usage.InputTokensDetails.CachedTokens),
 		},
 	}, nil
 }
@@ -375,6 +376,11 @@ func parseCompactResponse(raw map[string]interface{}) ([]models.ConversationItem
 		}
 		if v, ok := usageMap["total_tokens"].(float64); ok {
 			usage.TotalTokens = int(v)
+		}
+		if details, ok := usageMap["input_tokens_details"].(map[string]interface{}); ok {
+			if v, ok := details["cached_tokens"].(float64); ok {
+				usage.CachedTokens = int(v)
+			}
 		}
 	}
 

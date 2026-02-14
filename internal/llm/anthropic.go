@@ -73,6 +73,7 @@ func (c *AnthropicClient) Call(ctx context.Context, request LLMRequest) (LLMResp
 			PromptTokens:     int(response.Usage.InputTokens),
 			CompletionTokens: int(response.Usage.OutputTokens),
 			TotalTokens:      int(response.Usage.InputTokens + response.Usage.OutputTokens),
+			CachedTokens:     int(response.Usage.CacheReadInputTokens),
 		},
 	}, nil
 }

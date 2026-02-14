@@ -425,13 +425,18 @@ func (s *AgenticWorkflowTestSuite) TestMultiTurn_ContinueAsNewPreservesState() {
 		ShutdownRequested: false,
 		CurrentTurnID:     "turn-1",
 		TotalTokens:       100,
+		TotalCachedTokens: 30,
 		ToolCallsExecuted: []string{"shell"},
 	}
 
 	s.env.RegisterWorkflow(AgenticWorkflowContinued)
 
 	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
-		Return(mockLLMStopResponse("Continued response", 50), nil).Maybe()
+		Return(activities.LLMActivityOutput{
+			Items:        []models.ConversationItem{{Type: models.ItemTypeAssistantMessage, Content: "Continued response"}},
+			FinishReason: models.FinishReasonStop,
+			TokenUsage:   models.TokenUsage{TotalTokens: 50, CachedTokens: 20},
+		}, nil).Maybe()
 
 	// Send user input to resume
 	s.env.RegisterDelayedCallback(func() {
@@ -452,6 +457,8 @@ func (s *AgenticWorkflowTestSuite) TestMultiTurn_ContinueAsNewPreservesState() {
 	assert.Equal(s.T(), "shutdown", result.EndReason)
 	// TotalTokens should include the original 100 + new 50
 	assert.Equal(s.T(), 150, result.TotalTokens)
+	// TotalCachedTokens should include the original 30 + new 20
+	assert.Equal(s.T(), 50, result.TotalCachedTokens)
 	assert.Contains(s.T(), result.ToolCallsExecuted, "shell")
 }
 
@@ -620,6 +627,7 @@ func TestSessionState_MultiTurnFieldsSerialize(t *testing.T) {
 		Interrupted:       true,
 		CurrentTurnID:     "turn-99",
 		TotalTokens:       500,
+		TotalCachedTokens: 150,
 		ToolCallsExecuted: []string{"shell", "read_file"},
 	}
 
@@ -628,6 +636,7 @@ func TestSessionState_MultiTurnFieldsSerialize(t *testing.T) {
 	assert.True(t, state.Interrupted)
 	assert.Equal(t, "turn-99", state.CurrentTurnID)
 	assert.Equal(t, 500, state.TotalTokens)
+	assert.Equal(t, 150, state.TotalCachedTokens)
 	assert.Equal(t, []string{"shell", "read_file"}, state.ToolCallsExecuted)
 }
 
@@ -3150,6 +3159,84 @@ func TestBuildSuggestionInput_AnthropicProvider(t *testing.T) {
 
 	assert.Equal(t, "claude-haiku-4-5-20251001", input.ModelConfig.Model)
 	assert.Equal(t, "anthropic", input.ModelConfig.Provider)
+}
+
+// TestMultiTurn_CachedTokensTracking verifies that CachedTokens from LLM
+// responses accumulate in TotalCachedTokens across multiple turns.
+func (s *AgenticWorkflowTestSuite) TestMultiTurn_CachedTokensTracking() {
+	// Turn 1: no cached tokens
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(activities.LLMActivityOutput{
+			Items:        []models.ConversationItem{{Type: models.ItemTypeAssistantMessage, Content: "Response 1"}},
+			FinishReason: models.FinishReasonStop,
+			TokenUsage:   models.TokenUsage{TotalTokens: 50, CachedTokens: 0},
+		}, nil).Once()
+	// Turn 2: 20 cached tokens
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(activities.LLMActivityOutput{
+			Items:        []models.ConversationItem{{Type: models.ItemTypeAssistantMessage, Content: "Response 2"}},
+			FinishReason: models.FinishReasonStop,
+			TokenUsage:   models.TokenUsage{TotalTokens: 60, CachedTokens: 20},
+		}, nil).Once()
+	// Turn 3: 35 cached tokens
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(activities.LLMActivityOutput{
+			Items:        []models.ConversationItem{{Type: models.ItemTypeAssistantMessage, Content: "Response 3"}},
+			FinishReason: models.FinishReasonStop,
+			TokenUsage:   models.TokenUsage{TotalTokens: 70, CachedTokens: 35},
+		}, nil).Once()
+
+	// Send second message
+	s.env.RegisterDelayedCallback(func() {
+		s.env.UpdateWorkflow(UpdateUserInput, "input-2", noopCallback(),
+			UserInput{Content: "Second question"})
+	}, time.Second*2)
+
+	// Send third message
+	s.env.RegisterDelayedCallback(func() {
+		s.env.UpdateWorkflow(UpdateUserInput, "input-3", noopCallback(),
+			UserInput{Content: "Third question"})
+	}, time.Second*4)
+
+	// Shutdown after third turn
+	s.sendShutdown(time.Second * 6)
+
+	s.env.ExecuteWorkflow(AgenticWorkflow, testInput("First question"))
+
+	require.True(s.T(), s.env.IsWorkflowCompleted())
+	var result WorkflowResult
+	require.NoError(s.T(), s.env.GetWorkflowResult(&result))
+	assert.Equal(s.T(), "shutdown", result.EndReason)
+	assert.Equal(s.T(), 180, result.TotalTokens)       // 50 + 60 + 70
+	assert.Equal(s.T(), 55, result.TotalCachedTokens)   // 0 + 20 + 35
+}
+
+// TestMultiTurn_CachedTokensInTurnStatus verifies TotalCachedTokens is
+// reported in the get_turn_status query response.
+func (s *AgenticWorkflowTestSuite) TestMultiTurn_CachedTokensInTurnStatus() {
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(activities.LLMActivityOutput{
+			Items:        []models.ConversationItem{{Type: models.ItemTypeAssistantMessage, Content: "Cached reply"}},
+			FinishReason: models.FinishReasonStop,
+			TokenUsage:   models.TokenUsage{TotalTokens: 45, CachedTokens: 15},
+		}, nil).Once()
+
+	s.env.RegisterDelayedCallback(func() {
+		result, err := s.env.QueryWorkflow(QueryGetTurnStatus)
+		require.NoError(s.T(), err)
+
+		var status TurnStatus
+		require.NoError(s.T(), result.Get(&status))
+
+		assert.Equal(s.T(), PhaseWaitingForInput, status.Phase)
+		assert.Equal(s.T(), 45, status.TotalTokens)
+		assert.Equal(s.T(), 15, status.TotalCachedTokens)
+	}, time.Second*2)
+
+	s.sendShutdown(time.Second * 3)
+
+	s.env.ExecuteWorkflow(AgenticWorkflow, testInput("Hello"))
+	require.True(s.T(), s.env.IsWorkflowCompleted())
 }
 
 // Ensure we reference workflow.Context (suppress unused import warning)

@@ -141,6 +141,7 @@ func (s *SessionState) runMultiTurnLoop(ctx workflow.Context) (WorkflowResult, e
 				ConversationID:    s.ConversationID,
 				TotalIterations:   s.IterationCount,
 				TotalTokens:       s.TotalTokens,
+				TotalCachedTokens: s.TotalCachedTokens,
 				ToolCallsExecuted: s.ToolCallsExecuted,
 				EndReason:         "shutdown",
 				FinalMessage:      extractFinalMessage(items),

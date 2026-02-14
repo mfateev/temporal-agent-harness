@@ -73,6 +73,7 @@ func (s *SessionState) performCompaction(ctx workflow.Context) error {
 
 	// Track token usage from compaction
 	s.TotalTokens += compactResult.TokenUsage.TotalTokens
+	s.TotalCachedTokens += compactResult.TokenUsage.CachedTokens
 
 	logger.Info("Context compaction completed",
 		"compaction_count", s.CompactionCount,

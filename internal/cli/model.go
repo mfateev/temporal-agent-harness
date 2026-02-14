@@ -148,11 +148,12 @@ type Model struct {
 	renderer *ItemRenderer
 
 	// Status
-	modelName     string
-	totalTokens   int
-	turnCount     int
-	spinnerMsg    string
-	workerVersion string
+	modelName         string
+	totalTokens       int
+	totalCachedTokens int
+	turnCount         int
+	spinnerMsg        string
+	workerVersion     string
 
 	// Approval state
 	pendingApprovals   []workflow.PendingApproval
@@ -412,8 +413,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.stopPolling()
 		if msg.Result != nil {
-			m.appendToViewport(fmt.Sprintf("Session ended. Tokens: %d, Tools: %d\n",
-				msg.Result.TotalTokens, len(msg.Result.ToolCallsExecuted)))
+			sessionEndMsg := fmt.Sprintf("Session ended. Tokens: %d", msg.Result.TotalTokens)
+			if msg.Result.TotalCachedTokens > 0 {
+				sessionEndMsg += fmt.Sprintf(" (%d cached)", msg.Result.TotalCachedTokens)
+			}
+			sessionEndMsg += fmt.Sprintf(", Tools: %d\n", len(msg.Result.ToolCallsExecuted))
+			m.appendToViewport(sessionEndMsg)
 		} else {
 			m.appendToViewport("Session ended.\n")
 		}
@@ -493,6 +498,9 @@ func (m Model) renderStatusBar() string {
 	}
 
 	tokens := formatTokens(m.totalTokens)
+	if m.totalCachedTokens > 0 {
+		tokens += fmt.Sprintf(" (%s cached)", formatTokens(m.totalCachedTokens))
+	}
 	turn := fmt.Sprintf("turn %d", m.turnCount)
 
 	var stateLabel string
@@ -1227,6 +1235,7 @@ func (m *Model) handlePollResult(msg PollResultMsg) (tea.Model, tea.Cmd) {
 	// Update status
 	m.spinnerMsg = PhaseMessage(result.Status.Phase, result.Status.ToolsInFlight)
 	m.totalTokens = result.Status.TotalTokens
+	m.totalCachedTokens = result.Status.TotalCachedTokens
 	m.turnCount = result.Status.TurnCount
 	if result.Status.WorkerVersion != "" {
 		m.workerVersion = result.Status.WorkerVersion
