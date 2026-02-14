@@ -6,6 +6,7 @@
 # Binaries
 /worker
 /tcx
+/tcx-e2e-test
 *.exe
 *.exe~
 *.dll
