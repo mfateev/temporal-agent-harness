@@ -132,6 +132,30 @@ func TestExtractFinalMessage(t *testing.T) {
 	})
 }
 
+// allTools returns EnabledTools with all built-in tools plus collab.
+func allTools() []string {
+	return []string{
+		"shell_command", "read_file", "write_file", "list_dir",
+		"grep_files", "apply_patch", "request_user_input", "update_plan",
+		"collab",
+	}
+}
+
+// allToolsWithout returns allTools minus the given names.
+func allToolsWithout(exclude ...string) []string {
+	rm := make(map[string]bool, len(exclude))
+	for _, n := range exclude {
+		rm[n] = true
+	}
+	var out []string
+	for _, t := range allTools() {
+		if !rm[t] {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 func TestBuildAgentSharedConfig(t *testing.T) {
 	parent := models.SessionConfiguration{
 		Model: models.ModelConfig{
@@ -141,13 +165,7 @@ func TestBuildAgentSharedConfig(t *testing.T) {
 			MaxTokens:   4096,
 		},
 		Tools: models.ToolsConfig{
-			EnableShell:      true,
-			EnableReadFile:   true,
-			EnableWriteFile:  true,
-			EnableApplyPatch: true,
-			EnableListDir:    true,
-			EnableGrepFiles:  true,
-			EnableCollab:     true,
+			EnabledTools: allTools(),
 		},
 		Cwd:          "/workspace",
 		ApprovalMode: models.ApprovalNever,
@@ -155,15 +173,15 @@ func TestBuildAgentSharedConfig(t *testing.T) {
 
 	t.Run("child at max depth has collab disabled", func(t *testing.T) {
 		cfg := buildAgentSharedConfig(parent, MaxThreadSpawnDepth)
-		assert.False(t, cfg.Tools.EnableCollab, "collab should be disabled at max depth")
+		assert.False(t, cfg.Tools.HasTool("spawn_agent"), "collab should be disabled at max depth")
 		// Other tools should be preserved
-		assert.True(t, cfg.Tools.EnableShell)
-		assert.True(t, cfg.Tools.EnableReadFile)
+		assert.True(t, cfg.Tools.HasTool("shell_command"))
+		assert.True(t, cfg.Tools.HasTool("read_file"))
 	})
 
 	t.Run("child below max depth preserves collab", func(t *testing.T) {
 		cfg := buildAgentSharedConfig(parent, 0)
-		assert.True(t, cfg.Tools.EnableCollab, "collab should be preserved below max depth")
+		assert.True(t, cfg.Tools.HasTool("spawn_agent"), "collab should be preserved below max depth")
 	})
 
 	t.Run("inherits parent config", func(t *testing.T) {
@@ -179,24 +197,18 @@ func TestApplyRoleOverrides(t *testing.T) {
 		cfg := models.SessionConfiguration{
 			Model: models.ModelConfig{Provider: "openai", Model: "gpt-4o"},
 			Tools: models.ToolsConfig{
-				EnableShell:            true,
-				EnableReadFile:         true,
-				EnableWriteFile:        true,
-				EnableApplyPatch:       true,
-				EnableListDir:          true,
-				EnableGrepFiles:        true,
-				EnableRequestUserInput: true,
+				EnabledTools: allTools(),
 			},
 		}
 		applyRoleOverrides(&cfg, AgentRoleExplorer)
 		assert.Equal(t, "medium", cfg.Model.ReasoningEffort)
-		assert.False(t, cfg.Tools.EnableWriteFile, "explorer should not write")
-		assert.False(t, cfg.Tools.EnableApplyPatch, "explorer should not patch")
-		assert.False(t, cfg.Tools.EnableRequestUserInput, "explorer is one-shot")
-		assert.True(t, cfg.Tools.EnableShell, "explorer keeps shell for read commands")
-		assert.True(t, cfg.Tools.EnableReadFile, "explorer keeps read_file")
-		assert.True(t, cfg.Tools.EnableListDir, "explorer keeps list_dir")
-		assert.True(t, cfg.Tools.EnableGrepFiles, "explorer keeps grep_files")
+		assert.False(t, cfg.Tools.HasTool("write_file"), "explorer should not write")
+		assert.False(t, cfg.Tools.HasTool("apply_patch"), "explorer should not patch")
+		assert.False(t, cfg.Tools.HasTool("request_user_input"), "explorer is one-shot")
+		assert.True(t, cfg.Tools.HasTool("shell_command"), "explorer keeps shell for read commands")
+		assert.True(t, cfg.Tools.HasTool("read_file"), "explorer keeps read_file")
+		assert.True(t, cfg.Tools.HasTool("list_dir"), "explorer keeps list_dir")
+		assert.True(t, cfg.Tools.HasTool("grep_files"), "explorer keeps grep_files")
 		assert.Equal(t, ExplorerModel, cfg.Model.Model, "explorer on openai should use cheaper model")
 	})
 
@@ -204,10 +216,7 @@ func TestApplyRoleOverrides(t *testing.T) {
 		cfg := models.SessionConfiguration{
 			Model: models.ModelConfig{Provider: "anthropic", Model: "claude-sonnet-4-5-20250929"},
 			Tools: models.ToolsConfig{
-				EnableShell:      true,
-				EnableReadFile:   true,
-				EnableWriteFile:  true,
-				EnableApplyPatch: true,
+				EnabledTools: []string{"shell_command", "read_file", "write_file", "apply_patch"},
 			},
 		}
 		applyRoleOverrides(&cfg, AgentRoleExplorer)
@@ -218,19 +227,15 @@ func TestApplyRoleOverrides(t *testing.T) {
 	t.Run("orchestrator: no write tools, one-shot, has base instructions", func(t *testing.T) {
 		cfg := models.SessionConfiguration{
 			Tools: models.ToolsConfig{
-				EnableShell:            true,
-				EnableReadFile:         true,
-				EnableWriteFile:        true,
-				EnableApplyPatch:       true,
-				EnableRequestUserInput: true,
+				EnabledTools: []string{"shell_command", "read_file", "write_file", "apply_patch", "request_user_input"},
 			},
 		}
 		applyRoleOverrides(&cfg, AgentRoleOrchestrator)
-		assert.False(t, cfg.Tools.EnableWriteFile)
-		assert.False(t, cfg.Tools.EnableApplyPatch)
-		assert.False(t, cfg.Tools.EnableRequestUserInput, "orchestrator is one-shot")
-		assert.True(t, cfg.Tools.EnableShell, "orchestrator keeps shell for read commands")
-		assert.True(t, cfg.Tools.EnableReadFile, "orchestrator keeps read_file")
+		assert.False(t, cfg.Tools.HasTool("write_file"))
+		assert.False(t, cfg.Tools.HasTool("apply_patch"))
+		assert.False(t, cfg.Tools.HasTool("request_user_input"), "orchestrator is one-shot")
+		assert.True(t, cfg.Tools.HasTool("shell_command"), "orchestrator keeps shell for read commands")
+		assert.True(t, cfg.Tools.HasTool("read_file"), "orchestrator keeps read_file")
 		assert.Contains(t, cfg.BaseInstructions, "Sub-agents",
 			"orchestrator should have base instructions with sub-agent guidance")
 	})
@@ -238,63 +243,48 @@ func TestApplyRoleOverrides(t *testing.T) {
 	t.Run("worker: full tools, one-shot", func(t *testing.T) {
 		cfg := models.SessionConfiguration{
 			Tools: models.ToolsConfig{
-				EnableShell:            true,
-				EnableReadFile:         true,
-				EnableWriteFile:        true,
-				EnableApplyPatch:       true,
-				EnableRequestUserInput: true,
+				EnabledTools: []string{"shell_command", "read_file", "write_file", "apply_patch", "request_user_input"},
 			},
 		}
 		applyRoleOverrides(&cfg, AgentRoleWorker)
-		assert.True(t, cfg.Tools.EnableShell)
-		assert.True(t, cfg.Tools.EnableReadFile)
-		assert.True(t, cfg.Tools.EnableWriteFile)
-		assert.True(t, cfg.Tools.EnableApplyPatch)
-		assert.False(t, cfg.Tools.EnableRequestUserInput, "worker is one-shot")
+		assert.True(t, cfg.Tools.HasTool("shell_command"))
+		assert.True(t, cfg.Tools.HasTool("read_file"))
+		assert.True(t, cfg.Tools.HasTool("write_file"))
+		assert.True(t, cfg.Tools.HasTool("apply_patch"))
+		assert.False(t, cfg.Tools.HasTool("request_user_input"), "worker is one-shot")
 	})
 
 	t.Run("default: one-shot", func(t *testing.T) {
 		cfg := models.SessionConfiguration{
 			Tools: models.ToolsConfig{
-				EnableShell:            true,
-				EnableReadFile:         true,
-				EnableWriteFile:        true,
-				EnableApplyPatch:       true,
-				EnableRequestUserInput: true,
+				EnabledTools: []string{"shell_command", "read_file", "write_file", "apply_patch", "request_user_input"},
 			},
 		}
 		applyRoleOverrides(&cfg, AgentRoleDefault)
-		assert.True(t, cfg.Tools.EnableShell)
-		assert.True(t, cfg.Tools.EnableReadFile)
-		assert.True(t, cfg.Tools.EnableWriteFile)
-		assert.True(t, cfg.Tools.EnableApplyPatch)
-		assert.False(t, cfg.Tools.EnableRequestUserInput, "default is one-shot")
+		assert.True(t, cfg.Tools.HasTool("shell_command"))
+		assert.True(t, cfg.Tools.HasTool("read_file"))
+		assert.True(t, cfg.Tools.HasTool("write_file"))
+		assert.True(t, cfg.Tools.HasTool("apply_patch"))
+		assert.False(t, cfg.Tools.HasTool("request_user_input"), "default is one-shot")
 	})
 
 	t.Run("planner: read-only, no collab, interactive, custom instructions", func(t *testing.T) {
 		cfg := models.SessionConfiguration{
 			Model: models.ModelConfig{Model: "gpt-4o"},
 			Tools: models.ToolsConfig{
-				EnableShell:            true,
-				EnableReadFile:         true,
-				EnableWriteFile:        true,
-				EnableApplyPatch:       true,
-				EnableListDir:          true,
-				EnableGrepFiles:        true,
-				EnableCollab:           true,
-				EnableRequestUserInput: true,
+				EnabledTools: allTools(),
 			},
 			BaseInstructions: "original instructions",
 		}
 		applyRoleOverrides(&cfg, AgentRolePlanner)
-		assert.False(t, cfg.Tools.EnableWriteFile, "planner should not write")
-		assert.False(t, cfg.Tools.EnableApplyPatch, "planner should not patch")
-		assert.False(t, cfg.Tools.EnableCollab, "planner should not spawn children")
-		assert.True(t, cfg.Tools.EnableRequestUserInput, "planner keeps user interaction")
-		assert.True(t, cfg.Tools.EnableShell, "planner keeps shell for read commands")
-		assert.True(t, cfg.Tools.EnableReadFile, "planner keeps read_file")
-		assert.True(t, cfg.Tools.EnableListDir, "planner keeps list_dir")
-		assert.True(t, cfg.Tools.EnableGrepFiles, "planner keeps grep_files")
+		assert.False(t, cfg.Tools.HasTool("write_file"), "planner should not write")
+		assert.False(t, cfg.Tools.HasTool("apply_patch"), "planner should not patch")
+		assert.False(t, cfg.Tools.HasTool("spawn_agent"), "planner should not spawn children")
+		assert.True(t, cfg.Tools.HasTool("request_user_input"), "planner keeps user interaction")
+		assert.True(t, cfg.Tools.HasTool("shell_command"), "planner keeps shell for read commands")
+		assert.True(t, cfg.Tools.HasTool("read_file"), "planner keeps read_file")
+		assert.True(t, cfg.Tools.HasTool("list_dir"), "planner keeps list_dir")
+		assert.True(t, cfg.Tools.HasTool("grep_files"), "planner keeps grep_files")
 		assert.NotEqual(t, "original instructions", cfg.BaseInstructions,
 			"planner should have custom base instructions")
 		assert.Contains(t, cfg.BaseInstructions, "planning agent",
@@ -305,14 +295,11 @@ func TestApplyRoleOverrides(t *testing.T) {
 func TestBuildToolSpecs_WithCollabTools(t *testing.T) {
 	t.Run("collab disabled", func(t *testing.T) {
 		specs := buildToolSpecs(models.ToolsConfig{
-			EnableShell:            true,
-			EnableReadFile:         true,
-			EnableCollab:           false,
-			EnableRequestUserInput: true,
+			EnabledTools: []string{"shell_command", "read_file", "request_user_input"},
 		}, models.ResolvedProfile{})
 
 		names := specNames(specs)
-		assert.Contains(t, names, "shell_command", "EnableShell=true resolves to shell_command")
+		assert.Contains(t, names, "shell_command")
 		assert.Contains(t, names, "read_file")
 		assert.Contains(t, names, "request_user_input")
 		assert.NotContains(t, names, "spawn_agent")
@@ -324,14 +311,11 @@ func TestBuildToolSpecs_WithCollabTools(t *testing.T) {
 
 	t.Run("collab enabled", func(t *testing.T) {
 		specs := buildToolSpecs(models.ToolsConfig{
-			EnableShell:            true,
-			EnableReadFile:         true,
-			EnableCollab:           true,
-			EnableRequestUserInput: true,
+			EnabledTools: []string{"shell_command", "read_file", "request_user_input", "collab"},
 		}, models.ResolvedProfile{})
 
 		names := specNames(specs)
-		assert.Contains(t, names, "shell_command", "EnableShell=true resolves to shell_command")
+		assert.Contains(t, names, "shell_command")
 		assert.Contains(t, names, "read_file")
 		assert.Contains(t, names, "request_user_input")
 		assert.Contains(t, names, "spawn_agent")
@@ -346,9 +330,7 @@ func TestCollabToolsDisabledForChildren(t *testing.T) {
 	// Simulate a parent config with collab enabled
 	parentConfig := models.SessionConfiguration{
 		Tools: models.ToolsConfig{
-			EnableShell:    true,
-			EnableReadFile: true,
-			EnableCollab:   true,
+			EnabledTools: []string{"shell_command", "read_file", "collab"},
 		},
 	}
 
@@ -365,61 +347,42 @@ func TestCollabToolsDisabledForChildren(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// buildToolSpecs ShellType tests
+// buildToolSpecs shell tool variant tests
 // ---------------------------------------------------------------------------
 
-func TestBuildToolSpecs_ShellType_Default(t *testing.T) {
+func TestBuildToolSpecs_ShellVariant_Shell(t *testing.T) {
 	specs := buildToolSpecs(models.ToolsConfig{
-		ShellType: models.ShellToolDefault,
+		EnabledTools: []string{"shell"},
 	}, models.ResolvedProfile{})
 	names := specNames(specs)
-	assert.Contains(t, names, "shell", "ShellToolDefault should produce 'shell' spec")
+	assert.Contains(t, names, "shell", "'shell' in EnabledTools should produce 'shell' spec")
 	assert.NotContains(t, names, "shell_command")
 }
 
-func TestBuildToolSpecs_ShellType_ShellCommand(t *testing.T) {
+func TestBuildToolSpecs_ShellVariant_ShellCommand(t *testing.T) {
 	specs := buildToolSpecs(models.ToolsConfig{
-		ShellType: models.ShellToolShellCommand,
+		EnabledTools: []string{"shell_command"},
 	}, models.ResolvedProfile{})
 	names := specNames(specs)
-	assert.Contains(t, names, "shell_command", "ShellToolShellCommand should produce 'shell_command' spec")
+	assert.Contains(t, names, "shell_command", "'shell_command' in EnabledTools should produce 'shell_command' spec")
 	assert.NotContains(t, names, "shell")
 }
 
-func TestBuildToolSpecs_ShellType_Disabled(t *testing.T) {
+func TestBuildToolSpecs_NoShell(t *testing.T) {
 	specs := buildToolSpecs(models.ToolsConfig{
-		ShellType: models.ShellToolDisabled,
+		EnabledTools: []string{"read_file"},
 	}, models.ResolvedProfile{})
 	names := specNames(specs)
-	assert.NotContains(t, names, "shell")
-	assert.NotContains(t, names, "shell_command")
-}
-
-func TestBuildToolSpecs_ShellType_BackwardCompat(t *testing.T) {
-	// EnableShell=true with no explicit ShellType should produce shell_command
-	specs := buildToolSpecs(models.ToolsConfig{
-		EnableShell: true,
-	}, models.ResolvedProfile{})
-	names := specNames(specs)
-	assert.Contains(t, names, "shell_command", "EnableShell=true should default to shell_command")
-
-	// EnableShell=false with no explicit ShellType should produce nothing
-	specs = buildToolSpecs(models.ToolsConfig{
-		EnableShell: false,
-	}, models.ResolvedProfile{})
-	names = specNames(specs)
 	assert.NotContains(t, names, "shell")
 	assert.NotContains(t, names, "shell_command")
 }
 
-func TestBuildToolSpecs_ShellType_ExplicitOverridesEnableShell(t *testing.T) {
-	// Explicit ShellType takes precedence over EnableShell
-	specs := buildToolSpecs(models.ToolsConfig{
-		EnableShell: false,
-		ShellType:   models.ShellToolDefault,
-	}, models.ResolvedProfile{})
+func TestBuildToolSpecs_DefaultConfig(t *testing.T) {
+	// Default config should include shell_command (not shell)
+	specs := buildToolSpecs(models.DefaultToolsConfig(), models.ResolvedProfile{})
 	names := specNames(specs)
-	assert.Contains(t, names, "shell", "explicit ShellType should override EnableShell=false")
+	assert.Contains(t, names, "shell_command", "default config should include shell_command")
+	assert.NotContains(t, names, "shell", "default config should not include array-based shell")
 }
 
 func TestCollabToolApprovalSkip(t *testing.T) {
@@ -479,11 +442,7 @@ func TestBuildAgentSpawnConfig(t *testing.T) {
 			MaxTokens:   4096,
 		},
 		Tools: models.ToolsConfig{
-			EnableShell:      true,
-			EnableReadFile:   true,
-			EnableWriteFile:  true,
-			EnableApplyPatch: true,
-			EnableCollab:     true,
+			EnabledTools: []string{"shell_command", "read_file", "write_file", "apply_patch", "collab"},
 		},
 		Cwd: "/workspace",
 	}
@@ -492,24 +451,24 @@ func TestBuildAgentSpawnConfig(t *testing.T) {
 		input := buildAgentSpawnConfig(parentConfig, AgentRoleDefault, "do something", 1)
 		assert.Equal(t, "do something", input.UserMessage)
 		assert.Equal(t, 1, input.Depth)
-		assert.False(t, input.Config.Tools.EnableCollab, "child at depth 1 cannot spawn")
-		assert.True(t, input.Config.Tools.EnableShell)
-		assert.True(t, input.Config.Tools.EnableWriteFile)
+		assert.False(t, input.Config.Tools.HasTool("spawn_agent"), "child at depth 1 cannot spawn")
+		assert.True(t, input.Config.Tools.HasTool("shell_command"))
+		assert.True(t, input.Config.Tools.HasTool("write_file"))
 	})
 
 	t.Run("explorer role", func(t *testing.T) {
 		input := buildAgentSpawnConfig(parentConfig, AgentRoleExplorer, "explore", 1)
 		assert.Equal(t, "medium", input.Config.Model.ReasoningEffort)
-		assert.False(t, input.Config.Tools.EnableWriteFile)
-		assert.False(t, input.Config.Tools.EnableApplyPatch)
-		assert.True(t, input.Config.Tools.EnableReadFile)
+		assert.False(t, input.Config.Tools.HasTool("write_file"))
+		assert.False(t, input.Config.Tools.HasTool("apply_patch"))
+		assert.True(t, input.Config.Tools.HasTool("read_file"))
 	})
 
 	t.Run("orchestrator role", func(t *testing.T) {
 		input := buildAgentSpawnConfig(parentConfig, AgentRoleOrchestrator, "orchestrate", 1)
-		assert.False(t, input.Config.Tools.EnableWriteFile)
-		assert.False(t, input.Config.Tools.EnableApplyPatch)
-		assert.True(t, input.Config.Tools.EnableShell, "orchestrator keeps shell for read commands")
+		assert.False(t, input.Config.Tools.HasTool("write_file"))
+		assert.False(t, input.Config.Tools.HasTool("apply_patch"))
+		assert.True(t, input.Config.Tools.HasTool("shell_command"), "orchestrator keeps shell for read commands")
 		assert.Contains(t, input.Config.BaseInstructions, "Sub-agents",
 			"orchestrator should have base instructions")
 	})
@@ -518,11 +477,11 @@ func TestBuildAgentSpawnConfig(t *testing.T) {
 		input := buildAgentSpawnConfig(parentConfig, AgentRolePlanner, "plan the feature", 1)
 		assert.Equal(t, "plan the feature", input.UserMessage)
 		assert.Equal(t, 1, input.Depth)
-		assert.False(t, input.Config.Tools.EnableWriteFile, "planner should not write")
-		assert.False(t, input.Config.Tools.EnableApplyPatch, "planner should not patch")
-		assert.False(t, input.Config.Tools.EnableCollab, "planner at depth 1 has collab disabled (both depth and role)")
-		assert.True(t, input.Config.Tools.EnableShell, "planner keeps shell for read commands")
-		assert.True(t, input.Config.Tools.EnableReadFile, "planner keeps read_file")
+		assert.False(t, input.Config.Tools.HasTool("write_file"), "planner should not write")
+		assert.False(t, input.Config.Tools.HasTool("apply_patch"), "planner should not patch")
+		assert.False(t, input.Config.Tools.HasTool("spawn_agent"), "planner at depth 1 has collab disabled (both depth and role)")
+		assert.True(t, input.Config.Tools.HasTool("shell_command"), "planner keeps shell for read commands")
+		assert.True(t, input.Config.Tools.HasTool("read_file"), "planner keeps read_file")
 		assert.Contains(t, input.Config.BaseInstructions, "planning agent",
 			"planner should have custom base instructions")
 	})
@@ -628,7 +587,7 @@ func specNames(specs []tools.ToolSpec) []string {
 
 func TestBuildToolSpecs_UpdatePlan_Enabled(t *testing.T) {
 	specs := buildToolSpecs(models.ToolsConfig{
-		EnableUpdatePlan: true,
+		EnabledTools: []string{"update_plan"},
 	}, models.ResolvedProfile{})
 	names := specNames(specs)
 	assert.Contains(t, names, "update_plan", "update_plan should be present when enabled")
@@ -636,10 +595,10 @@ func TestBuildToolSpecs_UpdatePlan_Enabled(t *testing.T) {
 
 func TestBuildToolSpecs_UpdatePlan_Disabled(t *testing.T) {
 	specs := buildToolSpecs(models.ToolsConfig{
-		EnableUpdatePlan: false,
+		EnabledTools: []string{"shell_command"},
 	}, models.ResolvedProfile{})
 	names := specNames(specs)
-	assert.NotContains(t, names, "update_plan", "update_plan should not be present when disabled")
+	assert.NotContains(t, names, "update_plan", "update_plan should not be present when not in EnabledTools")
 }
 
 func TestBuildToolSpecs_UpdatePlan_DefaultConfig(t *testing.T) {

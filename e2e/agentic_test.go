@@ -271,7 +271,7 @@ func createWorker(c client.Client) worker.Worker {
 func testSessionConfig(maxTokens int, tools models.ToolsConfig) models.SessionConfiguration {
 	// All E2E tests are top-level workflows that need request_user_input
 	// to stay alive between turns (otherwise they auto-complete).
-	tools.EnableRequestUserInput = true
+	tools.AddTools("request_user_input")
 	return models.SessionConfiguration{
 		Model: models.ModelConfig{
 			Model:         CheapModel,
@@ -430,10 +430,7 @@ func TestAgenticWorkflow_SingleTurn(t *testing.T) {
 	input := workflow.WorkflowInput{
 		ConversationID: workflowID,
 		UserMessage:    "Say hello in exactly 3 words. Do not use any tools.",
-		Config: testSessionConfig(100, models.ToolsConfig{
-			EnableShell:    false,
-			EnableReadFile: false,
-		}),
+		Config: testSessionConfig(100, models.ToolsConfig{}),
 	}
 
 	t.Logf("Starting workflow: %s", workflowID)
@@ -468,8 +465,7 @@ func TestAgenticWorkflow_WithShellTool(t *testing.T) {
 		UserMessage: "You MUST use the shell tool to execute this exact command: echo 'Hello from shell test'. " +
 			"Do NOT answer without calling the shell tool first. After getting the result, report the output.",
 		Config: testSessionConfig(500, models.ToolsConfig{
-			EnableShell:    true,
-			EnableReadFile: false,
+			EnabledTools: []string{"shell_command"},
 		}),
 	}
 
@@ -506,8 +502,7 @@ func TestAgenticWorkflow_MultiTurn(t *testing.T) {
 			"Step 2: After the shell command succeeds, use the read_file tool to read " + testFile + "\n" +
 			"Step 3: Report what read_file returned.",
 		Config: testSessionConfig(1000, models.ToolsConfig{
-			EnableShell:    true,
-			EnableReadFile: true,
+			EnabledTools: []string{"shell_command", "read_file"},
 		}),
 	}
 
@@ -547,8 +542,7 @@ func TestAgenticWorkflow_ReadFile(t *testing.T) {
 		UserMessage: "You MUST use the read_file tool to read the file at path " + testFile + ". " +
 			"Do NOT answer without calling read_file first. After reading, tell me how many lines it has.",
 		Config: testSessionConfig(500, models.ToolsConfig{
-			EnableShell:    false,
-			EnableReadFile: true,
+			EnabledTools: []string{"read_file"},
 		}),
 	}
 
@@ -587,9 +581,7 @@ func TestAgenticWorkflow_ListDir(t *testing.T) {
 		UserMessage: "You MUST use the list_dir tool to list the directory at " + testDir + ". " +
 			"Do NOT use any other tool. After listing, report the entries you see.",
 		Config: testSessionConfig(500, models.ToolsConfig{
-			EnableShell:    false,
-			EnableReadFile: false,
-			EnableListDir:  true,
+			EnabledTools: []string{"list_dir"},
 		}),
 	}
 
@@ -628,9 +620,7 @@ func TestAgenticWorkflow_GrepFiles(t *testing.T) {
 		UserMessage: "You MUST use the grep_files tool to search for the pattern 'needle' in the directory " + testDir + ". " +
 			"Do NOT use any other tool. After searching, report which files matched.",
 		Config: testSessionConfig(500, models.ToolsConfig{
-			EnableShell:     false,
-			EnableReadFile:  false,
-			EnableGrepFiles: true,
+			EnabledTools: []string{"grep_files"},
 		}),
 	}
 
@@ -666,10 +656,7 @@ func TestAgenticWorkflow_WriteFile(t *testing.T) {
 		UserMessage: "You MUST use the write_file tool to create a file at " + testFile + " with the content 'Hello from write_file'. " +
 			"Do NOT use any other tool. After writing, report what you did.",
 		Config: testSessionConfig(500, models.ToolsConfig{
-			EnableShell:      false,
-			EnableReadFile:   true,
-			EnableWriteFile:  true,
-			EnableApplyPatch: false,
+			EnabledTools: []string{"read_file", "write_file"},
 		}),
 	}
 
@@ -714,9 +701,7 @@ func TestAgenticWorkflow_ApplyPatch(t *testing.T) {
 		UserMessage: "You MUST use the apply_patch tool to create a new file at " + testFile + " with the content 'Hello from apply_patch'. " +
 			"Use the *** Add File syntax. Do NOT use any other tool. After the patch is applied, report the result.",
 		Config: testSessionConfig(1000, models.ToolsConfig{
-			EnableShell:      false,
-			EnableReadFile:   false,
-			EnableApplyPatch: true,
+			EnabledTools: []string{"apply_patch"},
 		}),
 	}
 
@@ -756,10 +741,7 @@ func TestAgenticWorkflow_QueryHistory(t *testing.T) {
 	input := workflow.WorkflowInput{
 		ConversationID: workflowID,
 		UserMessage:    "Say 'hello world'. Do not use any tools.",
-		Config: testSessionConfig(100, models.ToolsConfig{
-			EnableShell:    false,
-			EnableReadFile: false,
-		}),
+		Config: testSessionConfig(100, models.ToolsConfig{}),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), WorkflowTimeout)
@@ -799,10 +781,7 @@ func TestAgenticWorkflow_MultiTurnInteractive(t *testing.T) {
 	input := workflow.WorkflowInput{
 		ConversationID: workflowID,
 		UserMessage:    "What is 2 + 2? Answer with just the number. Do not use any tools.",
-		Config: testSessionConfig(100, models.ToolsConfig{
-			EnableShell:    false,
-			EnableReadFile: false,
-		}),
+		Config: testSessionConfig(100, models.ToolsConfig{}),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), WorkflowTimeout)
@@ -846,10 +825,7 @@ func TestAgenticWorkflow_Shutdown(t *testing.T) {
 	input := workflow.WorkflowInput{
 		ConversationID: workflowID,
 		UserMessage:    "Say 'goodbye'. Do not use any tools.",
-		Config: testSessionConfig(100, models.ToolsConfig{
-			EnableShell:    false,
-			EnableReadFile: false,
-		}),
+		Config: testSessionConfig(100, models.ToolsConfig{}),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), WorkflowTimeout)
@@ -888,9 +864,7 @@ func TestAgenticWorkflow_AnthropicProvider(t *testing.T) {
 				ContextWindow: 200000,
 			},
 			Tools: models.ToolsConfig{
-				EnableShell:            false,
-				EnableReadFile:         false,
-				EnableRequestUserInput: true,
+				EnabledTools: []string{"request_user_input"},
 			},
 		},
 	}
@@ -938,13 +912,7 @@ func TestAgenticWorkflow_AnthropicWithTools(t *testing.T) {
 				ContextWindow: 200000,
 			},
 			Tools: models.ToolsConfig{
-				EnableShell:            true,
-				EnableReadFile:         false,
-				EnableWriteFile:        false,
-				EnableListDir:          false,
-				EnableGrepFiles:        false,
-				EnableApplyPatch:       false,
-				EnableRequestUserInput: true,
+				EnabledTools: []string{"shell_command", "request_user_input"},
 			},
 		},
 	}
@@ -995,9 +963,7 @@ func TestAgenticWorkflow_ProactiveCompaction(t *testing.T) {
 				ContextWindow: 128000,
 			},
 			Tools: models.ToolsConfig{
-				EnableShell:            false,
-				EnableReadFile:         false,
-				EnableRequestUserInput: true,
+				EnabledTools: []string{"request_user_input"},
 			},
 			// Set limit low enough that a ~300-word response exceeds it.
 			// 300 words ≈ 1500 chars ≈ 375 tokens + prompt ≈ 500+ tokens total.
@@ -1088,10 +1054,7 @@ func TestAgenticWorkflow_ManualCompact(t *testing.T) {
 		ConversationID: workflowID,
 		// Generate enough content for compaction to have something to work with.
 		UserMessage: "Write a short paragraph (at least 100 words) about the importance of testing software. Do not use any tools.",
-		Config: testSessionConfig(1000, models.ToolsConfig{
-			EnableShell:    false,
-			EnableReadFile: false,
-		}),
+		Config: testSessionConfig(1000, models.ToolsConfig{}),
 	}
 
 	t.Logf("Starting manual compaction test: %s", workflowID)
@@ -1198,10 +1161,7 @@ func TestAgenticWorkflow_SpawnAndWait(t *testing.T) {
 				ContextWindow: 128000,
 			},
 			Tools: models.ToolsConfig{
-				EnableShell:            false,
-				EnableReadFile:         false,
-				EnableCollab:           true,
-				EnableRequestUserInput: true,
+				EnabledTools: []string{"collab", "request_user_input"},
 			},
 		},
 	}
@@ -1281,10 +1241,7 @@ func TestAgenticWorkflow_PlanMode(t *testing.T) {
 				ContextWindow: 128000,
 			},
 			Tools: models.ToolsConfig{
-				EnableShell:            true,
-				EnableReadFile:         true,
-				EnableCollab:           true,
-				EnableRequestUserInput: true,
+				EnabledTools: []string{"shell_command", "read_file", "collab", "request_user_input"},
 			},
 		},
 	}
@@ -1399,9 +1356,7 @@ func TestAgenticWorkflow_PromptSuggestion(t *testing.T) {
 				ContextWindow: 128000,
 			},
 			Tools: models.ToolsConfig{
-				EnableShell:            false,
-				EnableReadFile:         false,
-				EnableRequestUserInput: true,
+				EnabledTools: []string{"request_user_input"},
 			},
 			DisableSuggestions: false, // Enable suggestions for this test
 		},
@@ -1475,10 +1430,7 @@ func TestAgenticWorkflow_SuggestionDisabledE2E(t *testing.T) {
 	input := workflow.WorkflowInput{
 		ConversationID: workflowID,
 		UserMessage:    "Say hello in exactly 3 words. Do not use any tools.",
-		Config: testSessionConfig(100, models.ToolsConfig{
-			EnableShell:    false,
-			EnableReadFile: false,
-		}),
+		Config: testSessionConfig(100, models.ToolsConfig{}),
 		// testSessionConfig already sets DisableSuggestions: true
 	}
 
@@ -1610,9 +1562,7 @@ func TestAgenticWorkflow_CodexModel(t *testing.T) {
 				ContextWindow: 200000,
 			},
 			Tools: models.ToolsConfig{
-				EnableShell:            false,
-				EnableReadFile:         false,
-				EnableRequestUserInput: true,
+				EnabledTools: []string{"request_user_input"},
 			},
 			DisableSuggestions: true,
 		},
@@ -1658,8 +1608,7 @@ func TestAgenticWorkflow_CodexModelWithTools(t *testing.T) {
 				ContextWindow: 200000,
 			},
 			Tools: models.ToolsConfig{
-				EnableShell:            true,
-				EnableRequestUserInput: true,
+				EnabledTools: []string{"shell_command", "request_user_input"},
 			},
 			DisableSuggestions: true,
 		},
@@ -1698,9 +1647,7 @@ func TestAgenticWorkflow_UpdatePlan(t *testing.T) {
 			"step 3 'Review answer' (pending). " +
 			"Then say 'Plan created successfully.'",
 		Config: testSessionConfig(500, models.ToolsConfig{
-			EnableShell:      false,
-			EnableReadFile:   false,
-			EnableUpdatePlan: true,
+			EnabledTools: []string{"update_plan"},
 		}),
 	}
 

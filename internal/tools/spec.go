@@ -7,6 +7,17 @@
 // - context.rs (tool invocation context)
 package tools
 
+func init() {
+	RegisterSpec(SpecEntry{Name: "shell", Constructor: func() ToolSpec { return NewShellToolSpec(false) }})
+	RegisterSpec(SpecEntry{Name: "shell_command", Constructor: func() ToolSpec { return NewShellCommandToolSpec(false) }})
+	RegisterSpec(SpecEntry{Name: "read_file", Constructor: NewReadFileToolSpec})
+	RegisterSpec(SpecEntry{Name: "write_file", Constructor: NewWriteFileToolSpec})
+	RegisterSpec(SpecEntry{Name: "list_dir", Constructor: NewListDirToolSpec})
+	RegisterSpec(SpecEntry{Name: "grep_files", Constructor: NewGrepFilesToolSpec})
+	RegisterSpec(SpecEntry{Name: "apply_patch", Constructor: NewApplyPatchToolSpec})
+	RegisterSpec(SpecEntry{Name: "request_user_input", Constructor: NewRequestUserInputToolSpec})
+}
+
 // Default timeouts in milliseconds.
 // Maps to: codex-rs/core/src/exec.rs DEFAULT_EXEC_COMMAND_TIMEOUT_MS
 const (

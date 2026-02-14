@@ -116,7 +116,7 @@ func testInput(message string) WorkflowInput {
 				ContextWindow: 128000,
 			},
 			Tools: models.ToolsConfig{
-				EnableRequestUserInput: true,
+				EnabledTools: []string{"request_user_input"},
 			},
 			DisableSuggestions: true,
 		},
@@ -423,7 +423,7 @@ func (s *AgenticWorkflowTestSuite) TestMultiTurn_ContinueAsNewPreservesState() {
 				ContextWindow: 128000,
 			},
 			Tools: models.ToolsConfig{
-				EnableRequestUserInput: true,
+				EnabledTools: []string{"request_user_input"},
 			},
 		},
 		MaxIterations:     20,
@@ -2764,14 +2764,19 @@ func (s *AgenticWorkflowTestSuite) TestMultiTurn_SpawnAgentIntercepted() {
 			TokenUsage:   models.TokenUsage{TotalTokens: 30},
 		}, nil).Once()
 
-	// Second LLM call (after spawn result): return a stop
+	// Parent's second LLM call (after spawn result): return a stop.
+	// The parent continues before the child's LLM call in the test env.
 	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
 		Return(mockLLMStopResponse("I spawned an explorer agent.", 20), nil).Once()
+
+	// Child workflow's LLM call (child runs inside the test env)
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+		Return(mockLLMStopResponse("Child done.", 5), nil).Maybe()
 
 	s.sendShutdown(time.Second * 4)
 
 	input := testInput("Spawn an explorer agent")
-	input.Config.Tools.EnableCollab = true
+	input.Config.Tools.AddTools("collab")
 
 	s.env.ExecuteWorkflow(AgenticWorkflow, input)
 
@@ -2779,7 +2784,7 @@ func (s *AgenticWorkflowTestSuite) TestMultiTurn_SpawnAgentIntercepted() {
 	var result WorkflowResult
 	require.NoError(s.T(), s.env.GetWorkflowResult(&result))
 	assert.Equal(s.T(), "shutdown", result.EndReason)
-	assert.GreaterOrEqual(s.T(), result.TotalTokens, 50, "should include tokens from both LLM calls (30 + 20)")
+	assert.GreaterOrEqual(s.T(), result.TotalTokens, 50, "should include tokens from parent LLM calls (30 + 20)")
 
 	// Verify history contains the spawn_agent call and its output
 	items, err := s.env.QueryWorkflow(QueryGetConversationItems)
@@ -2825,7 +2830,7 @@ func (s *AgenticWorkflowTestSuite) TestMultiTurn_ResumeAgentNotImplemented() {
 	s.sendShutdown(time.Second * 3)
 
 	input := testInput("Resume agent-123")
-	input.Config.Tools.EnableCollab = true
+	input.Config.Tools.AddTools("collab")
 
 	s.env.ExecuteWorkflow(AgenticWorkflow, input)
 
@@ -2851,7 +2856,7 @@ func (s *AgenticWorkflowTestSuite) TestMultiTurn_ResumeAgentNotImplemented() {
 }
 
 // TestMultiTurn_CollabToolsNotInSpecsWhenDisabled verifies that collab tools
-// are not included in tool specs when EnableCollab is false.
+// are not included in tool specs when collab is not in EnabledTools.
 func (s *AgenticWorkflowTestSuite) TestMultiTurn_CollabToolsNotInSpecsWhenDisabled() {
 	// Just verify via the query that the LLM doesn't receive collab tool specs.
 	// We do this by checking the ToolSpecs field is populated correctly.
@@ -2861,7 +2866,7 @@ func (s *AgenticWorkflowTestSuite) TestMultiTurn_CollabToolsNotInSpecsWhenDisabl
 	s.sendShutdown(time.Second * 2)
 
 	input := testInput("Hello")
-	input.Config.Tools.EnableCollab = false
+	// testInput does not include collab by default — no change needed
 
 	s.env.ExecuteWorkflow(AgenticWorkflow, input)
 

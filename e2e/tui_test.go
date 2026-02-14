@@ -94,10 +94,7 @@ func createSeedSession(t *testing.T) string {
 	input := workflow.WorkflowInput{
 		ConversationID: workflowID,
 		UserMessage:    "Say exactly the word: persimmon",
-		Config: testSessionConfig(100, models.ToolsConfig{
-			EnableShell:    false,
-			EnableReadFile: false,
-		}),
+		Config: testSessionConfig(100, models.ToolsConfig{}),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)

@@ -4,6 +4,18 @@
 // See also: codex-rs/core/src/agent/collab.rs, codex-rs/core/src/agent/control.rs
 package tools
 
+func init() {
+	for _, e := range []SpecEntry{
+		{Name: "spawn_agent", Constructor: NewSpawnAgentToolSpec, Group: "collab"},
+		{Name: "send_input", Constructor: NewSendInputToolSpec, Group: "collab"},
+		{Name: "wait", Constructor: NewWaitToolSpec, Group: "collab"},
+		{Name: "close_agent", Constructor: NewCloseAgentToolSpec, Group: "collab"},
+		{Name: "resume_agent", Constructor: NewResumeAgentToolSpec, Group: "collab"},
+	} {
+		RegisterSpec(e)
+	}
+}
+
 // collabInputItemsSchema is the JSON schema for the items parameter shared by
 // spawn_agent and send_input. Each item is an object with a type discriminator.
 var collabInputItemsSchema = map[string]interface{}{

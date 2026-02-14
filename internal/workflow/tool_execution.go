@@ -114,61 +114,10 @@ func executeToolsInParallel(ctx workflow.Context, functionCalls []models.Convers
 }
 
 // buildToolSpecs builds tool specifications based on configuration and profile.
-// After building the base set from ToolsConfig, it filters out any tools
-// listed in the profile's ToolOverrides.Disable list.
+// It builds specs from the EnabledTools list (expanding groups), then filters
+// out any tools listed in the profile's ToolOverrides.Disable list.
 func buildToolSpecs(config models.ToolsConfig, profile models.ResolvedProfile) []tools.ToolSpec {
-	specs := []tools.ToolSpec{}
-
-	switch config.ResolvedShellType() {
-	case models.ShellToolDefault:
-		specs = append(specs, tools.NewShellToolSpec(false))
-	case models.ShellToolShellCommand:
-		specs = append(specs, tools.NewShellCommandToolSpec(false))
-	case models.ShellToolDisabled:
-		// no shell tool
-	}
-
-	if config.EnableReadFile {
-		specs = append(specs, tools.NewReadFileToolSpec())
-	}
-
-	if config.EnableWriteFile {
-		specs = append(specs, tools.NewWriteFileToolSpec())
-	}
-
-	if config.EnableListDir {
-		specs = append(specs, tools.NewListDirToolSpec())
-	}
-
-	if config.EnableGrepFiles {
-		specs = append(specs, tools.NewGrepFilesToolSpec())
-	}
-
-	if config.EnableApplyPatch {
-		specs = append(specs, tools.NewApplyPatchToolSpec())
-	}
-
-	// request_user_input allows the LLM to ask the user questions.
-	// When disabled, the workflow auto-completes after a turn (one-shot mode).
-	if config.EnableRequestUserInput {
-		specs = append(specs, tools.NewRequestUserInputToolSpec())
-	}
-
-	// update_plan is intercepted by the workflow (not dispatched as an activity)
-	if config.EnableUpdatePlan {
-		specs = append(specs, tools.NewUpdatePlanToolSpec())
-	}
-
-	// Collaboration tools for subagent orchestration (intercepted by workflow)
-	if config.EnableCollab {
-		specs = append(specs,
-			tools.NewSpawnAgentToolSpec(),
-			tools.NewSendInputToolSpec(),
-			tools.NewWaitToolSpec(),
-			tools.NewCloseAgentToolSpec(),
-			tools.NewResumeAgentToolSpec(),
-		)
-	}
+	specs := tools.BuildSpecs(config.EnabledTools)
 
 	// Filter out tools disabled by the profile
 	if profile.Tools != nil && len(profile.Tools.Disable) > 0 {

@@ -571,12 +571,14 @@ func buildAgentSpawnConfig(parentConfig models.SessionConfiguration, role AgentR
 // buildAgentSharedConfig clones parent config and applies shared child settings.
 // Maps to: codex-rs/core/src/agent/collab.rs build_agent_shared_config
 func buildAgentSharedConfig(parentConfig models.SessionConfiguration, depth int) models.SessionConfiguration {
-	// Start with a copy of the parent config
+	// Start with a copy of the parent config.
+	// Copy the EnabledTools slice so mutations don't affect the parent.
 	cfg := parentConfig
+	cfg.Tools.EnabledTools = append([]string(nil), parentConfig.Tools.EnabledTools...)
 
 	// Children at max depth cannot spawn further children
 	if depth >= MaxThreadSpawnDepth {
-		cfg.Tools.EnableCollab = false
+		cfg.Tools.RemoveTools("collab")
 	}
 
 	// Inherit approval mode from parent
@@ -592,9 +594,7 @@ func applyRoleOverrides(cfg *models.SessionConfiguration, role AgentRole) {
 	case AgentRoleExplorer:
 		// Explorer: cheaper model, medium reasoning, read-only tools, one-shot.
 		cfg.Model.ReasoningEffort = "medium"
-		cfg.Tools.EnableWriteFile = false
-		cfg.Tools.EnableApplyPatch = false
-		cfg.Tools.EnableRequestUserInput = false
+		cfg.Tools.RemoveTools("write_file", "apply_patch", "request_user_input")
 		// Override to cheaper model for OpenAI providers
 		if cfg.Model.Provider == "openai" {
 			cfg.Model.Model = ExplorerModel
@@ -604,24 +604,19 @@ func applyRoleOverrides(cfg *models.SessionConfiguration, role AgentRole) {
 		// Planner: read-only tools, no collab, keeps user interaction.
 		// The planner explores the codebase and produces a plan without modifications.
 		// Keeps request_user_input — planners may ask clarifying questions.
-		cfg.Tools.EnableWriteFile = false
-		cfg.Tools.EnableApplyPatch = false
-		cfg.Tools.EnableCollab = false
-		cfg.Tools.EnableShell = true
+		cfg.Tools.RemoveTools("write_file", "apply_patch", "collab")
 		// Replace base instructions with planner-specific prompt
 		cfg.BaseInstructions = instructions.PlannerBaseInstructions
 	case AgentRoleOrchestrator:
 		// Orchestrator: coordination focus, no write tools, one-shot.
-		cfg.Tools.EnableWriteFile = false
-		cfg.Tools.EnableApplyPatch = false
-		cfg.Tools.EnableRequestUserInput = false
+		cfg.Tools.RemoveTools("write_file", "apply_patch", "request_user_input")
 		cfg.BaseInstructions = instructions.OrchestratorBaseInstructions
 	case AgentRoleWorker:
 		// Worker: full tool access, one-shot (no user interaction).
-		cfg.Tools.EnableRequestUserInput = false
+		cfg.Tools.RemoveTools("request_user_input")
 	case AgentRoleDefault:
 		// Default: one-shot (no user interaction).
-		cfg.Tools.EnableRequestUserInput = false
+		cfg.Tools.RemoveTools("request_user_input")
 	}
 }
 

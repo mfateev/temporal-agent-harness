@@ -3,6 +3,10 @@
 // Maps to: Codex update_plan tool (codex-rs/core/src/tools/spec.rs)
 package tools
 
+func init() {
+	RegisterSpec(SpecEntry{Name: "update_plan", Constructor: NewUpdatePlanToolSpec})
+}
+
 // NewUpdatePlanToolSpec creates the specification for the update_plan tool.
 // This tool is intercepted by the workflow (not dispatched as an activity).
 // It allows the LLM to maintain a visible task plan with steps and statuses.

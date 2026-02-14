@@ -1,5 +1,7 @@
 package models
 
+import "github.com/mfateev/temporal-agent-harness/internal/tools"
+
 // ModelConfig configures the LLM model parameters
 //
 // Maps to: codex-rs/core/src/codex.rs SessionConfiguration (model config part)
@@ -23,65 +25,56 @@ func DefaultModelConfig() ModelConfig {
 	}
 }
 
-// ShellToolType selects which shell tool variant the LLM sees.
-//
-// Maps to: codex-rs/core/src/config.rs ShellTool enum
-type ShellToolType string
-
-const (
-	// ShellToolDefault selects the array-based "shell" tool (direct execvp).
-	ShellToolDefault ShellToolType = "default"
-	// ShellToolShellCommand selects the string-based "shell_command" tool
-	// (user's detected shell with login flag).
-	ShellToolShellCommand ShellToolType = "shell_command"
-	// ShellToolDisabled disables the shell tool entirely.
-	ShellToolDisabled ShellToolType = "disabled"
-)
-
-// ToolsConfig configures which tools are enabled
+// ToolsConfig configures which tools are available in a session.
+// EnabledTools lists internal tool names. Group names (e.g. "collab")
+// are expanded automatically by the registry.
 //
 // Maps to: codex-rs/core/src/codex.rs SessionConfiguration (tools config part)
 type ToolsConfig struct {
-	EnableShell    bool `json:"enable_shell"`
-	EnableReadFile bool `json:"enable_read_file"`
-	EnableWriteFile  bool `json:"enable_write_file,omitempty"`  // Built-in write_file tool
-	EnableListDir    bool `json:"enable_list_dir,omitempty"`    // Built-in list_dir tool
-	EnableGrepFiles  bool `json:"enable_grep_files,omitempty"`  // Built-in grep_files tool
-	EnableApplyPatch bool `json:"enable_apply_patch,omitempty"` // Built-in apply_patch tool
-	EnableCollab            bool `json:"enable_collab,omitempty"`              // Collaboration tools (spawn_agent, send_input, wait, close_agent, resume_agent)
-	EnableUpdatePlan        bool `json:"enable_update_plan,omitempty"`        // update_plan tool (intercepted by workflow, not dispatched)
-	EnableRequestUserInput  bool `json:"enable_request_user_input,omitempty"` // request_user_input tool — when false, workflow auto-completes after turn
-
-	// ShellType selects which shell tool variant to expose to the LLM.
-	// When unset, ResolvedShellType() derives the value from EnableShell.
-	ShellType ShellToolType `json:"shell_type,omitempty"`
+	EnabledTools []string `json:"enabled_tools"`
 }
 
-// ResolvedShellType returns the effective shell tool type.
-// If ShellType is explicitly set it is used directly.
-// Otherwise EnableShell=true maps to ShellToolShellCommand (backward compat),
-// and EnableShell=false maps to ShellToolDisabled.
-func (c ToolsConfig) ResolvedShellType() ShellToolType {
-	if c.ShellType != "" {
-		return c.ShellType
+// HasTool returns true if the named tool (or any member of a group with that
+// name) is present in EnabledTools.
+func (c ToolsConfig) HasTool(name string) bool {
+	expanded := tools.ExpandGroups(c.EnabledTools)
+	for _, t := range expanded {
+		if t == name {
+			return true
+		}
 	}
-	if c.EnableShell {
-		return ShellToolShellCommand
-	}
-	return ShellToolDisabled
+	return false
 }
 
-// DefaultToolsConfig returns default tools configuration
+// RemoveTools removes tools by internal name from EnabledTools.
+// Group names are expanded before removal.
+func (c *ToolsConfig) RemoveTools(names ...string) {
+	toRemove := make(map[string]bool, len(names))
+	for _, n := range tools.ExpandGroups(names) {
+		toRemove[n] = true
+	}
+	// Also remove the group name itself so HasTool("collab") returns false
+	for _, n := range names {
+		toRemove[n] = true
+	}
+	filtered := c.EnabledTools[:0]
+	for _, t := range c.EnabledTools {
+		if !toRemove[t] {
+			filtered = append(filtered, t)
+		}
+	}
+	c.EnabledTools = filtered
+}
+
+// AddTools appends tools to EnabledTools (no dedup).
+func (c *ToolsConfig) AddTools(names ...string) {
+	c.EnabledTools = append(c.EnabledTools, names...)
+}
+
+// DefaultToolsConfig returns default tools configuration.
 func DefaultToolsConfig() ToolsConfig {
 	return ToolsConfig{
-		EnableShell:            true,
-		EnableReadFile:         true,
-		EnableWriteFile:        true,
-		EnableListDir:          true,
-		EnableGrepFiles:        true,
-		EnableApplyPatch:       true,
-		EnableUpdatePlan:       true,
-		EnableRequestUserInput: true,
+		EnabledTools: tools.DefaultEnabledTools(),
 	}
 }
 

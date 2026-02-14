@@ -194,9 +194,9 @@ func (s *SessionState) runMultiTurnLoop(ctx workflow.Context) (WorkflowResult, e
 
 		// Workflows without request_user_input auto-complete after a turn.
 		// This is the one-shot pattern: the caller sends a task, the workflow
-		// does it and returns. Roles that can interact with the user
-		// (EnableRequestUserInput=true) stay alive for more input instead.
-		if !s.Config.Tools.EnableRequestUserInput {
+		// does it and returns. Roles that have request_user_input enabled
+		// stay alive for more input instead.
+		if !s.Config.Tools.HasTool("request_user_input") {
 			logger.Info("Auto-completing workflow (request_user_input disabled)")
 			items, _ := s.History.GetRawItems()
 			return WorkflowResult{
