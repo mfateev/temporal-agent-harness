@@ -1,6 +1,6 @@
 # temporal-agent-harness
 
-A Go port of [OpenAI Codex](https://github.com/openai/codex) built on [Temporal](https://temporal.io) for durable agentic execution. The CLI is called `tcx`.
+A durable agentic coding assistant built on [Temporal](https://temporal.io). Originally based on [OpenAI Codex](https://github.com/openai/codex). The CLI is called `tcx`.
 
 ## What it does
 
@@ -137,7 +137,7 @@ go test -race -short ./...              # Race detector
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-Ported from [codex-rs](https://github.com/openai/codex/tree/main/codex-rs) with structural alignment to the original Rust codebase. Key packages:
+Originally based on [codex-rs](https://github.com/openai/codex/tree/main/codex-rs). Key packages:
 
 | Package | Maps to | Purpose |
 |---------|---------|---------|
@@ -152,4 +152,4 @@ Ported from [codex-rs](https://github.com/openai/codex/tree/main/codex-rs) with 
 
 MIT. See [LICENSE](LICENSE).
 
-Derived from [OpenAI Codex](https://github.com/openai/codex) (Apache 2.0, Copyright 2025 OpenAI).
+Originally based on [OpenAI Codex](https://github.com/openai/codex) (Apache 2.0, Copyright 2025 OpenAI).
