@@ -2749,8 +2749,17 @@ func TestContextOverflow_ResetsResponseID(t *testing.T) {
 // intercepted by the workflow (not dispatched as an activity), starts a child
 // workflow, and returns the agent_id to the LLM.
 func (s *AgenticWorkflowTestSuite) TestMultiTurn_SpawnAgentIntercepted() {
+	// Match parent's first LLM call (short history: just the user message).
+	isShortHistory := mock.MatchedBy(func(input activities.LLMActivityInput) bool {
+		return len(input.History) <= 2
+	})
+	// Match parent's second LLM call (longer history: user msg + function call + output).
+	isLongHistory := mock.MatchedBy(func(input activities.LLMActivityInput) bool {
+		return len(input.History) > 2
+	})
+
 	// First LLM call: return a spawn_agent tool call
-	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, isShortHistory).
 		Return(activities.LLMActivityOutput{
 			Items: []models.ConversationItem{
 				{
@@ -2764,13 +2773,13 @@ func (s *AgenticWorkflowTestSuite) TestMultiTurn_SpawnAgentIntercepted() {
 			TokenUsage:   models.TokenUsage{TotalTokens: 30},
 		}, nil).Once()
 
-	// Parent's second LLM call (after spawn result): return a stop.
-	// The parent continues before the child's LLM call in the test env.
-	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+	// Parent's second LLM call (after spawn result): has longer history.
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, isLongHistory).
 		Return(mockLLMStopResponse("I spawned an explorer agent.", 20), nil).Once()
 
-	// Child workflow's LLM call (child runs inside the test env)
-	s.env.OnActivity("ExecuteLLMCall", mock.Anything, mock.Anything).
+	// Child workflow's LLM call (child runs inside the test env).
+	// Uses isShortHistory since the child starts fresh with just its task message.
+	s.env.OnActivity("ExecuteLLMCall", mock.Anything, isShortHistory).
 		Return(mockLLMStopResponse("Child done.", 5), nil).Maybe()
 
 	s.sendShutdown(time.Second * 4)

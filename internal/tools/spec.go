@@ -191,6 +191,42 @@ func NewReadFileToolSpec() ToolSpec {
 				Description: "The maximum number of lines to return.",
 				Required:    false,
 			},
+			{
+				Name:        "mode",
+				Type:        "string",
+				Description: `Optional mode selector: "slice" for simple ranges (default) or "indentation" to expand around an anchor line.`,
+				Required:    false,
+			},
+			{
+				Name:        "indentation",
+				Type:        "object",
+				Description: "Options for indentation mode. Only used when mode is 'indentation'.",
+				Required:    false,
+				Items: map[string]interface{}{
+					"properties": map[string]interface{}{
+						"anchor_line": map[string]interface{}{
+							"type":        "number",
+							"description": "Anchor line to center the indentation lookup on (defaults to offset).",
+						},
+						"max_levels": map[string]interface{}{
+							"type":        "number",
+							"description": "How many parent indentation levels (smaller indents) to include. 0 means unlimited.",
+						},
+						"include_siblings": map[string]interface{}{
+							"type":        "boolean",
+							"description": "When true, include additional blocks that share the anchor indentation.",
+						},
+						"include_header": map[string]interface{}{
+							"type":        "boolean",
+							"description": "When true, include comment lines above the anchor block.",
+						},
+						"max_lines": map[string]interface{}{
+							"type":        "number",
+							"description": "Hard cap on the number of lines returned when using indentation mode.",
+						},
+					},
+				},
+			},
 		},
 		DefaultTimeoutMs: DefaultReadFileTimeoutMs,
 	}
@@ -356,7 +392,7 @@ func NewRequestUserInputToolSpec() ToolSpec {
 			{
 				Name:        "questions",
 				Type:        "array",
-				Description: "Array of questions. Max 4 questions.",
+				Description: "Questions to show the user. Prefer 1 and do not exceed 3.",
 				Required:    true,
 				Items: map[string]interface{}{
 					"type": "object",
@@ -364,6 +400,10 @@ func NewRequestUserInputToolSpec() ToolSpec {
 						"id": map[string]interface{}{
 							"type":        "string",
 							"description": "Unique identifier for this question",
+						},
+						"header": map[string]interface{}{
+							"type":        "string",
+							"description": "Short header label shown in the UI (12 or fewer chars).",
 						},
 						"question": map[string]interface{}{
 							"type":        "string",
@@ -381,14 +421,14 @@ func NewRequestUserInputToolSpec() ToolSpec {
 									},
 									"description": map[string]interface{}{
 										"type":        "string",
-										"description": "Explanation of what this option means",
+										"description": "One short sentence explaining impact/tradeoff if selected.",
 									},
 								},
-								"required": []string{"label"},
+								"required": []string{"label", "description"},
 							},
 						},
 					},
-					"required": []string{"id", "question", "options"},
+					"required": []string{"id", "header", "question", "options"},
 				},
 			},
 		},
