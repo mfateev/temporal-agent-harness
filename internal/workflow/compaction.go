@@ -13,6 +13,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/mfateev/temporal-agent-harness/internal/activities"
+	"github.com/mfateev/temporal-agent-harness/internal/models"
 )
 
 // performCompaction executes context compaction by calling the ExecuteCompact
@@ -32,10 +33,23 @@ func (s *SessionState) performCompaction(ctx workflow.Context) error {
 		return err
 	}
 
+	// Strip model-switch messages before compaction. The compaction LLM should
+	// not see model-switch developer messages (which contain instructions for
+	// the *new* model). We re-add the last one after compaction completes.
+	var modelSwitchItems []models.ConversationItem
+	var filteredItems []models.ConversationItem
+	for _, item := range historyItems {
+		if item.Type == models.ItemTypeModelSwitch {
+			modelSwitchItems = append(modelSwitchItems, item)
+		} else {
+			filteredItems = append(filteredItems, item)
+		}
+	}
+
 	// Build compaction activity input
 	compactInput := activities.CompactActivityInput{
 		Model:        s.Config.Model.Model,
-		Input:        historyItems,
+		Input:        filteredItems,
 		Instructions: s.Config.BaseInstructions,
 	}
 
@@ -63,6 +77,12 @@ func (s *SessionState) performCompaction(ctx workflow.Context) error {
 	if err := s.History.ReplaceAll(compactResult.Items); err != nil {
 		logger.Error("Failed to replace history after compaction", "error", err)
 		return err
+	}
+
+	// Re-add the last model-switch message so the new model retains context
+	// about the transition for subsequent LLM calls.
+	if len(modelSwitchItems) > 0 {
+		_ = s.History.AddItem(modelSwitchItems[len(modelSwitchItems)-1])
 	}
 
 	// Update compaction tracking state
