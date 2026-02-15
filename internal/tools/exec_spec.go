@@ -56,6 +56,12 @@ func NewExecCommandToolSpec() ToolSpec {
 			Description: "How long to wait (in milliseconds) for output before yielding. Defaults to 10000. Range: 250-30000.",
 			Required:    false,
 		},
+		{
+			Name:        "max_output_tokens",
+			Type:        "number",
+			Description: "Maximum number of tokens to return. Excess output will be truncated.",
+			Required:    false,
+		},
 	}
 	params = append(params, approvalParameters(false)...)
 
@@ -99,6 +105,12 @@ func NewWriteStdinToolSpec() ToolSpec {
 				Name:        "yield_time_ms",
 				Type:        "number",
 				Description: "How long to wait (in milliseconds) for output before yielding. Defaults to 250.",
+				Required:    false,
+			},
+			{
+				Name:        "max_output_tokens",
+				Type:        "number",
+				Description: "Maximum number of tokens to return. Excess output will be truncated.",
 				Required:    false,
 			},
 		},

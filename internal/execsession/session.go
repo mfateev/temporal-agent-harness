@@ -144,10 +144,14 @@ func (s *ExecSession) readLoop(r io.Reader) {
 }
 
 func (s *ExecSession) waitForExit() {
-	err := s.cmd.Wait()
-	// Wait for read goroutines to drain all output before marking exited.
-	// cmd.Wait() closes the pipes, so readers will get EOF and finish.
+	// Wait for read goroutines to drain all output BEFORE calling cmd.Wait().
+	// cmd.Wait() closes pipe read ends (see os/exec.Cmd.StdoutPipe docs:
+	// "It is thus incorrect to call Wait before all reads from the pipe
+	// have completed."). For pipes, readers get EOF when the child exits
+	// (OS closes the write end). For PTY, readers get EIO when the slave
+	// side closes. Either way, readers finish before we call Wait.
 	s.readerWg.Wait()
+	err := s.cmd.Wait()
 
 	code := -1
 	if err == nil {
