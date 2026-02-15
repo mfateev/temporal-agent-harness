@@ -64,9 +64,10 @@ func (c *OpenAIClient) Call(ctx context.Context, request LLMRequest) (LLMRespons
 		}
 	}
 
-	// Tool definitions
-	if len(request.ToolSpecs) > 0 {
-		params.Tools = c.buildToolDefinitions(request.ToolSpecs)
+	// Tool definitions (function tools + optional native web_search)
+	toolDefs := c.buildToolDefinitions(request.ToolSpecs, request.WebSearchMode)
+	if len(toolDefs) > 0 {
+		params.Tools = toolDefs
 	}
 
 	// Previous response ID for incremental sends
@@ -161,6 +162,11 @@ func (c *OpenAIClient) buildInput(history []models.ConversationItem) []responses
 			// the history contains a summary as an assistant message which is
 			// already handled above. Skip the marker itself.
 
+		case models.ItemTypeWebSearchCall:
+			// Web search call items are informational metadata from the API.
+			// The model already incorporates search results into its text
+			// response, so these are not valid input items. Skip them.
+
 		default:
 			// Skip turn_started, turn_complete markers (internal only)
 		}
@@ -228,6 +234,15 @@ func (c *OpenAIClient) parseOutput(resp *responses.Response) ([]models.Conversat
 				Name:      outputItem.Name,
 				Arguments: outputItem.Arguments,
 			})
+
+		case "web_search_call":
+			// Informational: record what was searched. The model already
+			// incorporates search results into its text response.
+			query := extractWebSearchQuery(outputItem)
+			items = append(items, models.ConversationItem{
+				Type:    models.ItemTypeWebSearchCall,
+				Content: query,
+			})
 		}
 	}
 
@@ -247,8 +262,9 @@ func (c *OpenAIClient) parseOutput(resp *responses.Response) ([]models.Conversat
 }
 
 // buildToolDefinitions converts ToolSpecs to Responses API tool definitions.
-func (c *OpenAIClient) buildToolDefinitions(specs []tools.ToolSpec) []responses.ToolUnionParam {
-	toolDefs := make([]responses.ToolUnionParam, 0, len(specs))
+// If webSearchMode is set, the OpenAI-native web_search_preview tool is appended.
+func (c *OpenAIClient) buildToolDefinitions(specs []tools.ToolSpec, webSearchMode models.WebSearchMode) []responses.ToolUnionParam {
+	toolDefs := make([]responses.ToolUnionParam, 0, len(specs)+1)
 
 	for _, spec := range specs {
 		properties := make(map[string]interface{})
@@ -281,7 +297,29 @@ func (c *OpenAIClient) buildToolDefinitions(specs []tools.ToolSpec) []responses.
 		})
 	}
 
+	// Append OpenAI-native web_search tool if enabled
+	if webSearchMode == models.WebSearchCached || webSearchMode == models.WebSearchLive {
+		toolDefs = append(toolDefs, responses.ToolParamOfWebSearchPreview(
+			responses.WebSearchToolTypeWebSearchPreview,
+		))
+	}
+
 	return toolDefs
+}
+
+// extractWebSearchQuery extracts a human-readable search description from a
+// web_search_call output item. Returns the search query if available.
+func extractWebSearchQuery(item responses.ResponseOutputItemUnion) string {
+	if item.Action.Type == "search" && item.Action.Query != "" {
+		return item.Action.Query
+	}
+	if item.Action.Type == "open_page" && item.Action.URL != "" {
+		return item.Action.URL
+	}
+	if item.Action.Type == "find" && item.Action.Pattern != "" {
+		return item.Action.Pattern
+	}
+	return "web search"
 }
 
 // Compact performs remote compaction via OpenAI's POST /responses/compact endpoint.

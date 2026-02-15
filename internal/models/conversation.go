@@ -15,6 +15,9 @@ const (
 	ItemTypeFunctionCallOutput ConversationItemType = "function_call_output" // Codex: ResponseItem::FunctionCallOutput
 	ItemTypeCompaction         ConversationItemType = "compaction"            // Codex: ResponseItem::Compaction
 
+	// OpenAI-native tool output (informational, not a function call)
+	ItemTypeWebSearchCall ConversationItemType = "web_search_call" // OpenAI Responses API: web_search_call
+
 	// Turn lifecycle markers (maps to Codex EventMsg::TurnStarted / EventMsg::TurnComplete)
 	ItemTypeTurnStarted  ConversationItemType = "turn_started"  // Codex: EventMsg::TurnStarted
 	ItemTypeTurnComplete ConversationItemType = "turn_complete"  // Codex: EventMsg::TurnComplete

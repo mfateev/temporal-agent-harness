@@ -113,9 +113,10 @@ type Config struct {
 	UserPersonalInstructions string // From ~/.codex/instructions.md
 
 	// TUI settings
-	Provider           string // LLM provider (openai, anthropic, google)
-	Inline             bool   // Disable alt-screen mode
-	DisableSuggestions bool   // Disable prompt suggestions
+	Provider           string               // LLM provider (openai, anthropic, google)
+	Inline             bool                 // Disable alt-screen mode
+	DisableSuggestions bool                 // Disable prompt suggestions
+	WebSearchMode      models.WebSearchMode // Web search mode (OpenAI only): cached, live
 }
 
 // Model is the bubbletea model for the interactive CLI.

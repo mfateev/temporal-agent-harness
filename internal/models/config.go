@@ -23,6 +23,19 @@ func DefaultModelConfig() ModelConfig {
 	}
 }
 
+// WebSearchMode controls whether web search is enabled for LLM requests.
+// This is an OpenAI-native tool (provider-side execution); Anthropic does not support it.
+type WebSearchMode string
+
+const (
+	// WebSearchDisabled disables web search (default).
+	WebSearchDisabled WebSearchMode = ""
+	// WebSearchCached searches cached/indexed content only.
+	WebSearchCached WebSearchMode = "cached"
+	// WebSearchLive searches the live internet.
+	WebSearchLive WebSearchMode = "live"
+)
+
 // ShellToolType selects which shell tool variant the LLM sees.
 //
 // Maps to: codex-rs/core/src/config.rs ShellTool enum
@@ -141,6 +154,9 @@ type SessionConfiguration struct {
 
 	// Disable post-turn prompt suggestions
 	DisableSuggestions bool `json:"disable_suggestions,omitempty"`
+
+	// Web search mode (OpenAI-only native tool). Empty = disabled.
+	WebSearchMode WebSearchMode `json:"web_search_mode,omitempty"`
 
 	// Session metadata
 	SessionSource string `json:"session_source,omitempty"` // "cli", "api", "exec" — for logging/tracking

@@ -174,7 +174,7 @@ func TestBuildToolDefinitions(t *testing.T) {
 		},
 	}
 
-	defs := client.buildToolDefinitions(specs)
+	defs := client.buildToolDefinitions(specs, models.WebSearchDisabled)
 
 	require.Len(t, defs, 1)
 	require.NotNil(t, defs[0].OfFunction)
@@ -834,4 +834,207 @@ func TestCall_InstructionsSent(t *testing.T) {
 	require.True(t, ok, "instructions must be a string")
 	assert.Contains(t, instructions, "test base")
 	assert.Contains(t, instructions, "test user")
+}
+
+// --- Tests for web_search support ---
+
+// TestBuildToolDefinitions_WebSearchDisabled verifies that no web_search tool
+// is added when WebSearchMode is disabled (default).
+func TestBuildToolDefinitions_WebSearchDisabled(t *testing.T) {
+	client := &OpenAIClient{}
+	specs := []tools.ToolSpec{
+		{Name: "shell", Description: "Run shell", Parameters: []tools.ToolParameter{}},
+	}
+
+	defs := client.buildToolDefinitions(specs, models.WebSearchDisabled)
+
+	require.Len(t, defs, 1)
+	require.NotNil(t, defs[0].OfFunction)
+	assert.Nil(t, defs[0].OfWebSearchPreview)
+}
+
+// TestBuildToolDefinitions_WebSearchLive verifies that the web_search_preview
+// tool is appended when WebSearchMode is "live".
+func TestBuildToolDefinitions_WebSearchLive(t *testing.T) {
+	client := &OpenAIClient{}
+	specs := []tools.ToolSpec{
+		{Name: "shell", Description: "Run shell", Parameters: []tools.ToolParameter{}},
+	}
+
+	defs := client.buildToolDefinitions(specs, models.WebSearchLive)
+
+	require.Len(t, defs, 2)
+	// First should be the function tool
+	require.NotNil(t, defs[0].OfFunction)
+	assert.Equal(t, "shell", defs[0].OfFunction.Name)
+	// Second should be the web_search tool
+	require.NotNil(t, defs[1].OfWebSearchPreview)
+	assert.Equal(t, responses.WebSearchToolTypeWebSearchPreview, defs[1].OfWebSearchPreview.Type)
+}
+
+// TestBuildToolDefinitions_WebSearchCached verifies that web_search is added for "cached" mode.
+func TestBuildToolDefinitions_WebSearchCached(t *testing.T) {
+	client := &OpenAIClient{}
+	specs := []tools.ToolSpec{}
+
+	defs := client.buildToolDefinitions(specs, models.WebSearchCached)
+
+	require.Len(t, defs, 1)
+	require.NotNil(t, defs[0].OfWebSearchPreview)
+}
+
+// TestParseOutput_WebSearchCall verifies that web_search_call output items
+// are parsed into ItemTypeWebSearchCall conversation items.
+func TestParseOutput_WebSearchCall(t *testing.T) {
+	client := &OpenAIClient{}
+	resp := &responses.Response{
+		ID: "resp_ws",
+		Output: []responses.ResponseOutputItemUnion{
+			{
+				Type: "web_search_call",
+				Action: responses.ResponseFunctionWebSearchActionUnion{
+					Type:  "search",
+					Query: "golang web search API",
+				},
+			},
+			{
+				Type: "message",
+				Content: []responses.ResponseOutputMessageContentUnion{
+					{Type: "output_text", Text: "Here are the results."},
+				},
+			},
+		},
+	}
+
+	items, finishReason := client.parseOutput(resp)
+
+	require.Len(t, items, 2)
+	// First item: web search call
+	assert.Equal(t, models.ItemTypeWebSearchCall, items[0].Type)
+	assert.Equal(t, "golang web search API", items[0].Content)
+	// Second item: assistant message
+	assert.Equal(t, models.ItemTypeAssistantMessage, items[1].Type)
+	assert.Equal(t, "Here are the results.", items[1].Content)
+	// web_search_call should not set hasFunctionCalls
+	assert.Equal(t, models.FinishReasonStop, finishReason)
+}
+
+// TestBuildInput_SkipsWebSearchCall verifies that web_search_call items
+// in history are skipped when building input (they're informational metadata).
+func TestBuildInput_SkipsWebSearchCall(t *testing.T) {
+	client := &OpenAIClient{}
+	history := []models.ConversationItem{
+		{Type: models.ItemTypeUserMessage, Content: "search for Go"},
+		{Type: models.ItemTypeWebSearchCall, Content: "Go programming language"},
+		{Type: models.ItemTypeAssistantMessage, Content: "Here are the results"},
+	}
+
+	items := client.buildInput(history)
+
+	// web_search_call should be skipped
+	require.Len(t, items, 2)
+	require.NotNil(t, items[0].OfMessage)
+	require.NotNil(t, items[1].OfOutputMessage)
+}
+
+// TestExtractWebSearchQuery verifies query extraction from different action types.
+func TestExtractWebSearchQuery(t *testing.T) {
+	tests := []struct {
+		name     string
+		item     responses.ResponseOutputItemUnion
+		expected string
+	}{
+		{
+			name: "search action",
+			item: responses.ResponseOutputItemUnion{
+				Action: responses.ResponseFunctionWebSearchActionUnion{
+					Type:  "search",
+					Query: "weather today",
+				},
+			},
+			expected: "weather today",
+		},
+		{
+			name: "open_page action",
+			item: responses.ResponseOutputItemUnion{
+				Action: responses.ResponseFunctionWebSearchActionUnion{
+					Type: "open_page",
+					URL:  "https://example.com",
+				},
+			},
+			expected: "https://example.com",
+		},
+		{
+			name: "find action",
+			item: responses.ResponseOutputItemUnion{
+				Action: responses.ResponseFunctionWebSearchActionUnion{
+					Type:    "find",
+					Pattern: "main heading",
+				},
+			},
+			expected: "main heading",
+		},
+		{
+			name: "unknown action",
+			item: responses.ResponseOutputItemUnion{
+				Action: responses.ResponseFunctionWebSearchActionUnion{
+					Type: "unknown",
+				},
+			},
+			expected: "web search",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractWebSearchQuery(tt.item)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestCall_WebSearchToolSent verifies that the web_search tool is included
+// in the HTTP request body when WebSearchMode is set.
+func TestCall_WebSearchToolSent(t *testing.T) {
+	var capturedBody map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &capturedBody))
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, fakeResponsesAPIResponse())
+	}))
+	defer server.Close()
+
+	client := &OpenAIClient{
+		client: openai.NewClient(
+			option.WithBaseURL(server.URL),
+			option.WithAPIKey("test-key"),
+		),
+	}
+
+	request := LLMRequest{
+		History: []models.ConversationItem{
+			{Type: models.ItemTypeUserMessage, Content: "search for Go"},
+		},
+		ModelConfig:   models.DefaultModelConfig(),
+		WebSearchMode: models.WebSearchLive,
+	}
+
+	_, err := client.Call(context.Background(), request)
+	require.NoError(t, err)
+
+	toolsRaw, hasTools := capturedBody["tools"]
+	assert.True(t, hasTools, "tools must be present when web search is enabled")
+	toolsList, ok := toolsRaw.([]interface{})
+	require.True(t, ok)
+	// Should have 1 tool (web_search_preview), no function tools
+	require.Len(t, toolsList, 1)
+	// Check the tool type
+	toolMap, ok := toolsList[0].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "web_search_preview", toolMap["type"])
 }

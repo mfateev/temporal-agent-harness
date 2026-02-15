@@ -44,6 +44,7 @@ func startWorkflowCmd(c client.Client, config Config) tea.Cmd {
 				SandboxWritableRoots:     config.SandboxWritableRoots,
 				SandboxNetworkAccess:     config.SandboxNetworkAccess,
 				DisableSuggestions:       config.DisableSuggestions,
+				WebSearchMode:            config.WebSearchMode,
 				Cwd:                      cwd,
 				SessionSource:            "interactive-cli",
 				CLIProjectDocs:           config.CLIProjectDocs,

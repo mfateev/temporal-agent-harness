@@ -167,6 +167,7 @@ func (s *SessionState) callLLM(ctx workflow.Context) (*activities.LLMActivityOut
 		DeveloperInstructions: s.Config.DeveloperInstructions,
 		UserInstructions:      s.Config.UserInstructions,
 		PreviousResponseID:    previousResponseID,
+		WebSearchMode:         s.Config.WebSearchMode,
 	}
 
 	var llmResult activities.LLMActivityOutput
