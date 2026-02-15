@@ -72,6 +72,8 @@ func (r *ItemRenderer) RenderItem(item models.ConversationItem, isResume bool) s
 		return r.RenderFunctionCallOutput(item)
 	case models.ItemTypeCompaction:
 		return r.RenderCompaction(item)
+	case models.ItemTypeWebSearchCall:
+		return r.RenderWebSearchCall(item)
 	case models.ItemTypeTurnComplete:
 		return ""
 	default:
@@ -83,6 +85,17 @@ func (r *ItemRenderer) RenderItem(item models.ConversationItem, isResume bool) s
 func (r *ItemRenderer) RenderCompaction(item models.ConversationItem) string {
 	bullet := r.styles.SystemBullet.Render("●")
 	return bullet + " [Context compacted]\n"
+}
+
+// RenderWebSearchCall renders a web search call indicator.
+func (r *ItemRenderer) RenderWebSearchCall(item models.ConversationItem) string {
+	bullet := r.styles.ToolBullet.Render("●")
+	verb := r.styles.ToolVerb.Render("Searched web:")
+	query := item.Content
+	if query == "" {
+		query = "web search"
+	}
+	return "\n" + bullet + " " + verb + " " + query + "\n"
 }
 
 // RenderTurnSeparator renders a horizontal rule to visually separate turns.

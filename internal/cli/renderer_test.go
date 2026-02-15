@@ -709,3 +709,30 @@ func TestPhaseMessage_Compacting(t *testing.T) {
 	result := PhaseMessage(workflow.PhaseCompacting, nil)
 	assert.Equal(t, "Compacting context...", result)
 }
+
+// --- Web search rendering tests ---
+
+func TestItemRenderer_RenderWebSearchCall(t *testing.T) {
+	r := newTestRenderer()
+	result := r.RenderItem(models.ConversationItem{
+		Type:    models.ItemTypeWebSearchCall,
+		Content: "golang web search API",
+	}, false)
+
+	assert.NotEmpty(t, result)
+	assert.Contains(t, result, "●")
+	assert.Contains(t, result, "Searched web:")
+	assert.Contains(t, result, "golang web search API")
+}
+
+func TestItemRenderer_RenderWebSearchCall_EmptyQuery(t *testing.T) {
+	r := newTestRenderer()
+	result := r.RenderItem(models.ConversationItem{
+		Type:    models.ItemTypeWebSearchCall,
+		Content: "",
+	}, false)
+
+	assert.NotEmpty(t, result)
+	assert.Contains(t, result, "Searched web:")
+	assert.Contains(t, result, "web search")
+}

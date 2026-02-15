@@ -28,6 +28,9 @@ type LLMActivityInput struct {
 
 	// OpenAI Responses API: chain to previous response for incremental sends
 	PreviousResponseID string `json:"previous_response_id,omitempty"`
+
+	// Web search mode (OpenAI-only). When set, the native web_search tool is added.
+	WebSearchMode models.WebSearchMode `json:"web_search_mode,omitempty"`
 }
 
 // LLMActivityOutput is the output from the LLM activity.
@@ -66,6 +69,7 @@ func (a *LLMActivities) ExecuteLLMCall(ctx context.Context, input LLMActivityInp
 		DeveloperInstructions: input.DeveloperInstructions,
 		UserInstructions:      input.UserInstructions,
 		PreviousResponseID:    input.PreviousResponseID,
+		WebSearchMode:         input.WebSearchMode,
 	}
 
 	response, err := a.client.Call(ctx, request)

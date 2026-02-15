@@ -43,6 +43,7 @@ func main() {
 	sandboxNetwork := flag.Bool("sandbox-network", true, "Allow network access in sandbox")
 	codexHome := flag.String("codex-home", "", "Path to codex config directory (default: ~/.codex)")
 	noSuggestions := flag.Bool("no-suggestions", false, "Disable prompt suggestions after turn completion")
+	webSearch := flag.String("web-search", "", "Enable web search: cached or live (OpenAI only)")
 	flag.Parse()
 
 	// Support both -m and --message
@@ -122,6 +123,7 @@ func main() {
 		Provider:                 resolvedProvider,
 		Inline:                   *inline,
 		DisableSuggestions:       *noSuggestions,
+		WebSearchMode:            models.WebSearchMode(*webSearch),
 	}
 
 	if err := cli.Run(config); err != nil {

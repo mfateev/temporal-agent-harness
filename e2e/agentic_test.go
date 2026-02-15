@@ -1628,6 +1628,66 @@ func TestAgenticWorkflow_CodexModelWithTools(t *testing.T) {
 		result.TotalTokens, result.TotalCachedTokens, result.TotalIterations, result.ToolCallsExecuted)
 }
 
+// TestAgenticWorkflow_WebSearch tests that the OpenAI-native web_search tool
+// works end-to-end. Starts a workflow with WebSearchMode "live", asks a question
+// that requires web search, and verifies that web_search_call items appear in
+// the conversation history alongside the assistant's answer.
+func TestAgenticWorkflow_WebSearch(t *testing.T) {
+	c := dialTemporal(t)
+
+	workflowID := "test-web-search-" + uuid.New().String()[:8]
+	input := workflow.WorkflowInput{
+		ConversationID: workflowID,
+		UserMessage:    "What is the current population of Tokyo? Use web search to find the answer. Report the number you find.",
+		Config: models.SessionConfiguration{
+			Model: models.ModelConfig{
+				Model:         CheapModel,
+				Temperature:   0,
+				MaxTokens:     1000,
+				ContextWindow: 128000,
+			},
+			Tools: models.ToolsConfig{
+				EnableShell:    false,
+				EnableReadFile: false,
+			},
+			WebSearchMode:     models.WebSearchLive,
+			DisableSuggestions: true,
+		},
+	}
+
+	t.Logf("Starting web search workflow: %s", workflowID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), WorkflowTimeout)
+	defer cancel()
+
+	startWorkflow(t, ctx, c, input)
+	items := waitForTurnComplete(t, ctx, c, workflowID, 1)
+
+	// Look for web_search_call items in the history
+	hasWebSearchCall := false
+	hasAssistantReply := false
+	for _, item := range items {
+		if item.Type == models.ItemTypeWebSearchCall {
+			hasWebSearchCall = true
+			t.Logf("Web search call: %q", item.Content)
+		}
+		if item.Type == models.ItemTypeAssistantMessage && item.Content != "" {
+			hasAssistantReply = true
+			t.Logf("Assistant reply: %s", truncateStr(item.Content, 200))
+		}
+	}
+
+	assert.True(t, hasWebSearchCall, "History should contain at least one web_search_call item")
+	assert.True(t, hasAssistantReply, "LLM should have produced a response with search results")
+
+	// Shutdown and verify result
+	result := shutdownWorkflow(t, ctx, c, workflowID)
+	assert.Equal(t, "shutdown", result.EndReason)
+	assert.Greater(t, result.TotalTokens, 0, "Should have consumed tokens")
+
+	t.Logf("Web search test - Total tokens: %d, History items: %d", result.TotalTokens, len(items))
+}
+
 // truncateStr truncates a string to n characters with "..." appended.
 func truncateStr(s string, n int) string {
 	if len(s) <= n {
