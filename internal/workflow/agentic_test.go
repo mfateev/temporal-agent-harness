@@ -310,13 +310,14 @@ func (s *AgenticWorkflowTestSuite) TestMultiTurn_ValidatorRejectsEmptyInput() {
 }
 
 // TestMultiTurn_ValidatorRejectsAfterShutdown verifies that the user_input
-// validator checks the ShutdownRequested flag. We test the validator logic
+// validator checks the IsShutdown flag. We test the validator logic
 // directly since the test environment processes updates synchronously and
 // the workflow may exit before the second callback fires.
 func (s *AgenticWorkflowTestSuite) TestMultiTurn_ValidatorRejectsAfterShutdown() {
-	// Construct a state with ShutdownRequested = true and verify that
+	// Construct a LoopControl with shutdown requested and verify that
 	// the validator would reject new input.
-	state := SessionState{ShutdownRequested: true}
+	ctrl := &LoopControl{}
+	ctrl.SetShutdown()
 
 	// Simulate what the validator does:
 	input := UserInput{Content: "Too late"}
@@ -324,7 +325,7 @@ func (s *AgenticWorkflowTestSuite) TestMultiTurn_ValidatorRejectsAfterShutdown()
 	if input.Content == "" {
 		validationErr = fmt.Errorf("content must not be empty")
 	}
-	if state.ShutdownRequested {
+	if ctrl.IsShutdown() {
 		validationErr = fmt.Errorf("session is shutting down")
 	}
 
@@ -333,7 +334,7 @@ func (s *AgenticWorkflowTestSuite) TestMultiTurn_ValidatorRejectsAfterShutdown()
 
 	// Also verify that a duplicate shutdown is rejected
 	var shutdownErr error
-	if state.ShutdownRequested {
+	if ctrl.IsShutdown() {
 		shutdownErr = fmt.Errorf("session is already shutting down")
 	}
 	require.Error(s.T(), shutdownErr)
@@ -427,9 +428,6 @@ func (s *AgenticWorkflowTestSuite) TestMultiTurn_ContinueAsNewPreservesState() {
 			},
 		},
 		MaxIterations:     20,
-		PendingUserInput:  false,
-		ShutdownRequested: false,
-		CurrentTurnID:     "turn-1",
 		TotalTokens:       100,
 		TotalCachedTokens: 30,
 		ToolCallsExecuted: []string{"shell_command"},
@@ -623,24 +621,51 @@ func TestSyncHistoryItems_PreservesNewTypes(t *testing.T) {
 	assert.Equal(t, "turn-42", state.HistoryItems[3].TurnID)
 }
 
-// TestSessionState_MultiTurnFieldsSerialize verifies multi-turn fields
-// are JSON-serializable for ContinueAsNew.
-func TestSessionState_MultiTurnFieldsSerialize(t *testing.T) {
+// TestLoopControl_LifecycleFlags verifies LoopControl lifecycle flags
+// (formerly multi-turn coordination fields in SessionState).
+// These fields are Temporal-specific coordination state and are NOT serialized
+// through ContinueAsNew; they live in LoopControl instead.
+func TestLoopControl_LifecycleFlags(t *testing.T) {
+	ctrl := &LoopControl{}
+
+	// Initially nothing pending
+	assert.False(t, ctrl.HasPendingWork())
+	assert.False(t, ctrl.IsShutdown())
+	assert.False(t, ctrl.IsInterrupted())
+
+	// SetPendingUserInput sets both turnID and pending flag
+	ctrl.SetPendingUserInput("turn-99")
+	assert.True(t, ctrl.HasPendingWork())
+	assert.Equal(t, "turn-99", ctrl.CurrentTurnID())
+
+	// SetInterrupted marks interrupted without shutdown
+	ctrl.SetInterrupted()
+	assert.True(t, ctrl.IsInterrupted())
+	assert.False(t, ctrl.IsShutdown())
+
+	// SetShutdown sets both shutdown and interrupted
+	ctrl2 := &LoopControl{}
+	ctrl2.SetShutdown()
+	assert.True(t, ctrl2.IsShutdown())
+	assert.True(t, ctrl2.IsInterrupted())
+
+	// StartTurn resets pendingUserInput and interrupted, clears suggestion
+	ctrl3 := &LoopControl{}
+	ctrl3.SetPendingUserInput("turn-1")
+	ctrl3.SetInterrupted()
+	ctrl3.SetSuggestion("some suggestion")
+	ctrl3.StartTurn()
+	assert.False(t, ctrl3.HasPendingWork())
+	assert.False(t, ctrl3.IsInterrupted())
+	assert.Empty(t, ctrl3.Suggestion())
+
+	// SessionState cumulative stats serialize correctly for ContinueAsNew
 	state := SessionState{
 		ConversationID:    "test",
-		PendingUserInput:  true,
-		ShutdownRequested: false,
-		Interrupted:       true,
-		CurrentTurnID:     "turn-99",
 		TotalTokens:       500,
 		TotalCachedTokens: 150,
 		ToolCallsExecuted: []string{"shell_command", "read_file"},
 	}
-
-	assert.True(t, state.PendingUserInput)
-	assert.False(t, state.ShutdownRequested)
-	assert.True(t, state.Interrupted)
-	assert.Equal(t, "turn-99", state.CurrentTurnID)
 	assert.Equal(t, 500, state.TotalTokens)
 	assert.Equal(t, 150, state.TotalCachedTokens)
 	assert.Equal(t, []string{"shell_command", "read_file"}, state.ToolCallsExecuted)
@@ -776,14 +801,15 @@ func (s *AgenticWorkflowTestSuite) TestMultiTurn_ManualCompact() {
 // TestMultiTurn_ManualCompact_RejectsWhenShuttingDown verifies the compact
 // validator rejects if the session is shutting down.
 func (s *AgenticWorkflowTestSuite) TestMultiTurn_ManualCompact_RejectsWhenShuttingDown() {
-	state := SessionState{ShutdownRequested: true}
+	ctrl := &LoopControl{}
+	ctrl.SetShutdown()
 
 	// Validate directly — the validator should reject
 	validator := func(req CompactRequest) error {
-		if state.ShutdownRequested {
+		if ctrl.IsShutdown() {
 			return fmt.Errorf("session is shutting down")
 		}
-		if state.Phase == PhaseCompacting {
+		if ctrl.Phase() == PhaseCompacting {
 			return fmt.Errorf("compaction already in progress")
 		}
 		return nil
@@ -797,13 +823,14 @@ func (s *AgenticWorkflowTestSuite) TestMultiTurn_ManualCompact_RejectsWhenShutti
 // TestMultiTurn_ManualCompact_RejectsWhenCompacting verifies the compact
 // validator rejects if compaction is already in progress.
 func (s *AgenticWorkflowTestSuite) TestMultiTurn_ManualCompact_RejectsWhenCompacting() {
-	state := SessionState{Phase: PhaseCompacting}
+	ctrl := &LoopControl{}
+	ctrl.SetPhase(PhaseCompacting)
 
 	validator := func(req CompactRequest) error {
-		if state.ShutdownRequested {
+		if ctrl.IsShutdown() {
 			return fmt.Errorf("session is shutting down")
 		}
-		if state.Phase == PhaseCompacting {
+		if ctrl.Phase() == PhaseCompacting {
 			return fmt.Errorf("compaction already in progress")
 		}
 		return nil

@@ -22,24 +22,24 @@ import (
 // Returns (needsContinueAsNew, error).
 //
 // Maps to: codex-rs/core/src/codex.rs run_sampling_request
-func (s *SessionState) runAgenticTurn(ctx workflow.Context) (bool, error) {
+func (s *SessionState) runAgenticTurn(ctx workflow.Context, ctrl *LoopControl) (bool, error) {
 	logger := workflow.GetLogger(ctx)
 	s.compactedThisTurn = false
 	gate := NewApprovalGate(s.Config.ApprovalMode, s.ExecPolicyRules)
 	executor := NewToolsExecutor(s.ToolSpecs, s.Config.Cwd, s.Config.SessionTaskQueue)
 
 	for s.IterationCount < s.MaxIterations {
-		if s.Interrupted {
+		if ctrl.IsInterrupted() {
 			logger.Info("Turn interrupted")
 			return false, nil
 		}
-		logger.Info("Starting iteration", "iteration", s.IterationCount, "turn_id", s.CurrentTurnID)
+		logger.Info("Starting iteration", "iteration", s.IterationCount, "turn_id", ctrl.CurrentTurnID())
 
-		s.maybeCompactBeforeLLM(ctx)
+		s.maybeCompactBeforeLLM(ctx, ctrl)
 
-		llmResult, err := s.callLLM(ctx)
+		llmResult, err := s.callLLM(ctx, ctrl)
 		if err != nil {
-			retry, handleErr := s.handleLLMError(ctx, err)
+			retry, handleErr := s.handleLLMError(ctx, ctrl, err)
 			if handleErr != nil {
 				return false, handleErr
 			}
@@ -48,7 +48,7 @@ func (s *SessionState) runAgenticTurn(ctx workflow.Context) (bool, error) {
 			}
 			return false, nil
 		}
-		if s.Interrupted {
+		if ctrl.IsInterrupted() {
 			logger.Info("Turn interrupted after LLM call")
 			return false, nil
 		}
@@ -56,12 +56,12 @@ func (s *SessionState) runAgenticTurn(ctx workflow.Context) (bool, error) {
 		s.recordLLMResponse(ctx, llmResult)
 
 		calls := extractFunctionCalls(llmResult.Items)
-		calls, hadIntercepted, err := s.dispatchInterceptedCalls(ctx, calls)
+		calls, hadIntercepted, err := s.dispatchInterceptedCalls(ctx, ctrl, calls)
 		if err != nil {
 			return false, err
 		}
 		if hadIntercepted && len(calls) == 0 {
-			if s.Interrupted || s.ShutdownRequested {
+			if ctrl.IsInterrupted() || ctrl.IsShutdown() {
 				return false, nil
 			}
 			s.IterationCount++
@@ -77,14 +77,14 @@ func (s *SessionState) runAgenticTurn(ctx workflow.Context) (bool, error) {
 				})
 				return false, nil
 			}
-			allDenied, execErr := s.approveAndExecuteTools(ctx, gate, executor, calls)
+			allDenied, execErr := s.approveAndExecuteTools(ctx, ctrl, gate, executor, calls)
 			if execErr != nil {
 				return false, execErr
 			}
 			if allDenied {
 				return false, nil
 			}
-			if s.Interrupted {
+			if ctrl.IsInterrupted() {
 				logger.Info("Turn interrupted after tool execution")
 				return false, nil
 			}
@@ -94,7 +94,7 @@ func (s *SessionState) runAgenticTurn(ctx workflow.Context) (bool, error) {
 
 		// No tool calls — check finish reason
 		if llmResult.FinishReason == models.FinishReasonStop {
-			logger.Info("Turn completed", "iterations", s.IterationCount, "turn_id", s.CurrentTurnID)
+			logger.Info("Turn completed", "iterations", s.IterationCount, "turn_id", ctrl.CurrentTurnID())
 			return false, nil
 		}
 		s.IterationCount++
@@ -129,7 +129,7 @@ func (s *SessionState) effectiveAutoCompactLimit() int {
 // maybeCompactBeforeLLM performs proactive compaction if history exceeds the
 // effective token limit. Also handles model-switch awareness: injects a
 // developer message about the switch and triggers compaction if needed.
-func (s *SessionState) maybeCompactBeforeLLM(ctx workflow.Context) {
+func (s *SessionState) maybeCompactBeforeLLM(ctx workflow.Context, ctrl *LoopControl) {
 	if s.compactedThisTurn {
 		return
 	}
@@ -161,7 +161,7 @@ func (s *SessionState) maybeCompactBeforeLLM(ctx workflow.Context) {
 					"limit", limit,
 					"previous_model", s.PreviousModel,
 					"new_model", s.Config.Model.Model)
-				if err := s.performCompaction(ctx); err != nil {
+				if err := s.performCompaction(ctx, ctrl); err != nil {
 					logger.Warn("Model-switch compaction failed, continuing without", "error", err)
 				}
 			}
@@ -176,7 +176,7 @@ func (s *SessionState) maybeCompactBeforeLLM(ctx workflow.Context) {
 			logger.Info("Proactive compaction triggered",
 				"estimated_tokens", estimated,
 				"limit", limit)
-			if err := s.performCompaction(ctx); err != nil {
+			if err := s.performCompaction(ctx, ctrl); err != nil {
 				logger.Warn("Proactive compaction failed, continuing without", "error", err)
 			}
 		}
@@ -185,7 +185,7 @@ func (s *SessionState) maybeCompactBeforeLLM(ctx workflow.Context) {
 
 // callLLM prepares incremental history and executes the LLM activity.
 // Returns the LLM output or an error for handleLLMError to classify.
-func (s *SessionState) callLLM(ctx workflow.Context) (*activities.LLMActivityOutput, error) {
+func (s *SessionState) callLLM(ctx workflow.Context, ctrl *LoopControl) (*activities.LLMActivityOutput, error) {
 	historyItems, err := s.History.GetForPrompt()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get history: %w", err)
@@ -212,8 +212,8 @@ func (s *SessionState) callLLM(ctx workflow.Context) (*activities.LLMActivityOut
 	}
 	llmCtx := workflow.WithActivityOptions(ctx, llmActivityOptions)
 
-	s.Phase = PhaseLLMCalling
-	s.ToolsInFlight = nil
+	ctrl.SetPhase(PhaseLLMCalling)
+	ctrl.ClearToolsInFlight()
 
 	llmInput := activities.LLMActivityInput{
 		History:               inputItems,
@@ -235,7 +235,7 @@ func (s *SessionState) callLLM(ctx workflow.Context) (*activities.LLMActivityOut
 
 // handleLLMError classifies and handles LLM errors: context overflow -> compact+retry,
 // rate limit -> sleep+retry, fatal -> end turn. Returns (continueLoop, error).
-func (s *SessionState) handleLLMError(ctx workflow.Context, err error) (bool, error) {
+func (s *SessionState) handleLLMError(ctx workflow.Context, ctrl *LoopControl, err error) (bool, error) {
 	logger := workflow.GetLogger(ctx)
 
 	var appErr *temporal.ApplicationError
@@ -243,7 +243,7 @@ func (s *SessionState) handleLLMError(ctx workflow.Context, err error) (bool, er
 		switch appErr.Type() {
 		case models.LLMErrTypeContextOverflow:
 			logger.Warn("Context overflow, attempting compaction")
-			if compactErr := s.performCompaction(ctx); compactErr != nil {
+			if compactErr := s.performCompaction(ctx, ctrl); compactErr != nil {
 				logger.Warn("Compaction failed, falling back to destructive drop", "error", compactErr)
 				turnCount, _ := s.History.GetTurnCount()
 				keepTurns := turnCount / 2
@@ -266,7 +266,7 @@ func (s *SessionState) handleLLMError(ctx workflow.Context, err error) (bool, er
 			_ = s.History.AddItem(models.ConversationItem{
 				Type:    models.ItemTypeAssistantMessage,
 				Content: fmt.Sprintf("[Error: %s]", appErr.Message()),
-				TurnID:  s.CurrentTurnID,
+				TurnID:  ctrl.CurrentTurnID(),
 			})
 			return false, nil // end turn
 		}
@@ -277,7 +277,7 @@ func (s *SessionState) handleLLMError(ctx workflow.Context, err error) (bool, er
 	_ = s.History.AddItem(models.ConversationItem{
 		Type:    models.ItemTypeAssistantMessage,
 		Content: fmt.Sprintf("[Error: LLM call failed: %v]", err),
-		TurnID:  s.CurrentTurnID,
+		TurnID:  ctrl.CurrentTurnID(),
 	})
 	return false, nil // end turn
 }
@@ -308,7 +308,7 @@ func (s *SessionState) recordLLMResponse(ctx workflow.Context, result *activitie
 
 // dispatchInterceptedCalls processes workflow-handled tool calls (request_user_input
 // and collab tools), returning the remaining normal calls and whether any were intercepted.
-func (s *SessionState) dispatchInterceptedCalls(ctx workflow.Context, calls []models.ConversationItem) (remaining []models.ConversationItem, hadIntercepted bool, err error) {
+func (s *SessionState) dispatchInterceptedCalls(ctx workflow.Context, ctrl *LoopControl, calls []models.ConversationItem) (remaining []models.ConversationItem, hadIntercepted bool, err error) {
 	if len(calls) == 0 {
 		return calls, false, nil
 	}
@@ -317,7 +317,7 @@ func (s *SessionState) dispatchInterceptedCalls(ctx workflow.Context, calls []mo
 	for _, fc := range calls {
 		if fc.Name == "request_user_input" {
 			hadIntercepted = true
-			outputItem, callErr := s.handleRequestUserInput(ctx, fc)
+			outputItem, callErr := s.handleRequestUserInput(ctx, ctrl, fc)
 			if callErr != nil {
 				return nil, hadIntercepted, callErr
 			}
@@ -335,7 +335,7 @@ func (s *SessionState) dispatchInterceptedCalls(ctx workflow.Context, calls []mo
 			}
 		} else if isCollabToolCall(fc.Name) {
 			hadIntercepted = true
-			outputItem, callErr := s.handleCollabToolCall(ctx, fc)
+			outputItem, callErr := s.handleCollabToolCall(ctx, ctrl, fc)
 			if callErr != nil {
 				return nil, hadIntercepted, callErr
 			}
@@ -354,6 +354,7 @@ func (s *SessionState) dispatchInterceptedCalls(ctx workflow.Context, calls []mo
 // Returns (allDenied, error). allDenied=true means all tools were denied by user.
 func (s *SessionState) approveAndExecuteTools(
 	ctx workflow.Context,
+	ctrl *LoopControl,
 	gate *ApprovalGate,
 	executor *ToolsExecutor,
 	functionCalls []models.ConversationItem,
@@ -372,7 +373,7 @@ func (s *SessionState) approveAndExecuteTools(
 	// Wait for approval if needed
 	if len(needsApproval) > 0 {
 		var err error
-		functionCalls, err = s.waitForApprovalAndFilter(ctx, functionCalls, gate, needsApproval)
+		functionCalls, err = s.waitForApprovalAndFilter(ctx, ctrl, functionCalls, gate, needsApproval)
 		if err != nil {
 			return false, err
 		}
@@ -382,12 +383,12 @@ func (s *SessionState) approveAndExecuteTools(
 	}
 
 	// Execute tools
-	s.Phase = PhaseToolExecuting
+	ctrl.SetPhase(PhaseToolExecuting)
 	toolNames := make([]string, len(functionCalls))
 	for i, fc := range functionCalls {
 		toolNames[i] = fc.Name
 	}
-	s.ToolsInFlight = toolNames
+	ctrl.SetToolsInFlight(toolNames)
 	logger.Info("Executing tools", "count", len(functionCalls))
 
 	toolResults, err := executor.ExecuteParallel(ctx, functionCalls)
@@ -395,16 +396,16 @@ func (s *SessionState) approveAndExecuteTools(
 		_ = s.History.AddItem(models.ConversationItem{
 			Type:    models.ItemTypeAssistantMessage,
 			Content: fmt.Sprintf("[Error: tool execution failed: %v]", err),
-			TurnID:  s.CurrentTurnID,
+			TurnID:  ctrl.CurrentTurnID(),
 		})
 		return false, nil
 	}
 
-	s.ToolsInFlight = nil
+	ctrl.ClearToolsInFlight()
 
 	// On-failure mode escalation
 	if s.Config.ApprovalMode == models.ApprovalOnFailure {
-		toolResults, err = s.handleOnFailureEscalation(ctx, functionCalls, toolResults)
+		toolResults, err = s.handleOnFailureEscalation(ctx, ctrl, functionCalls, toolResults)
 		if err != nil {
 			return false, err
 		}
@@ -443,39 +444,28 @@ func (s *SessionState) recordForbiddenAndFilter(
 	return remaining
 }
 
-// waitForApprovalAndFilter sets the pending state, awaits the user's response,
-// applies the approval decision, and returns the remaining approved calls.
+// waitForApprovalAndFilter delegates to ctrl.AwaitApproval, then applies the
+// approval decision to filter the tool calls.
+// Returns the remaining approved calls (nil if interrupted/all-denied).
 func (s *SessionState) waitForApprovalAndFilter(
 	ctx workflow.Context,
+	ctrl *LoopControl,
 	calls []models.ConversationItem,
 	gate *ApprovalGate,
 	needsApproval []PendingApproval,
 ) ([]models.ConversationItem, error) {
-	logger := workflow.GetLogger(ctx)
-
-	s.Phase = PhaseApprovalPending
-	s.PendingApprovals = needsApproval
-	s.ApprovalReceived = false
-	s.ApprovalResponse = nil
-
-	logger.Info("Waiting for tool approval", "count", len(needsApproval))
-
-	err := workflow.Await(ctx, func() bool {
-		return s.ApprovalReceived || s.Interrupted || s.ShutdownRequested
-	})
+	resp, err := ctrl.AwaitApproval(ctx, needsApproval)
 	if err != nil {
-		return nil, fmt.Errorf("approval await failed: %w", err)
+		return nil, err
 	}
 
-	s.PendingApprovals = nil
-
-	if s.Interrupted || s.ShutdownRequested {
-		logger.Info("Approval wait interrupted")
+	if resp == nil {
+		// Interrupted or shutdown before response arrived
 		return nil, nil
 	}
 
 	// Apply decision
-	approved, deniedResults := gate.ApplyDecision(calls, s.ApprovalResponse)
+	approved, deniedResults := gate.ApplyDecision(calls, resp)
 
 	for _, dr := range deniedResults {
 		_ = s.History.AddItem(dr)

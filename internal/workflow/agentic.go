@@ -52,7 +52,6 @@ func AgenticWorkflow(ctx workflow.Context, input WorkflowInput) (WorkflowResult,
 
 	// Generate initial turn ID
 	turnID := generateTurnID(ctx)
-	state.CurrentTurnID = turnID
 
 	// Add initial TurnStarted marker
 	if err := state.History.AddItem(models.ConversationItem{
@@ -83,36 +82,39 @@ func AgenticWorkflow(ctx workflow.Context, input WorkflowInput) (WorkflowResult,
 		return WorkflowResult{}, fmt.Errorf("failed to add user message: %w", err)
 	}
 
-	// Mark that we have pending input for the first turn
-	state.PendingUserInput = true
+	// Create LoopControl and mark first turn as pending.
+	ctrl := &LoopControl{}
+	ctrl.SetPendingUserInput(turnID)
 
 	// Register handlers and run multi-turn loop
-	state.registerHandlers(ctx)
-	return state.runMultiTurnLoop(ctx)
+	state.registerHandlers(ctx, ctrl)
+	return state.runMultiTurnLoop(ctx, ctrl)
 }
 
 // AgenticWorkflowContinued handles ContinueAsNew.
 func AgenticWorkflowContinued(ctx workflow.Context, state SessionState) (WorkflowResult, error) {
 	// Restore History interface from serialized HistoryItems
 	state.initHistory()
+
+	// Construct a fresh LoopControl — coordination state is not serialized.
+	ctrl := &LoopControl{}
+
 	// Re-register handlers after ContinueAsNew
-	state.registerHandlers(ctx)
-	return state.runMultiTurnLoop(ctx)
+	state.registerHandlers(ctx, ctrl)
+	return state.runMultiTurnLoop(ctx, ctrl)
 }
 
 // runMultiTurnLoop is the outer loop that waits for user input between turns.
-func (s *SessionState) runMultiTurnLoop(ctx workflow.Context) (WorkflowResult, error) {
+func (s *SessionState) runMultiTurnLoop(ctx workflow.Context, ctrl *LoopControl) (WorkflowResult, error) {
 	logger := workflow.GetLogger(ctx)
 
 	for {
-		// Wait for pending user input (first turn has it set already)
-		if !s.PendingUserInput && !s.ShutdownRequested && !s.CompactRequested {
-			s.Phase = PhaseWaitingForInput
-			s.ToolsInFlight = nil
+		// Wait for pending user input (first turn has it set already via SetPendingUserInput)
+		if !ctrl.HasPendingWork() {
+			ctrl.SetPhase(PhaseWaitingForInput)
+			ctrl.ClearToolsInFlight()
 			logger.Info("Waiting for user input or shutdown")
-			timedOut, err := awaitWithIdleTimeout(ctx, func() bool {
-				return s.PendingUserInput || s.ShutdownRequested || s.CompactRequested
-			})
+			timedOut, err := ctrl.WaitForInput(ctx)
 			if err != nil {
 				return WorkflowResult{}, fmt.Errorf("await failed: %w", err)
 			}
@@ -127,17 +129,17 @@ func (s *SessionState) runMultiTurnLoop(ctx workflow.Context) (WorkflowResult, e
 		}
 
 		// Handle manual compaction request (before shutdown/input checks)
-		if s.CompactRequested {
-			s.CompactRequested = false
+		if ctrl.IsCompactRequested() {
+			ctrl.ClearCompactRequested()
 			logger.Info("Manual compaction requested via /compact")
-			if err := s.performCompaction(ctx); err != nil {
+			if err := s.performCompaction(ctx, ctrl); err != nil {
 				logger.Warn("Manual compaction failed", "error", err)
 			}
 			continue
 		}
 
 		// Check for shutdown
-		if s.ShutdownRequested {
+		if ctrl.IsShutdown() {
 			logger.Info("Shutdown requested, completing workflow")
 			items, _ := s.History.GetRawItems()
 			return WorkflowResult{
@@ -152,13 +154,11 @@ func (s *SessionState) runMultiTurnLoop(ctx workflow.Context) (WorkflowResult, e
 		}
 
 		// Reset for new turn
-		s.PendingUserInput = false
-		s.Interrupted = false
+		ctrl.StartTurn()
 		s.IterationCount = 0
-		s.Suggestion = ""
 
 		// Run the agentic turn
-		done, err := s.runAgenticTurn(ctx)
+		done, err := s.runAgenticTurn(ctx, ctrl)
 		if err != nil {
 			return WorkflowResult{}, err
 		}
@@ -185,10 +185,10 @@ func (s *SessionState) runMultiTurnLoop(ctx workflow.Context) (WorkflowResult, e
 		}
 
 		// Turn complete — add TurnComplete marker (unless interrupted, which already added it)
-		if !s.Interrupted {
+		if !ctrl.IsInterrupted() {
 			_ = s.History.AddItem(models.ConversationItem{
 				Type:   models.ItemTypeTurnComplete,
-				TurnID: s.CurrentTurnID,
+				TurnID: ctrl.CurrentTurnID(),
 			})
 		}
 
@@ -210,18 +210,17 @@ func (s *SessionState) runMultiTurnLoop(ctx workflow.Context) (WorkflowResult, e
 			}, nil
 		}
 
-		s.Phase = PhaseWaitingForInput
-		s.ToolsInFlight = nil
+		ctrl.SetPhase(PhaseWaitingForInput)
+		ctrl.ClearToolsInFlight()
 
 		// Generate prompt suggestion asynchronously (best-effort).
 		// The CLI has already detected TurnComplete via polling and can show
 		// the input prompt immediately; the suggestion arrives ~300-500ms later.
-		if !s.Interrupted && !s.Config.DisableSuggestions {
-			s.Suggestion = ""
-			s.generateSuggestion(ctx)
+		if !ctrl.IsInterrupted() && !s.Config.DisableSuggestions {
+			s.generateSuggestion(ctx, ctrl)
 		}
 
-		logger.Info("Turn complete, waiting for next input", "turn_id", s.CurrentTurnID)
+		logger.Info("Turn complete, waiting for next input", "turn_id", ctrl.CurrentTurnID())
 	}
 }
 

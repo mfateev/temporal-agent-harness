@@ -15,11 +15,11 @@ import (
 )
 
 // handleRequestUserInput intercepts a request_user_input tool call, parses the
-// arguments, sets the pending phase, waits for the user's response, and returns
-// a FunctionCallOutput item with the user's answers as JSON.
+// arguments, delegates the await to ctrl.AwaitUserInputQuestion, and returns a
+// FunctionCallOutput item with the user's answers as JSON.
 //
 // Maps to: codex-rs/protocol/src/request_user_input.rs
-func (s *SessionState) handleRequestUserInput(ctx workflow.Context, fc models.ConversationItem) (models.ConversationItem, error) {
+func (s *SessionState) handleRequestUserInput(ctx workflow.Context, ctrl *LoopControl, fc models.ConversationItem) (models.ConversationItem, error) {
 	logger := workflow.GetLogger(ctx)
 
 	// Parse and validate the arguments
@@ -37,28 +37,19 @@ func (s *SessionState) handleRequestUserInput(ctx workflow.Context, fc models.Co
 		}, nil
 	}
 
-	// Set pending state
-	s.Phase = PhaseUserInputPending
-	s.PendingUserInputReq = &PendingUserInputRequest{
+	req := &PendingUserInputRequest{
 		CallID:    fc.CallID,
 		Questions: questions,
 	}
-	s.UserInputQReceived = false
-	s.UserInputQResponse = nil
 
-	logger.Info("Waiting for user input response", "question_count", len(questions))
-
-	// Wait for user response or interrupt
-	err = workflow.Await(ctx, func() bool {
-		return s.UserInputQReceived || s.Interrupted || s.ShutdownRequested
-	})
+	// Delegate blocking wait to LoopControl
+	resp, err := ctrl.AwaitUserInputQuestion(ctx, req)
 	if err != nil {
 		return models.ConversationItem{}, fmt.Errorf("user input await failed: %w", err)
 	}
 
-	s.PendingUserInputReq = nil
-
-	if s.Interrupted || s.ShutdownRequested {
+	if resp == nil {
+		// Interrupted or shutdown before response arrived
 		logger.Info("User input wait interrupted")
 		falseVal := false
 		return models.ConversationItem{
@@ -72,7 +63,7 @@ func (s *SessionState) handleRequestUserInput(ctx workflow.Context, fc models.Co
 	}
 
 	// Build the response JSON
-	responseJSON, err := json.Marshal(s.UserInputQResponse)
+	responseJSON, err := json.Marshal(resp)
 	if err != nil {
 		return models.ConversationItem{}, fmt.Errorf("failed to marshal user input response: %w", err)
 	}

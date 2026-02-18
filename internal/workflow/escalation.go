@@ -42,11 +42,13 @@ func isLikelySandboxDenial(output string) bool {
 }
 
 // handleOnFailureEscalation checks for failed tools in on-failure mode.
-// For failed tools that look like sandbox denials, prompts the user to
-// re-execute without sandbox. Normal failures are passed through to the LLM.
+// For failed tools that look like sandbox denials, delegates the blocking wait
+// to ctrl.AwaitEscalation and optionally re-executes approved tools without
+// the sandbox. Normal failures are passed through to the LLM.
 // Returns updated tool results (may include re-executed results).
 func (s *SessionState) handleOnFailureEscalation(
 	ctx workflow.Context,
+	ctrl *LoopControl,
 	functionCalls []models.ConversationItem,
 	toolResults []activities.ToolActivityOutput,
 ) ([]activities.ToolActivityOutput, error) {
@@ -80,36 +82,20 @@ func (s *SessionState) handleOnFailureEscalation(
 		return toolResults, nil // No failures
 	}
 
-	// Enter escalation pending state
-	s.Phase = PhaseEscalationPending
-	s.PendingEscalations = escalations
-	s.EscalationReceived = false
-	s.EscalationResponse = nil
-
-	logger.Info("Waiting for escalation decision", "failed_count", len(escalations))
-
-	// Wait for escalation response
-	err := workflow.Await(ctx, func() bool {
-		return s.EscalationReceived || s.Interrupted || s.ShutdownRequested
-	})
+	// Delegate blocking wait to LoopControl
+	resp, err := ctrl.AwaitEscalation(ctx, escalations)
 	if err != nil {
 		return nil, fmt.Errorf("escalation await failed: %w", err)
 	}
 
-	s.PendingEscalations = nil
-
-	if s.Interrupted || s.ShutdownRequested {
-		logger.Info("Escalation wait interrupted")
+	if resp == nil {
+		// Interrupted or shutdown before response arrived
 		return toolResults, nil // Return original results
 	}
 
-	if s.EscalationResponse == nil {
-		return toolResults, nil
-	}
-
 	// Re-execute approved tools without sandbox
-	approvedSet := make(map[string]bool, len(s.EscalationResponse.Approved))
-	for _, id := range s.EscalationResponse.Approved {
+	approvedSet := make(map[string]bool, len(resp.Approved))
+	for _, id := range resp.Approved {
 		approvedSet[id] = true
 	}
 

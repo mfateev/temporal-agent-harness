@@ -255,14 +255,14 @@ func parseCollabInput(message *string, items []collabInputItem) (string, error) 
 // handleCollabToolCall dispatches to the correct collab handler.
 // ---------------------------------------------------------------------------
 
-func (s *SessionState) handleCollabToolCall(ctx workflow.Context, fc models.ConversationItem) (models.ConversationItem, error) {
+func (s *SessionState) handleCollabToolCall(ctx workflow.Context, ctrl *LoopControl, fc models.ConversationItem) (models.ConversationItem, error) {
 	switch fc.Name {
 	case "spawn_agent":
 		return s.handleSpawnAgent(ctx, fc)
 	case "send_input":
 		return s.handleSendInput(ctx, fc)
 	case "wait":
-		return s.handleWait(ctx, fc)
+		return s.handleWait(ctx, ctrl, fc)
 	case "close_agent":
 		return s.handleCloseAgent(ctx, fc)
 	case "resume_agent":
@@ -410,7 +410,7 @@ func (s *SessionState) handleSendInput(ctx workflow.Context, fc models.Conversat
 // Maps to: codex-rs/core/src/agent/collab.rs handle_wait
 // ---------------------------------------------------------------------------
 
-func (s *SessionState) handleWait(ctx workflow.Context, fc models.ConversationItem) (models.ConversationItem, error) {
+func (s *SessionState) handleWait(ctx workflow.Context, ctrl *LoopControl, fc models.ConversationItem) (models.ConversationItem, error) {
 	logger := workflow.GetLogger(ctx)
 
 	var args struct {
@@ -437,7 +437,7 @@ func (s *SessionState) handleWait(ctx workflow.Context, fc models.ConversationIt
 	}
 	timeout := time.Duration(timeoutMs) * time.Millisecond
 
-	s.Phase = PhaseWaitingForAgents
+	ctrl.SetPhase(PhaseWaitingForAgents)
 
 	// Check if any requested agent has already reached terminal state
 	anyTerminal := func() bool {
@@ -452,7 +452,7 @@ func (s *SessionState) handleWait(ctx workflow.Context, fc models.ConversationIt
 	timedOut := false
 	if !anyTerminal() {
 		ok, err := workflow.AwaitWithTimeout(ctx, timeout, func() bool {
-			return anyTerminal() || s.Interrupted || s.ShutdownRequested
+			return anyTerminal() || ctrl.IsInterrupted() || ctrl.IsShutdown()
 		})
 		if err != nil {
 			return models.ConversationItem{}, fmt.Errorf("wait await failed: %w", err)

@@ -15,13 +15,13 @@ import (
 )
 
 // generateSuggestion runs the GenerateSuggestions activity synchronously to
-// populate s.Suggestion. Called after TurnComplete marker is added but before
+// populate ctrl.suggestion. Called after TurnComplete marker is added but before
 // the next awaitWithIdleTimeout. The CLI has already seen the TurnComplete via
 // polling and can show the input prompt; the suggestion appears ~300-500ms later
 // when the CLI's delayed poll picks it up.
 //
 // Best-effort: errors are silently ignored.
-func (s *SessionState) generateSuggestion(ctx workflow.Context) {
+func (s *SessionState) generateSuggestion(ctx workflow.Context, ctrl *LoopControl) {
 	input := s.buildSuggestionInput()
 	if input == nil {
 		return
@@ -37,7 +37,7 @@ func (s *SessionState) generateSuggestion(ctx workflow.Context) {
 	var out activities.SuggestionOutput
 	err := workflow.ExecuteActivity(suggCtx, "GenerateSuggestions", *input).Get(ctx, &out)
 	if err == nil && out.Suggestion != "" {
-		s.Suggestion = out.Suggestion
+		ctrl.SetSuggestion(out.Suggestion)
 	}
 }
 

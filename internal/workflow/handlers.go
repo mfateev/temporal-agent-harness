@@ -1,6 +1,9 @@
 // Package workflow contains Temporal workflow definitions.
 //
 // handlers.go registers all Temporal query and update handlers on the workflow.
+// Handlers delegate coordination state to LoopControl and agent state to
+// SessionState. No handler mutates LoopControl fields directly; they call
+// typed methods (DeliverApproval, SetPendingUserInput, etc.).
 package workflow
 
 import (
@@ -13,7 +16,7 @@ import (
 )
 
 // registerHandlers registers query and update handlers on the workflow.
-func (s *SessionState) registerHandlers(ctx workflow.Context) {
+func (s *SessionState) registerHandlers(ctx workflow.Context, ctrl *LoopControl) {
 	logger := workflow.GetLogger(ctx)
 
 	// Query: get_conversation_items
@@ -30,18 +33,18 @@ func (s *SessionState) registerHandlers(ctx workflow.Context) {
 	err = workflow.SetQueryHandler(ctx, QueryGetTurnStatus, func() (TurnStatus, error) {
 		turnCount, _ := s.History.GetTurnCount()
 		status := TurnStatus{
-			Phase:                   s.Phase,
-			CurrentTurnID:           s.CurrentTurnID,
-			ToolsInFlight:           s.ToolsInFlight,
-			PendingApprovals:        s.PendingApprovals,
-			PendingEscalations:      s.PendingEscalations,
-			PendingUserInputRequest: s.PendingUserInputReq,
+			Phase:                   ctrl.Phase(),
+			CurrentTurnID:           ctrl.CurrentTurnID(),
+			ToolsInFlight:           ctrl.ToolsInFlight(),
+			PendingApprovals:        ctrl.PendingApprovals(),
+			PendingEscalations:      ctrl.PendingEscalations(),
+			PendingUserInputRequest: ctrl.PendingUserInputReq(),
 			IterationCount:          s.IterationCount,
 			TotalTokens:             s.TotalTokens,
 			TotalCachedTokens:       s.TotalCachedTokens,
 			TurnCount:               turnCount,
 			WorkerVersion:           version.GitCommit,
-			Suggestion:              s.Suggestion,
+			Suggestion:              ctrl.Suggestion(),
 			Plan:                    s.Plan,
 		}
 		// Populate child agent summaries from AgentControl
@@ -86,8 +89,7 @@ func (s *SessionState) registerHandlers(ctx workflow.Context) {
 				return UserInputAccepted{}, fmt.Errorf("failed to add user message: %w", err)
 			}
 
-			s.CurrentTurnID = turnID
-			s.PendingUserInput = true
+			ctrl.SetPendingUserInput(turnID)
 
 			return UserInputAccepted{TurnID: turnID}, nil
 		},
@@ -96,7 +98,7 @@ func (s *SessionState) registerHandlers(ctx workflow.Context) {
 				if input.Content == "" {
 					return fmt.Errorf("content must not be empty")
 				}
-				if s.ShutdownRequested {
+				if ctrl.IsShutdown() {
 					return fmt.Errorf("session is shutting down")
 				}
 				return nil
@@ -113,13 +115,13 @@ func (s *SessionState) registerHandlers(ctx workflow.Context) {
 		ctx,
 		UpdateInterrupt,
 		func(ctx workflow.Context, req InterruptRequest) (InterruptResponse, error) {
-			s.Interrupted = true
+			ctrl.SetInterrupted()
 
 			// Add TurnComplete marker for interrupted turn
-			if s.CurrentTurnID != "" {
+			if ctrl.CurrentTurnID() != "" {
 				_ = s.History.AddItem(models.ConversationItem{
 					Type:    models.ItemTypeTurnComplete,
-					TurnID:  s.CurrentTurnID,
+					TurnID:  ctrl.CurrentTurnID(),
 					Content: "interrupted",
 				})
 			}
@@ -128,7 +130,7 @@ func (s *SessionState) registerHandlers(ctx workflow.Context) {
 		},
 		workflow.UpdateHandlerOptions{
 			Validator: func(ctx workflow.Context, req InterruptRequest) error {
-				if s.ShutdownRequested {
+				if ctrl.IsShutdown() {
 					return fmt.Errorf("session is shutting down")
 				}
 				return nil
@@ -145,13 +147,12 @@ func (s *SessionState) registerHandlers(ctx workflow.Context) {
 		ctx,
 		UpdateShutdown,
 		func(ctx workflow.Context, req ShutdownRequest) (ShutdownResponse, error) {
-			s.ShutdownRequested = true
-			s.Interrupted = true // Also interrupt current turn
+			ctrl.SetShutdown()
 			return ShutdownResponse{Acknowledged: true}, nil
 		},
 		workflow.UpdateHandlerOptions{
 			Validator: func(ctx workflow.Context, req ShutdownRequest) error {
-				if s.ShutdownRequested {
+				if ctrl.IsShutdown() {
 					return fmt.Errorf("session is already shutting down")
 				}
 				return nil
@@ -203,7 +204,7 @@ func (s *SessionState) registerHandlers(ctx workflow.Context) {
 				if req.Model == "" {
 					return fmt.Errorf("model must not be empty")
 				}
-				if s.ShutdownRequested {
+				if ctrl.IsShutdown() {
 					return fmt.Errorf("session is shutting down")
 				}
 				return nil
@@ -220,17 +221,12 @@ func (s *SessionState) registerHandlers(ctx workflow.Context) {
 		ctx,
 		UpdateApprovalResponse,
 		func(ctx workflow.Context, resp ApprovalResponse) (ApprovalResponseAck, error) {
-			s.ApprovalResponse = &resp
-			s.ApprovalReceived = true
-			// Clear PendingApprovals immediately so the query handler reflects
-			// the response before the main coroutine wakes from Await.
-			// Without this, the CLI may poll and re-enter the approval prompt.
-			s.PendingApprovals = nil
+			ctrl.DeliverApproval(resp)
 			return ApprovalResponseAck{}, nil
 		},
 		workflow.UpdateHandlerOptions{
 			Validator: func(ctx workflow.Context, resp ApprovalResponse) error {
-				if s.Phase != PhaseApprovalPending {
+				if ctrl.Phase() != PhaseApprovalPending {
 					return fmt.Errorf("no approval pending")
 				}
 				return nil
@@ -247,14 +243,12 @@ func (s *SessionState) registerHandlers(ctx workflow.Context) {
 		ctx,
 		UpdateEscalationResponse,
 		func(ctx workflow.Context, resp EscalationResponse) (EscalationResponseAck, error) {
-			s.EscalationResponse = &resp
-			s.EscalationReceived = true
-			s.PendingEscalations = nil
+			ctrl.DeliverEscalation(resp)
 			return EscalationResponseAck{}, nil
 		},
 		workflow.UpdateHandlerOptions{
 			Validator: func(ctx workflow.Context, resp EscalationResponse) error {
-				if s.Phase != PhaseEscalationPending {
+				if ctrl.Phase() != PhaseEscalationPending {
 					return fmt.Errorf("no escalation pending")
 				}
 				return nil
@@ -271,15 +265,15 @@ func (s *SessionState) registerHandlers(ctx workflow.Context) {
 		ctx,
 		UpdateCompact,
 		func(ctx workflow.Context, req CompactRequest) (CompactResponse, error) {
-			s.CompactRequested = true
+			ctrl.SetCompactRequested()
 			return CompactResponse{Acknowledged: true}, nil
 		},
 		workflow.UpdateHandlerOptions{
 			Validator: func(ctx workflow.Context, req CompactRequest) error {
-				if s.ShutdownRequested {
+				if ctrl.IsShutdown() {
 					return fmt.Errorf("session is shutting down")
 				}
-				if s.Phase == PhaseCompacting {
+				if ctrl.Phase() == PhaseCompacting {
 					return fmt.Errorf("compaction already in progress")
 				}
 				return nil
@@ -296,14 +290,12 @@ func (s *SessionState) registerHandlers(ctx workflow.Context) {
 		ctx,
 		UpdateUserInputQuestionResponse,
 		func(ctx workflow.Context, resp UserInputQuestionResponse) (UserInputQuestionResponseAck, error) {
-			s.UserInputQResponse = &resp
-			s.UserInputQReceived = true
-			s.PendingUserInputReq = nil
+			ctrl.DeliverUserInputQ(resp)
 			return UserInputQuestionResponseAck{}, nil
 		},
 		workflow.UpdateHandlerOptions{
 			Validator: func(ctx workflow.Context, resp UserInputQuestionResponse) error {
-				if s.Phase != PhaseUserInputPending {
+				if ctrl.Phase() != PhaseUserInputPending {
 					return fmt.Errorf("no user input question pending")
 				}
 				return nil
@@ -376,7 +368,7 @@ func (s *SessionState) registerHandlers(ctx workflow.Context) {
 				if req.Message == "" {
 					return fmt.Errorf("message must not be empty")
 				}
-				if s.ShutdownRequested {
+				if ctrl.IsShutdown() {
 					return fmt.Errorf("session is shutting down")
 				}
 				return nil
@@ -400,7 +392,7 @@ func (s *SessionState) registerHandlers(ctx workflow.Context) {
 				return // channel closed
 			}
 			if signal.Interrupt {
-				s.Interrupted = true
+				ctrl.SetInterrupted()
 			}
 
 			turnID := generateTurnID(gCtx)
@@ -414,8 +406,7 @@ func (s *SessionState) registerHandlers(ctx workflow.Context) {
 				TurnID:  turnID,
 			})
 
-			s.CurrentTurnID = turnID
-			s.PendingUserInput = true
+			ctrl.SetPendingUserInput(turnID)
 		}
 	})
 
@@ -426,7 +417,6 @@ func (s *SessionState) registerHandlers(ctx workflow.Context) {
 		if !agentShutdownCh.Receive(gCtx, &ignored) {
 			return
 		}
-		s.ShutdownRequested = true
-		s.Interrupted = true
+		ctrl.SetShutdown()
 	})
 }

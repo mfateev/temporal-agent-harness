@@ -269,6 +269,11 @@ type AgentInputSignal struct {
 // SessionState is passed through ContinueAsNew.
 // Uses ContextManager interface to allow pluggable storage backends.
 //
+// SessionState holds only serializable agent state: history, config, tool specs,
+// exec policy, cumulative stats, and ContinueAsNew counters. All Temporal
+// coordination state (phase, response slots, user input flags) lives in
+// LoopControl, which is constructed fresh each workflow run.
+//
 // Corresponds to: codex-rs/core/src/state/session.rs SessionState
 type SessionState struct {
 	ConversationID string                      `json:"conversation_id"`
@@ -282,34 +287,6 @@ type SessionState struct {
 	IterationCount int `json:"iteration_count"`
 	MaxIterations  int `json:"max_iterations"`
 
-	// Multi-turn state
-	PendingUserInput  bool   `json:"pending_user_input"`   // New user input waiting
-	ShutdownRequested bool   `json:"shutdown_requested"`   // Session shutdown requested
-	Interrupted       bool   `json:"interrupted"`          // Current turn interrupted
-	CurrentTurnID     string `json:"current_turn_id"`      // Active turn ID
-
-	// Turn phase tracking (for CLI polling)
-	Phase            TurnPhase         `json:"phase"`
-	ToolsInFlight    []string          `json:"tools_in_flight,omitempty"`
-	PendingApprovals []PendingApproval `json:"pending_approvals,omitempty"`
-
-	// Approval transient state (not serialized — lost on ContinueAsNew)
-	ApprovalReceived bool              `json:"-"`
-	ApprovalResponse *ApprovalResponse `json:"-"`
-
-	// Escalation transient state (on-failure mode)
-	PendingEscalations  []EscalationRequest  `json:"pending_escalations,omitempty"`
-	EscalationReceived  bool                 `json:"-"`
-	EscalationResponse  *EscalationResponse  `json:"-"`
-
-	// User input question transient state (request_user_input interception)
-	PendingUserInputReq   *PendingUserInputRequest   `json:"pending_user_input_request,omitempty"`
-	UserInputQReceived    bool                       `json:"-"`
-	UserInputQResponse    *UserInputQuestionResponse `json:"-"`
-
-	// Transient: user requested manual compaction via /compact command
-	CompactRequested bool `json:"-"`
-
 	// Exec policy rules (serialized text, persists across ContinueAsNew)
 	ExecPolicyRules string `json:"exec_policy_rules,omitempty"`
 
@@ -317,7 +294,7 @@ type SessionState struct {
 	// Used to trigger ContinueAsNew when history grows too large.
 	TotalIterationsForCAN int `json:"total_iterations_for_can"`
 
-	// OpenAI Responses API: last response ID for incremental sends
+	// OpenAI Responses API: last response ID for incremental sends.
 	// Persists across CAN to enable chaining across workflow continuations.
 	LastResponseID string `json:"last_response_id,omitempty"`
 
@@ -327,8 +304,8 @@ type SessionState struct {
 	lastSentHistoryLen int `json:"-"`
 
 	// Context compaction tracking
-	CompactionCount   int  `json:"compaction_count"`   // How many times compaction has occurred
-	compactedThisTurn bool `json:"-"`                  // Prevents double compaction in one turn
+	CompactionCount   int  `json:"compaction_count"` // How many times compaction has occurred
+	compactedThisTurn bool `json:"-"`                // Prevents double compaction in one turn
 
 	// Model switch tracking (persists across ContinueAsNew except modelSwitched)
 	PreviousModel         string `json:"previous_model,omitempty"`          // Model before last switch
@@ -343,9 +320,6 @@ type SessionState struct {
 	TotalTokens       int      `json:"total_tokens"`
 	TotalCachedTokens int      `json:"total_cached_tokens"`
 	ToolCallsExecuted []string `json:"tool_calls_executed"`
-
-	// Transient: post-turn prompt suggestion (not serialized — best-effort)
-	Suggestion string `json:"-"`
 
 	// Plan maintained by the LLM via the update_plan intercepted tool.
 	// Persists across ContinueAsNew and is exposed via get_turn_status.

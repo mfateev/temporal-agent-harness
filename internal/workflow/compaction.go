@@ -21,11 +21,11 @@ import (
 // increments CompactionCount, and resets response chaining state.
 //
 // Maps to: codex-rs/core/src/compact.rs perform_compaction
-func (s *SessionState) performCompaction(ctx workflow.Context) error {
+func (s *SessionState) performCompaction(ctx workflow.Context, ctrl *LoopControl) error {
 	logger := workflow.GetLogger(ctx)
 
 	// Set phase to compacting
-	s.Phase = PhaseCompacting
+	ctrl.SetPhase(PhaseCompacting)
 
 	// Get full history for compaction
 	historyItems, err := s.History.GetForPrompt()
