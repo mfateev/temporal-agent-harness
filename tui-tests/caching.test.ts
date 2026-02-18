@@ -4,13 +4,16 @@ import { tcxBinary, baseArgs, EXPECT_TIMEOUT } from "./helpers.js";
 // Validates that Anthropic prompt caching is visible in the TUI after a second
 // turn. The status bar renders "(N cached)" when totalCachedTokens > 0.
 //
-// The built-in base system prompt is ~3 300 tokens, well above Anthropic's
-// 2 048-token minimum cacheable block size for Haiku. After turn 1 the API
+// The built-in base system prompt is ~2 700 tokens, above the 2 048-token
+// minimum cacheable block size for Claude Haiku 3.5. After turn 1 the API
 // writes the system prompt to its cache; turn 2 reads from it.
+//
+// Uses claude-3.5-haiku-20241022 (2 048-token minimum) rather than Haiku 4.5
+// (4 096-token minimum) because the base system prompt is ~2 700 tokens.
 //
 // Requires: ANTHROPIC_API_KEY set in the environment.
 
-const anthropicModel = "claude-haiku-4-5-20251001";
+const anthropicModel = "claude-3.5-haiku-20241022";
 
 test.use({
   program: {

@@ -97,8 +97,9 @@ const (
 //
 // Maps to: codex-rs TokenUsageInfo
 type TokenUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
-	CachedTokens     int `json:"cached_tokens"`
+	PromptTokens         int `json:"prompt_tokens"`
+	CompletionTokens     int `json:"completion_tokens"`
+	TotalTokens          int `json:"total_tokens"`
+	CachedTokens         int `json:"cached_tokens"`
+	CacheCreationTokens  int `json:"cache_creation_tokens,omitempty"`
 }

@@ -70,10 +70,11 @@ func (c *AnthropicClient) Call(ctx context.Context, request LLMRequest) (LLMResp
 		Items:        items,
 		FinishReason: finishReason,
 		TokenUsage: models.TokenUsage{
-			PromptTokens:     int(response.Usage.InputTokens),
-			CompletionTokens: int(response.Usage.OutputTokens),
-			TotalTokens:      int(response.Usage.InputTokens + response.Usage.OutputTokens),
-			CachedTokens:     int(response.Usage.CacheReadInputTokens),
+			PromptTokens:        int(response.Usage.InputTokens),
+			CompletionTokens:    int(response.Usage.OutputTokens),
+			TotalTokens:         int(response.Usage.InputTokens + response.Usage.OutputTokens),
+			CachedTokens:        int(response.Usage.CacheReadInputTokens),
+			CacheCreationTokens: int(response.Usage.CacheCreationInputTokens),
 		},
 	}, nil
 }

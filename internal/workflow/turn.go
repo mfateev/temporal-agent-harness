@@ -292,6 +292,7 @@ func (s *SessionState) recordLLMResponse(ctx workflow.Context, result *activitie
 	logger.Info("LLM call completed",
 		"tokens", result.TokenUsage.TotalTokens,
 		"cached_tokens", result.TokenUsage.CachedTokens,
+		"cache_creation_tokens", result.TokenUsage.CacheCreationTokens,
 		"finish_reason", result.FinishReason,
 		"items", len(result.Items))
 

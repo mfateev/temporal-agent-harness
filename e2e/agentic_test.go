@@ -947,8 +947,11 @@ func TestAgenticWorkflow_AnthropicWithTools(t *testing.T) {
 
 // TestAgenticWorkflow_AnthropicCaching validates that Anthropic prompt caching is
 // active end-to-end through the full Temporal workflow stack. After a second LLM
-// turn the built-in base system prompt (≈3 300 tokens, well above Anthropic's
+// turn the built-in base system prompt (≈2 700 tokens, above Claude Haiku 3.5's
 // 2 048-token cache minimum) must be served from cache, so TotalCachedTokens > 0.
+//
+// Uses claude-3.5-haiku-20241022 (2 048-token minimum) rather than Haiku 4.5
+// (4 096-token minimum) because the base system prompt is ~2 700 tokens.
 //
 // Flow: start workflow → turn 1 (cache write) → send turn 2 (cache read) →
 // assert TurnStatus.TotalCachedTokens > 0 → assert WorkflowResult.TotalCachedTokens > 0.
@@ -967,7 +970,7 @@ func TestAgenticWorkflow_AnthropicCaching(t *testing.T) {
 		Config: models.SessionConfiguration{
 			Model: models.ModelConfig{
 				Provider:      "anthropic",
-				Model:         "claude-haiku-4-5-20251001",
+				Model:         "claude-3.5-haiku-20241022", // 2 048-token cache minimum (prompt is ~2 700 tokens)
 				Temperature:   0,
 				MaxTokens:     32,
 				ContextWindow: 200000,
