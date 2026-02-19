@@ -15,11 +15,8 @@ test.use({
 });
 
 test("status bar shows model name", async ({ terminal }) => {
-  // Wait for LLM response first, then check status bar contains model
-  await expect(
-    terminal.getByText(/kumquat/gi, { full: true, strict: false })
-  ).toBeVisible({ timeout: EXPECT_TIMEOUT });
-
+  // The model name is rendered in the status bar from the very first frame
+  // (set at startup from --model flag). No need to wait for the LLM response.
   await expect(
     terminal.getByText(/gpt-4o-mini/g, { full: true, strict: false })
   ).toBeVisible({ timeout: EXPECT_TIMEOUT });

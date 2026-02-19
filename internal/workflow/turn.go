@@ -202,12 +202,15 @@ func (s *SessionState) callLLM(ctx workflow.Context, ctrl *LoopControl) (*activi
 	}
 
 	llmActivityOptions := workflow.ActivityOptions{
-		StartToCloseTimeout: 2 * time.Minute,
+		// 90 s per attempt: generous enough for large responses while still
+		// cutting stalled connections quickly enough to retry within the TUI
+		// test's 2-minute EXPECT_TIMEOUT window.
+		StartToCloseTimeout: 90 * time.Second,
 		RetryPolicy: &temporal.RetryPolicy{
-			InitialInterval:    time.Second,
-			BackoffCoefficient: 2.0,
-			MaximumInterval:    30 * time.Second,
-			MaximumAttempts:    3,
+			InitialInterval:    500 * time.Millisecond, // fast first retry
+			BackoffCoefficient: 1.5,
+			MaximumInterval:    15 * time.Second,
+			MaximumAttempts:    5, // more budget for transient API errors
 		},
 	}
 	llmCtx := workflow.WithActivityOptions(ctx, llmActivityOptions)

@@ -5,7 +5,7 @@
 
 import { expect } from "@microsoft/tui-test";
 
-export const EXPECT_TIMEOUT = 60_000;
+export const EXPECT_TIMEOUT = 120_000;
 
 export const tcxBinary = process.env.TCX_BINARY || "../tcx";
 export const temporalHost = process.env.TEMPORAL_HOST || "localhost:18233";
