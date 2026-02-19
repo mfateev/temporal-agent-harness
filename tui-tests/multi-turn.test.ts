@@ -1,7 +1,7 @@
 import { test, expect } from "@microsoft/tui-test";
-import { tcxBinary, fullAutoArgs, EXPECT_TIMEOUT } from "./helpers.js";
+import { tcxBinary, fullAutoArgs, EXPECT_TIMEOUT, selectNewSession } from "./helpers.js";
 
-// No -m flag: starts in StateInput (interactive mode).
+// No -m flag: starts with the session picker (interactive mode).
 test.use({
   program: {
     file: tcxBinary,
@@ -12,6 +12,9 @@ test.use({
 });
 
 test("supports multi-turn conversation", async ({ terminal }) => {
+  // Navigate past the session picker → StateInput
+  await selectNewSession(terminal);
+
   // Wait for ready state (StateInput — the textarea is focused)
   await expect(
     terminal.getByText(/ready/g, { full: true, strict: false })

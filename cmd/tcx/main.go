@@ -6,9 +6,8 @@
 //
 // Usage:
 //
+//	tcx                               Show session picker (resume or new)
 //	tcx -m "hello"                    Start new session with initial message
-//	tcx                               Start new session, enter input immediately
-//	tcx --session <id>               Resume existing session
 //	tcx -m "hello" --model gpt-4o    Use a specific model
 //	tcx --inline                     Run without alt-screen (inline mode)
 package main
@@ -24,10 +23,8 @@ import (
 )
 
 func main() {
-	message := flag.String("m", "", "Initial message (starts new workflow)")
+	message := flag.String("m", "", "Initial message (starts new workflow, skips session picker)")
 	message2 := flag.String("message", "", "Initial message (alias for -m)")
-	session := flag.String("session", "", "Resume existing session")
-	workflowID := flag.String("workflow-id", "", "Resume existing session (alias for --session)")
 	model := flag.String("model", "gpt-4o-mini", "LLM model to use")
 	provider := flag.String("provider", "", "LLM provider override (openai, anthropic, google)")
 	temporalHost := flag.String("temporal-host", "", "Temporal server address (overrides envconfig/env vars)")
@@ -47,12 +44,6 @@ func main() {
 	msg := *message
 	if msg == "" {
 		msg = *message2
-	}
-
-	// Support both --session and --workflow-id (backward compat)
-	sess := *session
-	if sess == "" {
-		sess = *workflowID
 	}
 
 	var resolvedApproval models.ApprovalMode
@@ -84,7 +75,6 @@ func main() {
 
 	config := cli.Config{
 		TemporalHost:         *temporalHost,
-		Session:              sess,
 		Message:              msg,
 		Model:                *model,
 		NoMarkdown:           *noMarkdown,

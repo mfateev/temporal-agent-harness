@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"time"
+
 	"github.com/mfateev/temporal-agent-harness/internal/models"
 	"github.com/mfateev/temporal-agent-harness/internal/workflow"
 )
@@ -140,4 +142,17 @@ type HarnessSessionsMsg struct {
 // HarnessSessionsErrorMsg is returned when fetching harness sessions fails.
 type HarnessSessionsErrorMsg struct {
 	Err error
+}
+
+// SessionListEntry is one row in the session picker.
+type SessionListEntry struct {
+	WorkflowID string
+	StartTime  time.Time
+	Status     string // "running", "completed", "failed", "canceled", "timed_out"
+}
+
+// HarnessSessionsListMsg is sent when the session list fetch (via Temporal ListWorkflow) completes.
+type HarnessSessionsListMsg struct {
+	Entries []SessionListEntry
+	Err     error
 }

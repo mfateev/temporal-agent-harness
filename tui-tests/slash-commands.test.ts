@@ -1,5 +1,5 @@
 import { test, expect } from "@microsoft/tui-test";
-import { tcxBinary, baseArgs, EXPECT_TIMEOUT } from "./helpers.js";
+import { tcxBinary, baseArgs, EXPECT_TIMEOUT, selectNewSession } from "./helpers.js";
 
 // --- /exit command ---
 test.describe("/exit command", () => {
@@ -13,7 +13,10 @@ test.describe("/exit command", () => {
   });
 
   test("/exit command quits", async ({ terminal }) => {
-    // No -m flag: starts in StateInput
+    // Navigate past the session picker → StateInput
+    await selectNewSession(terminal);
+
+    // Wait for ready state
     await expect(
       terminal.getByText(/ready/g, { full: true, strict: false })
     ).toBeVisible({ timeout: EXPECT_TIMEOUT });
@@ -39,6 +42,9 @@ test.describe("/model selector", () => {
   });
 
   test("/model command shows model selector", async ({ terminal }) => {
+    // Navigate past the session picker → StateInput
+    await selectNewSession(terminal);
+
     // Wait for ready state
     await expect(
       terminal.getByText(/ready/g, { full: true, strict: false })

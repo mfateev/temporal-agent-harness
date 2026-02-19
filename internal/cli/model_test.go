@@ -36,7 +36,8 @@ func newTestModel() Model {
 func TestModel_InitialState_NoMessage(t *testing.T) {
 	config := Config{Model: "gpt-4o-mini", NoColor: true, NoMarkdown: true}
 	m := NewModel(config, nil)
-	assert.Equal(t, StateInput, m.state, "no message/session → start in input")
+	// No message → show session picker while sessions are fetched in the background
+	assert.Equal(t, StateSessionPicker, m.state, "no message → session picker")
 	assert.Equal(t, -1, m.lastRenderedSeq)
 }
 
@@ -46,10 +47,20 @@ func TestModel_InitialState_WithMessage(t *testing.T) {
 	assert.Equal(t, StateStartup, m.state, "with message → startup until workflow starts")
 }
 
-func TestModel_InitialState_WithSession(t *testing.T) {
-	config := Config{Model: "gpt-4o-mini", NoColor: true, NoMarkdown: true, Session: "codex-abc"}
-	m := NewModel(config, nil)
-	assert.Equal(t, StateStartup, m.state, "with session → startup until resume completes")
+func TestModel_InitialState_SessionPickerReceived(t *testing.T) {
+	// Simulate HarnessSessionsListMsg arriving: model should transition to
+	// StateSessionPicker with the selector built.
+	m := newTestModel()
+	m.state = StateSessionPicker
+
+	entries := []SessionListEntry{
+		{WorkflowID: "harness-abc/sess-20260219-150405-1", StartTime: time.Now().Add(-5 * time.Minute), Status: "running"},
+	}
+	result, _ := m.Update(HarnessSessionsListMsg{Entries: entries})
+	rm := result.(*Model)
+	assert.Equal(t, StateSessionPicker, rm.state)
+	assert.NotNil(t, rm.selector, "selector should be built when sessions are received")
+	assert.Len(t, rm.sessionEntries, 1)
 }
 
 func TestModel_WorkflowStartedNewSession(t *testing.T) {

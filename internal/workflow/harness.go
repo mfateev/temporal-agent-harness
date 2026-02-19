@@ -294,9 +294,11 @@ func handleStartSession(
 	cfg models.SessionConfiguration,
 	req StartSessionRequest,
 ) (StartSessionResponse, error) {
-	// Generate monotonically increasing session ID.
+	// Generate a time+counter composite session ID so the ID is meaningful
+	// in the session picker list.
+	t := workflow.Now(ctx)
 	state.SessionCounter++
-	sessionID := fmt.Sprintf("sess-%08x", state.SessionCounter)
+	sessionID := fmt.Sprintf("sess-%s-%d", t.UTC().Format("20060102-150405"), state.SessionCounter)
 	childWfID := state.HarnessID + "/" + sessionID
 
 	// Apply per-request overrides if provided.

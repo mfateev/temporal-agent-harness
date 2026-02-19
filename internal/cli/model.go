@@ -81,6 +81,7 @@ type State int
 
 const (
 	StateStartup            State = iota
+	StateSessionPicker // waiting for user to pick or create a session
 	StateInput
 	StateWatching
 	StateApproval
@@ -92,7 +93,6 @@ const (
 // Config holds CLI configuration.
 type Config struct {
 	TemporalHost string
-	Session      string // Resume existing session (workflow ID)
 	Message      string // Initial message for new workflow
 	Model        string
 	NoMarkdown   bool
@@ -196,10 +196,14 @@ type Model struct {
 	provider string
 
 	// /model command state
-	selectingModel    bool
+	selectingModel     bool
 	cachedModelOptions []modelOption
-	modelsFetched     bool
-	modelsFetching    bool
+	modelsFetched      bool
+	modelsFetching     bool
+
+	// Session picker state
+	selectingSession bool
+	sessionEntries   []SessionListEntry
 }
 
 // NewModel creates a new bubbletea model.
@@ -223,8 +227,8 @@ func NewModel(config Config, c client.Client) Model {
 	sp.Spinner = spinner.Dot
 
 	initialState := StateStartup
-	if config.Session == "" && config.Message == "" {
-		initialState = StateInput
+	if config.Message == "" {
+		initialState = StateSessionPicker // show picker while fetching sessions
 	}
 
 	return Model{
@@ -248,12 +252,18 @@ func (m Model) Init() tea.Cmd {
 		m.spinner.Tick,
 	}
 
-	if m.config.Session != "" {
-		cmds = append(cmds, resumeWorkflowCmd(m.client, m.config.Session))
-	} else if m.config.Message != "" {
+	if m.config.Message != "" {
+		// -m provided: start new session immediately (skip picker)
 		cmds = append(cmds, startWorkflowCmd(m.client, m.config))
+	} else {
+		// No message: show session picker, fetch sessions in background
+		cwd := m.config.Cwd
+		if cwd == "" {
+			cwd, _ = os.Getwd()
+		}
+		harnessID := harnessWorkflowID(cwd)
+		cmds = append(cmds, fetchSessionsCmd(m.client, harnessID))
 	}
-	// else: no message, no session — already StateInput from NewModel
 
 	return tea.Batch(cmds...)
 }
@@ -270,11 +280,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKeyMsg(msg)
 
 	case spinner.TickMsg:
-		if m.state == StateWatching || m.state == StateStartup {
+		if m.state == StateWatching || m.state == StateStartup || m.state == StateSessionPicker {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
 			cmds = append(cmds, cmd)
 		}
+
+	case HarnessSessionsListMsg:
+		if msg.Err != nil {
+			// Failed to fetch sessions — fall back to input so user can still type
+			m.appendToViewport(fmt.Sprintf("Failed to fetch sessions: %v\n", msg.Err))
+			m.state = StateInput
+			return &m, m.focusTextarea()
+		}
+		m.sessionEntries = msg.Entries
+		m.selectingSession = true
+		m.selector = m.buildSessionSelector(msg.Entries)
+		m.state = StateSessionPicker
+		return &m, nil
 
 	case WorkflowStartedMsg:
 		return m.handleWorkflowStarted(msg)
@@ -461,6 +484,12 @@ func (m Model) View() string {
 	// Input area
 	var inputView string
 	switch m.state {
+	case StateSessionPicker:
+		if m.selector != nil {
+			inputView = m.selector.View()
+		} else {
+			inputView = m.spinner.View() + " " + m.styles.SpinnerMessage.Render("Loading sessions...")
+		}
 	case StateInput:
 		if m.selectingModel && m.selector != nil {
 			inputView = m.selector.View()
@@ -514,6 +543,8 @@ func (m Model) renderStatusBar() string {
 		}
 	} else {
 		switch m.state {
+		case StateSessionPicker:
+			stateLabel = "picker"
 		case StateInput:
 			stateLabel = "ready"
 		case StateWatching:
@@ -587,14 +618,16 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyCtrlC:
 		return m.handleCtrlC()
 	case tea.KeyCtrlD:
-		if m.state == StateInput {
-			// Ctrl+D during input = disconnect
+		if m.state == StateInput || m.state == StateSessionPicker {
+			// Ctrl+D during input or picker = disconnect/quit
 			m.quitting = true
 			return m, tea.Quit
 		}
 	}
 
 	switch m.state {
+	case StateSessionPicker:
+		return m.handleSessionPickerKey(msg)
 	case StateInput:
 		return m.handleInputKey(msg)
 	case StateWatching:
@@ -850,6 +883,46 @@ func (m *Model) handleWatchingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.viewport, cmd = m.viewport.Update(msg)
 	return m, cmd
+}
+
+func (m *Model) handleSessionPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.selector == nil {
+		// Still loading — ignore input
+		return m, nil
+	}
+
+	if m.isViewportScrollKey(msg) {
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		return m, cmd
+	}
+
+	done := m.selector.Update(msg)
+	if done {
+		if m.selector.Cancelled() {
+			// Esc — quit
+			m.selector = nil
+			m.selectingSession = false
+			m.quitting = true
+			return m, tea.Quit
+		}
+		idx := m.selector.Selected()
+		m.selector = nil
+		m.selectingSession = false
+
+		if idx == 0 {
+			// "New session" selected — go to input
+			m.state = StateInput
+			return m, m.focusTextarea()
+		}
+
+		// Existing session selected
+		entry := m.sessionEntries[idx-1]
+		m.state = StateWatching
+		m.spinnerMsg = "Connecting..."
+		return m, resumeWorkflowCmd(m.client, entry.WorkflowID)
+	}
+	return m, nil
 }
 
 func (m *Model) handleApprovalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1116,6 +1189,11 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 			m.startPolling(),
 		}
 		return m, tea.Batch(cmds...)
+
+	case StateSessionPicker:
+		// Ctrl+C during session picker — quit
+		m.quitting = true
+		return m, tea.Quit
 
 	case StateInput:
 		// Ctrl+C during input — disconnect
@@ -1524,6 +1602,46 @@ func (m *Model) buildUserInputSelector(req *workflow.PendingUserInputRequest) *S
 	return sel
 }
 
+// buildSessionSelector creates the session picker selector.
+// The first option is always "New session"; subsequent options are existing sessions.
+func (m *Model) buildSessionSelector(entries []SessionListEntry) *SelectorModel {
+	opts := []SelectorOption{
+		{Label: "New session", Shortcut: "n", ShortcutKey: 'n'},
+	}
+	for _, e := range entries {
+		// Extract the last path segment (e.g. "sess-20260219-150405-1")
+		short := e.WorkflowID
+		if idx := strings.LastIndex(short, "/"); idx >= 0 {
+			short = short[idx+1:]
+		}
+		icon := sessionStatusIcon(e.Status)
+		label := fmt.Sprintf("%-32s %s %-10s  %s",
+			short, icon, e.Status, e.StartTime.Local().Format("Jan 02, 15:04"))
+		opts = append(opts, SelectorOption{Label: label})
+	}
+	sel := NewSelectorModel(opts, m.styles)
+	sel.SetWidth(m.width)
+	return sel
+}
+
+// sessionStatusIcon returns a Unicode bullet/symbol for a session status string.
+func sessionStatusIcon(status string) string {
+	switch status {
+	case "running":
+		return "●"
+	case "completed":
+		return "✓"
+	case "failed":
+		return "✗"
+	case "canceled":
+		return "○"
+	case "timed_out":
+		return "⏱"
+	default:
+		return "?"
+	}
+}
+
 // isViewportScrollKey returns true for keys that should scroll the viewport
 // even when the selector is active. Only page/home/end keys, not up/down/j/k.
 func (m *Model) isViewportScrollKey(msg tea.KeyMsg) bool {
@@ -1647,10 +1765,8 @@ func Run(config Config) error {
 
 	// Print resume hint after exiting TUI
 	fm := finalModel.(*Model)
-	if fm.workflowID != "" && !fm.quitting {
-		fmt.Fprintf(os.Stderr, "\nSession suspended. Resume with:\n  tcx --session %s\n", fm.workflowID)
-	} else if fm.workflowID != "" && fm.err == nil {
-		fmt.Fprintf(os.Stderr, "\nSession suspended. Resume with:\n  tcx --session %s\n", fm.workflowID)
+	if fm.workflowID != "" && fm.err == nil {
+		fmt.Fprintf(os.Stderr, "\nSession suspended. Run tcx to resume from the session picker.\n")
 	}
 
 	if fm.err != nil {

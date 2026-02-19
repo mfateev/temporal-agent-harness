@@ -1,5 +1,5 @@
 import { test, expect } from "@microsoft/tui-test";
-import { tcxBinary, baseArgs, EXPECT_TIMEOUT } from "./helpers.js";
+import { tcxBinary, baseArgs, EXPECT_TIMEOUT, selectNewSession } from "./helpers.js";
 
 // Validates that Anthropic prompt caching is visible in the TUI after a second
 // turn. The status bar renders "(N cached)" when totalCachedTokens > 0.
@@ -36,6 +36,9 @@ test("status bar shows cached tokens after second Anthropic turn", async ({
     !process.env.ANTHROPIC_API_KEY,
     "ANTHROPIC_API_KEY not set — skipping Anthropic caching TUI test",
   );
+
+  // Navigate past the session picker → StateInput
+  await selectNewSession(terminal);
 
   // ── Turn 1 ────────────────────────────────────────────────────────────────
   // Wait for the TUI to reach ready state (StateInput).

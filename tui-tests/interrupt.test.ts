@@ -1,5 +1,5 @@
 import { test, expect } from "@microsoft/tui-test";
-import { tcxBinary, fullAutoArgs, baseArgs, EXPECT_TIMEOUT } from "./helpers.js";
+import { tcxBinary, fullAutoArgs, baseArgs, EXPECT_TIMEOUT, selectNewSession } from "./helpers.js";
 
 // --- Ctrl+C interrupt during watching state ---
 test.describe("ctrl+c interrupt", () => {
@@ -48,7 +48,10 @@ test.describe("ctrl+d exit", () => {
   });
 
   test("Ctrl+D exits during input state", async ({ terminal }) => {
-    // No -m flag: starts in StateInput. Wait for ready.
+    // Navigate past the session picker → StateInput
+    await selectNewSession(terminal);
+
+    // Wait for ready state
     await expect(
       terminal.getByText(/ready/g, { full: true, strict: false })
     ).toBeVisible({ timeout: EXPECT_TIMEOUT });
