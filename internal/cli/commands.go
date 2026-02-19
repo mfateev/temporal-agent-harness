@@ -63,9 +63,24 @@ func startWorkflowCmd(c client.Client, config Config) tea.Cmd {
 		}
 
 		updateHandle, err := c.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
-			WorkflowID:   harnessID,
-			UpdateName:   workflow.UpdateStartSession,
-			Args:         []interface{}{workflow.StartSessionRequest{UserMessage: config.Message}},
+			WorkflowID: harnessID,
+			UpdateName: workflow.UpdateStartSession,
+			Args: []interface{}{workflow.StartSessionRequest{
+				UserMessage: config.Message,
+				// Pass per-invocation overrides so each session gets its own
+				// model/approval/sandbox config, even when multiple tcx processes
+				// share the same long-lived HarnessWorkflow.
+				OverrideConfig: &workflow.CLIOverrides{
+					Provider:             config.Provider,
+					Model:                config.Model,
+					ApprovalMode:         config.ApprovalMode,
+					SandboxMode:          config.SandboxMode,
+					SandboxWritableRoots: config.SandboxWritableRoots,
+					SandboxNetworkAccess: config.SandboxNetworkAccess,
+					DisableSuggestions:   config.DisableSuggestions,
+					Cwd:                  cwd,
+				},
+			}},
 			WaitForStage: client.WorkflowUpdateStageCompleted,
 		})
 		if err != nil {

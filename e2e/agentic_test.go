@@ -233,6 +233,8 @@ func createWorker(c client.Client) worker.Worker {
 	// Register workflows
 	w.RegisterWorkflow(workflow.AgenticWorkflow)
 	w.RegisterWorkflow(workflow.AgenticWorkflowContinued)
+	w.RegisterWorkflow(workflow.HarnessWorkflow)
+	w.RegisterWorkflow(workflow.HarnessWorkflowContinued)
 
 	// Create tool registry with all built-in tools
 	toolRegistry := tools.NewToolRegistry()
@@ -263,6 +265,7 @@ func createWorker(c client.Client) worker.Worker {
 
 	instructionActivities := activities.NewInstructionActivities()
 	w.RegisterActivity(instructionActivities.LoadWorkerInstructions)
+	w.RegisterActivity(instructionActivities.LoadPersonalInstructions)
 	w.RegisterActivity(instructionActivities.LoadExecPolicy)
 
 	return w

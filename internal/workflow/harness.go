@@ -374,6 +374,18 @@ func applyOverrides(cfg *models.SessionConfiguration, o *CLIOverrides) {
 	if o.SessionTaskQueue != "" {
 		cfg.SessionTaskQueue = o.SessionTaskQueue
 	}
+	if o.SandboxMode != "" {
+		cfg.SandboxMode = o.SandboxMode
+	}
+	if len(o.SandboxWritableRoots) > 0 {
+		cfg.SandboxWritableRoots = o.SandboxWritableRoots
+	}
+	if o.SandboxNetworkAccess {
+		cfg.SandboxNetworkAccess = o.SandboxNetworkAccess
+	}
+	if o.DisableSuggestions {
+		cfg.DisableSuggestions = o.DisableSuggestions
+	}
 }
 
 // updateSessionStatus finds the session with the given sessionID and updates its status.
