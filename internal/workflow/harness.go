@@ -1,6 +1,6 @@
 // Package workflow contains Temporal workflow definitions.
 //
-// manager.go implements ManagerWorkflow — a long-lived orchestrator that
+// manager.go implements HarnessWorkflow — a long-lived orchestrator that
 // owns multiple agentic sessions (child AgenticWorkflow runs) on behalf of
 // a single user identity.
 package workflow
@@ -17,7 +17,7 @@ import (
 	"github.com/mfateev/temporal-agent-harness/internal/models"
 )
 
-// Handler name constants for ManagerWorkflow.
+// Handler name constants for HarnessWorkflow.
 const (
 	// QueryGetSessions returns the list of active/completed sessions.
 	QueryGetSessions = "get_sessions"
@@ -60,8 +60,8 @@ type CLIOverrides struct {
 	DisableSuggestions bool `json:"disable_suggestions,omitempty"`
 }
 
-// ManagerWorkflowInput is the initial input for ManagerWorkflow.
-type ManagerWorkflowInput struct {
+// HarnessWorkflowInput is the initial input for HarnessWorkflow.
+type HarnessWorkflowInput struct {
 	// ManagerID is a stable identifier for this manager instance.
 	// Used as a prefix for child workflow IDs.
 	ManagerID string `json:"manager_id"`
@@ -89,7 +89,7 @@ type StartSessionResponse struct {
 	SessionWorkflowID string `json:"session_workflow_id"`
 }
 
-// SessionEntry tracks a single child session spawned by ManagerWorkflow.
+// SessionEntry tracks a single child session spawned by HarnessWorkflow.
 type SessionEntry struct {
 	// SessionID is the manager-assigned short identifier.
 	SessionID string `json:"session_id"`
@@ -107,8 +107,8 @@ type SessionEntry struct {
 	StartedAt time.Time `json:"started_at"`
 }
 
-// ManagerWorkflowState is passed through ContinueAsNew.
-type ManagerWorkflowState struct {
+// HarnessWorkflowState is passed through ContinueAsNew.
+type HarnessWorkflowState struct {
 	// ManagerID is preserved across ContinueAsNew.
 	ManagerID string `json:"manager_id"`
 
@@ -122,26 +122,26 @@ type ManagerWorkflowState struct {
 	SessionCounter uint64 `json:"session_counter"`
 }
 
-// ManagerWorkflow is the long-lived manager orchestrator entry point.
-// Accepts ManagerWorkflowInput and delegates to runManagerLoop.
-func ManagerWorkflow(ctx workflow.Context, input ManagerWorkflowInput) error {
-	state := ManagerWorkflowState{
+// HarnessWorkflow is the long-lived manager orchestrator entry point.
+// Accepts HarnessWorkflowInput and delegates to runManagerLoop.
+func HarnessWorkflow(ctx workflow.Context, input HarnessWorkflowInput) error {
+	state := HarnessWorkflowState{
 		ManagerID: input.ManagerID,
 		Overrides: input.Overrides,
 	}
 	return runManagerLoop(ctx, &state)
 }
 
-// ManagerWorkflowContinued is the ContinueAsNew re-entry point.
+// HarnessWorkflowContinued is the ContinueAsNew re-entry point.
 // Accepts serialized state and delegates to runManagerLoop.
-func ManagerWorkflowContinued(ctx workflow.Context, state ManagerWorkflowState) error {
+func HarnessWorkflowContinued(ctx workflow.Context, state HarnessWorkflowState) error {
 	return runManagerLoop(ctx, &state)
 }
 
 // runManagerLoop is the core manager event loop shared by both entry points.
 // It resolves config, registers handlers, and loops until idle timeout triggers
 // ContinueAsNew.
-func runManagerLoop(ctx workflow.Context, state *ManagerWorkflowState) error {
+func runManagerLoop(ctx workflow.Context, state *HarnessWorkflowState) error {
 	logger := workflow.GetLogger(ctx)
 
 	// Resolve file-based config via activities (once per workflow run).
@@ -195,7 +195,7 @@ func runManagerLoop(ctx workflow.Context, state *ManagerWorkflowState) error {
 			_ = workflow.Await(ctx, func() bool {
 				return workflow.AllHandlersFinished(ctx)
 			})
-			return workflow.NewContinueAsNewError(ctx, ManagerWorkflowContinued, *state)
+			return workflow.NewContinueAsNewError(ctx, HarnessWorkflowContinued, *state)
 		}
 	}
 }
@@ -290,7 +290,7 @@ func resolveManagerConfig(ctx workflow.Context, overrides CLIOverrides) (models.
 // handleStartSession starts a new AgenticWorkflow child and records the session.
 func handleStartSession(
 	ctx workflow.Context,
-	state *ManagerWorkflowState,
+	state *HarnessWorkflowState,
 	cfg models.SessionConfiguration,
 	req StartSessionRequest,
 ) (StartSessionResponse, error) {
@@ -377,7 +377,7 @@ func applyOverrides(cfg *models.SessionConfiguration, o *CLIOverrides) {
 }
 
 // updateSessionStatus finds the session with the given sessionID and updates its status.
-func updateSessionStatus(state *ManagerWorkflowState, sessionID string, status AgentStatus) {
+func updateSessionStatus(state *HarnessWorkflowState, sessionID string, status AgentStatus) {
 	for i := range state.Sessions {
 		if state.Sessions[i].SessionID == sessionID {
 			state.Sessions[i].Status = status

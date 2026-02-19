@@ -55,8 +55,8 @@ func main() {
 	// Register workflows
 	w.RegisterWorkflow(workflow.AgenticWorkflow)
 	w.RegisterWorkflow(workflow.AgenticWorkflowContinued)
-	w.RegisterWorkflow(workflow.ManagerWorkflow)
-	w.RegisterWorkflow(workflow.ManagerWorkflowContinued)
+	w.RegisterWorkflow(workflow.HarnessWorkflow)
+	w.RegisterWorkflow(workflow.HarnessWorkflowContinued)
 
 	// Create tool registry with handlers
 	// Maps to: codex-rs/core/src/tools/registry.rs ToolRegistry setup

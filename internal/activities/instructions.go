@@ -125,7 +125,7 @@ type LoadPersonalInstructionsOutput struct {
 // filesystem. Non-fatal: returns empty output (no error) if the file is
 // missing or any I/O error occurs.
 //
-// This activity is called by ManagerWorkflow so that personal instructions
+// This activity is called by HarnessWorkflow so that personal instructions
 // are loaded from the worker filesystem rather than the TUI client.
 func (a *InstructionActivities) LoadPersonalInstructions(
 	_ context.Context, input LoadPersonalInstructionsInput,

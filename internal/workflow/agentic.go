@@ -44,7 +44,7 @@ func AgenticWorkflow(ctx workflow.Context, input WorkflowInput) (WorkflowResult,
 	// Build tool specs based on configuration and profile
 	state.ToolSpecs = buildToolSpecs(input.Config.Tools, state.ResolvedProfile)
 
-	// If BaseInstructions is empty, config was not pre-assembled by ManagerWorkflow
+	// If BaseInstructions is empty, config was not pre-assembled by HarnessWorkflow
 	// (e.g. direct invocation from E2E tests or CLI). Load from the worker filesystem.
 	if state.Config.BaseInstructions == "" {
 		state.resolveInstructions(ctx)

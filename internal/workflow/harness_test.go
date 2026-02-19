@@ -34,18 +34,18 @@ func LoadPersonalInstructions(_ context.Context, _ activities.LoadPersonalInstru
 	panic("stub: should be mocked")
 }
 
-// ManagerWorkflowTestSuite runs ManagerWorkflow tests with the Temporal test environment.
-type ManagerWorkflowTestSuite struct {
+// HarnessWorkflowTestSuite runs HarnessWorkflow tests with the Temporal test environment.
+type HarnessWorkflowTestSuite struct {
 	suite.Suite
 	testsuite.WorkflowTestSuite
 	env *testsuite.TestWorkflowEnvironment
 }
 
-func TestManagerWorkflowSuite(t *testing.T) {
-	suite.Run(t, new(ManagerWorkflowTestSuite))
+func TestHarnessWorkflowSuite(t *testing.T) {
+	suite.Run(t, new(HarnessWorkflowTestSuite))
 }
 
-func (s *ManagerWorkflowTestSuite) SetupTest() {
+func (s *HarnessWorkflowTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
 
 	// Register stub activity functions so the test env recognises the activity names.
@@ -71,13 +71,13 @@ func (s *ManagerWorkflowTestSuite) SetupTest() {
 		Return(WorkflowResult{}, nil).Maybe()
 }
 
-func (s *ManagerWorkflowTestSuite) AfterTest(suiteName, testName string) {
+func (s *HarnessWorkflowTestSuite) AfterTest(suiteName, testName string) {
 	s.env.AssertExpectations(s.T())
 }
 
-// managerInput returns a standard ManagerWorkflowInput for testing.
-func managerInput() ManagerWorkflowInput {
-	return ManagerWorkflowInput{
+// managerInput returns a standard HarnessWorkflowInput for testing.
+func managerInput() HarnessWorkflowInput {
+	return HarnessWorkflowInput{
 		ManagerID: "test-manager",
 	}
 }
@@ -86,7 +86,7 @@ func managerInput() ManagerWorkflowInput {
 // manager's infinite loop. The manager loops until either cancelled or a
 // ContinueAsNew timeout fires; cancellation is the simplest way to stop it
 // in tests.
-func (s *ManagerWorkflowTestSuite) cancelWorkflow(delay time.Duration) {
+func (s *HarnessWorkflowTestSuite) cancelWorkflow(delay time.Duration) {
 	s.env.RegisterDelayedCallback(func() {
 		s.env.CancelWorkflow()
 	}, delay)
@@ -94,7 +94,7 @@ func (s *ManagerWorkflowTestSuite) cancelWorkflow(delay time.Duration) {
 
 // assertWorkflowCompleted verifies the workflow completed (regardless of reason).
 // The manager's infinite loop may complete via cancellation or idle timeout.
-func (s *ManagerWorkflowTestSuite) assertWorkflowCompleted() {
+func (s *HarnessWorkflowTestSuite) assertWorkflowCompleted() {
 	require.True(s.T(), s.env.IsWorkflowCompleted(),
 		"manager workflow should have completed")
 }
@@ -102,7 +102,7 @@ func (s *ManagerWorkflowTestSuite) assertWorkflowCompleted() {
 // TestManager_StartSessionSpawnsChild verifies that sending a start_session
 // Update spawns a child workflow and returns a non-empty SessionWorkflowID.
 // It also queries get_sessions to confirm the session is recorded.
-func (s *ManagerWorkflowTestSuite) TestManager_StartSessionSpawnsChild() {
+func (s *HarnessWorkflowTestSuite) TestManager_StartSessionSpawnsChild() {
 	var sessionWorkflowID string
 
 	// After activities resolve (~1s), send a start_session Update.
@@ -145,14 +145,14 @@ func (s *ManagerWorkflowTestSuite) TestManager_StartSessionSpawnsChild() {
 	// Cancel the workflow to terminate the manager's idle loop.
 	s.cancelWorkflow(time.Second * 3)
 
-	s.env.ExecuteWorkflow(ManagerWorkflow, managerInput())
+	s.env.ExecuteWorkflow(HarnessWorkflow, managerInput())
 
 	s.assertWorkflowCompleted()
 }
 
 // TestManager_QuerySessionsEmpty verifies that querying get_sessions before
 // any sessions are started returns an empty (non-nil) slice.
-func (s *ManagerWorkflowTestSuite) TestManager_QuerySessionsEmpty() {
+func (s *HarnessWorkflowTestSuite) TestManager_QuerySessionsEmpty() {
 	s.env.RegisterDelayedCallback(func() {
 		result, err := s.env.QueryWorkflow(QueryGetSessions)
 		require.NoError(s.T(), err)
@@ -168,14 +168,14 @@ func (s *ManagerWorkflowTestSuite) TestManager_QuerySessionsEmpty() {
 	// Cancel the workflow to terminate the manager's idle loop.
 	s.cancelWorkflow(time.Second * 2)
 
-	s.env.ExecuteWorkflow(ManagerWorkflow, managerInput())
+	s.env.ExecuteWorkflow(HarnessWorkflow, managerInput())
 
 	s.assertWorkflowCompleted()
 }
 
 // TestManager_StartSession_EmptyMessageRejected verifies that the validator
 // rejects a start_session Update with an empty UserMessage.
-func (s *ManagerWorkflowTestSuite) TestManager_StartSession_EmptyMessageRejected() {
+func (s *HarnessWorkflowTestSuite) TestManager_StartSession_EmptyMessageRejected() {
 	var rejected bool
 
 	s.env.RegisterDelayedCallback(func() {
@@ -196,7 +196,7 @@ func (s *ManagerWorkflowTestSuite) TestManager_StartSession_EmptyMessageRejected
 	// Cancel the workflow to terminate the manager's idle loop.
 	s.cancelWorkflow(time.Second * 2)
 
-	s.env.ExecuteWorkflow(ManagerWorkflow, managerInput())
+	s.env.ExecuteWorkflow(HarnessWorkflow, managerInput())
 
 	require.True(s.T(), s.env.IsWorkflowCompleted())
 	assert.True(s.T(), rejected, "empty user_message Update should have been rejected")
@@ -206,7 +206,7 @@ func (s *ManagerWorkflowTestSuite) TestManager_StartSession_EmptyMessageRejected
 // activities are called exactly once when the manager starts.
 // LoadExecPolicy is only called when CodexHome is non-empty; with default
 // (empty) overrides it is skipped entirely.
-func (s *ManagerWorkflowTestSuite) TestManager_ActivityCallsOnStart() {
+func (s *HarnessWorkflowTestSuite) TestManager_ActivityCallsOnStart() {
 	// Track activity invocations by name using the started listener.
 	callCounts := map[string]int{}
 	s.env.SetOnActivityStartedListener(func(info *activity.Info, _ context.Context, _ converter.EncodedValues) {
@@ -216,7 +216,7 @@ func (s *ManagerWorkflowTestSuite) TestManager_ActivityCallsOnStart() {
 	// Cancel the workflow to terminate the manager's idle loop.
 	s.cancelWorkflow(time.Second * 2)
 
-	s.env.ExecuteWorkflow(ManagerWorkflow, managerInput())
+	s.env.ExecuteWorkflow(HarnessWorkflow, managerInput())
 
 	require.True(s.T(), s.env.IsWorkflowCompleted())
 

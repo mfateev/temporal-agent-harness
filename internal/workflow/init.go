@@ -38,7 +38,7 @@ func (s *SessionState) resolveProfile() {
 // resolveInstructions loads worker-side AGENTS.md files and merges all
 // instruction sources into the session configuration. Called when
 // BaseInstructions is empty (i.e. AgenticWorkflow was not started via
-// ManagerWorkflow). Non-fatal: falls back gracefully on activity failure.
+// HarnessWorkflow). Non-fatal: falls back gracefully on activity failure.
 func (s *SessionState) resolveInstructions(ctx workflow.Context) {
 	logger := workflow.GetLogger(ctx)
 
@@ -88,7 +88,7 @@ func (s *SessionState) resolveInstructions(ctx workflow.Context) {
 }
 
 // loadExecPolicy loads exec policy rules from the worker filesystem.
-// Called when ExecPolicyRules is empty (i.e. not pre-loaded by ManagerWorkflow).
+// Called when ExecPolicyRules is empty (i.e. not pre-loaded by HarnessWorkflow).
 // Non-fatal: falls back to empty policy on failure.
 func (s *SessionState) loadExecPolicy(ctx workflow.Context) {
 	logger := workflow.GetLogger(ctx)

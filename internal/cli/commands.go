@@ -24,7 +24,7 @@ func managerWorkflowID(cwd string) string {
 	return fmt.Sprintf("manager-%x", h.Sum(nil)[:8])
 }
 
-// startWorkflowCmd starts (or re-attaches to) a ManagerWorkflow and sends a
+// startWorkflowCmd starts (or re-attaches to) a HarnessWorkflow and sends a
 // start_session Update to obtain a child AgenticWorkflow ID. It returns
 // WorkflowStartedMsg with the child session workflow ID so all subsequent TUI
 // operations target the AgenticWorkflow directly.
@@ -37,7 +37,7 @@ func startWorkflowCmd(c client.Client, config Config) tea.Cmd {
 
 		managerID := managerWorkflowID(cwd)
 
-		input := workflow.ManagerWorkflowInput{
+		input := workflow.HarnessWorkflowInput{
 			ManagerID: managerID,
 			Overrides: workflow.CLIOverrides{
 				Provider:             config.Provider,
@@ -57,7 +57,7 @@ func startWorkflowCmd(c client.Client, config Config) tea.Cmd {
 			ID:                    managerID,
 			TaskQueue:             TaskQueue,
 			WorkflowIDReusePolicy: enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE_FAILED_ONLY,
-		}, "ManagerWorkflow", input)
+		}, "HarnessWorkflow", input)
 		if err != nil {
 			return WorkflowStartErrorMsg{Err: fmt.Errorf("failed to start manager workflow: %w", err)}
 		}
