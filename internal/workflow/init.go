@@ -6,6 +6,7 @@
 package workflow
 
 import (
+	"fmt"
 	"time"
 
 	"go.temporal.io/sdk/temporal"
@@ -121,4 +122,57 @@ func (s *SessionState) loadExecPolicy(ctx workflow.Context) {
 
 	s.ExecPolicyRules = loadResult.RulesSource
 	logger.Info("Exec policy loaded", "rules_len", len(loadResult.RulesSource))
+}
+
+// initMcpServers initializes MCP server connections and discovers their tools.
+// Called once before the first turn when McpServers is configured.
+// Non-fatal for optional servers; required servers cause workflow error.
+//
+// Maps to: codex-rs Session initialization of MCP connections
+func (s *SessionState) initMcpServers(ctx workflow.Context) error {
+	if len(s.Config.McpServers) == 0 {
+		return nil
+	}
+
+	logger := workflow.GetLogger(ctx)
+	logger.Info("Initializing MCP servers", "count", len(s.Config.McpServers))
+
+	initInput := activities.InitializeMcpServersInput{
+		SessionID:  s.ConversationID,
+		McpServers: s.Config.McpServers,
+	}
+
+	actOpts := workflow.ActivityOptions{
+		StartToCloseTimeout: 60 * time.Second, // MCP servers may take time to start
+		RetryPolicy: &temporal.RetryPolicy{
+			MaximumAttempts: 2,
+		},
+	}
+	if s.Config.SessionTaskQueue != "" {
+		actOpts.TaskQueue = s.Config.SessionTaskQueue
+	}
+	initCtx := workflow.WithActivityOptions(ctx, actOpts)
+
+	var initResult activities.InitializeMcpServersOutput
+	err := workflow.ExecuteActivity(initCtx, "InitializeMcpServers", initInput).Get(ctx, &initResult)
+	if err != nil {
+		return fmt.Errorf("MCP initialization activity failed: %w", err)
+	}
+
+	// Log failures
+	for name, errMsg := range initResult.Failures {
+		logger.Warn("MCP server failed to initialize", "server", name, "error", errMsg)
+	}
+
+	// Append MCP tool specs to session tool specs
+	s.ToolSpecs = append(s.ToolSpecs, initResult.ToolSpecs...)
+
+	// Store MCP tool lookup map for dispatch routing
+	s.McpToolLookup = initResult.McpToolLookup
+
+	logger.Info("MCP servers initialized",
+		"tools_discovered", len(initResult.ToolSpecs),
+		"failures", len(initResult.Failures))
+
+	return nil
 }

@@ -27,6 +27,9 @@ func (s *SessionState) runAgenticTurn(ctx workflow.Context, ctrl *LoopControl) (
 	s.compactedThisTurn = false
 	gate := NewApprovalGate(s.Config.ApprovalMode, s.ExecPolicyRules)
 	executor := NewToolsExecutor(s.ToolSpecs, s.Config.Cwd, s.Config.SessionTaskQueue)
+	if len(s.McpToolLookup) > 0 {
+		executor.WithMcpContext(s.ConversationID, s.McpToolLookup)
+	}
 
 	for s.IterationCount < s.MaxIterations {
 		if ctrl.IsInterrupted() {
@@ -53,7 +56,7 @@ func (s *SessionState) runAgenticTurn(ctx workflow.Context, ctrl *LoopControl) (
 			return false, nil
 		}
 
-		s.recordLLMResponse(ctx, llmResult)
+		s.recordLLMResponse(ctx, ctrl, llmResult)
 
 		calls := extractFunctionCalls(llmResult.Items)
 		calls, hadIntercepted, err := s.dispatchInterceptedCalls(ctx, ctrl, calls)
@@ -75,6 +78,7 @@ func (s *SessionState) runAgenticTurn(ctx workflow.Context, ctrl *LoopControl) (
 					Type:    models.ItemTypeAssistantMessage,
 					Content: "[Turn ended: detected repeated identical tool calls. Please try a different approach.]",
 				})
+				ctrl.NotifyItemAdded()
 				return false, nil
 			}
 			allDenied, execErr := s.approveAndExecuteTools(ctx, ctrl, gate, executor, calls)
@@ -107,6 +111,7 @@ func (s *SessionState) runAgenticTurn(ctx workflow.Context, ctrl *LoopControl) (
 		Type:    models.ItemTypeAssistantMessage,
 		Content: fmt.Sprintf("[Turn ended: reached maximum of %d iterations without completing. The task may need to be broken into smaller steps.]", s.MaxIterations),
 	})
+	ctrl.NotifyItemAdded()
 	return false, nil
 }
 
@@ -149,6 +154,7 @@ func (s *SessionState) maybeCompactBeforeLLM(ctx workflow.Context, ctrl *LoopCon
 			Type:    models.ItemTypeModelSwitch,
 			Content: switchMsg,
 		})
+		ctrl.NotifyItemAdded()
 		// Reset incremental sends since we modified the history.
 		s.lastSentHistoryLen = 0
 
@@ -271,6 +277,7 @@ func (s *SessionState) handleLLMError(ctx workflow.Context, ctrl *LoopControl, e
 				Content: fmt.Sprintf("[Error: %s]", appErr.Message()),
 				TurnID:  ctrl.CurrentTurnID(),
 			})
+			ctrl.NotifyItemAdded()
 			return false, nil // end turn
 		}
 	}
@@ -282,12 +289,13 @@ func (s *SessionState) handleLLMError(ctx workflow.Context, ctrl *LoopControl, e
 		Content: fmt.Sprintf("[Error: LLM call failed: %v]", err),
 		TurnID:  ctrl.CurrentTurnID(),
 	})
+	ctrl.NotifyItemAdded()
 	return false, nil // end turn
 }
 
 // recordLLMResponse adds response items to history, tracks tokens, and updates
 // the response ID for incremental sends.
-func (s *SessionState) recordLLMResponse(ctx workflow.Context, result *activities.LLMActivityOutput) {
+func (s *SessionState) recordLLMResponse(ctx workflow.Context, ctrl *LoopControl, result *activities.LLMActivityOutput) {
 	logger := workflow.GetLogger(ctx)
 
 	s.TotalTokens += result.TokenUsage.TotalTokens
@@ -301,6 +309,7 @@ func (s *SessionState) recordLLMResponse(ctx workflow.Context, result *activitie
 
 	for _, item := range result.Items {
 		_ = s.History.AddItem(item)
+		ctrl.NotifyItemAdded()
 	}
 	if result.ResponseID != "" {
 		s.LastResponseID = result.ResponseID
@@ -327,6 +336,7 @@ func (s *SessionState) dispatchInterceptedCalls(ctx workflow.Context, ctrl *Loop
 			if addErr := s.History.AddItem(outputItem); addErr != nil {
 				return nil, hadIntercepted, fmt.Errorf("failed to add user input response: %w", addErr)
 			}
+			ctrl.NotifyItemAdded()
 		} else if fc.Name == "update_plan" {
 			hadIntercepted = true
 			outputItem, callErr := s.handleUpdatePlan(ctx, fc)
@@ -336,6 +346,7 @@ func (s *SessionState) dispatchInterceptedCalls(ctx workflow.Context, ctrl *Loop
 			if addErr := s.History.AddItem(outputItem); addErr != nil {
 				return nil, hadIntercepted, fmt.Errorf("failed to add update_plan response: %w", addErr)
 			}
+			ctrl.NotifyItemAdded()
 		} else if isCollabToolCall(fc.Name) {
 			hadIntercepted = true
 			outputItem, callErr := s.handleCollabToolCall(ctx, ctrl, fc)
@@ -345,6 +356,7 @@ func (s *SessionState) dispatchInterceptedCalls(ctx workflow.Context, ctrl *Loop
 			if addErr := s.History.AddItem(outputItem); addErr != nil {
 				return nil, hadIntercepted, fmt.Errorf("failed to add collab tool response: %w", addErr)
 			}
+			ctrl.NotifyItemAdded()
 		} else {
 			normalCalls = append(normalCalls, fc)
 		}
@@ -368,7 +380,7 @@ func (s *SessionState) approveAndExecuteTools(
 	needsApproval, forbiddenResults := gate.Classify(functionCalls)
 
 	// Record forbidden results and filter them out
-	functionCalls = s.recordForbiddenAndFilter(functionCalls, forbiddenResults)
+	functionCalls = s.recordForbiddenAndFilter(ctrl, functionCalls, forbiddenResults)
 	if len(functionCalls) == 0 {
 		return false, nil // all forbidden — iteration continues
 	}
@@ -401,6 +413,7 @@ func (s *SessionState) approveAndExecuteTools(
 			Content: fmt.Sprintf("[Error: tool execution failed: %v]", err),
 			TurnID:  ctrl.CurrentTurnID(),
 		})
+		ctrl.NotifyItemAdded()
 		return false, nil
 	}
 
@@ -415,18 +428,20 @@ func (s *SessionState) approveAndExecuteTools(
 	}
 
 	// Record results
-	s.recordToolResults(functionCalls, toolResults)
+	s.recordToolResults(ctrl, functionCalls, toolResults)
 	return false, nil
 }
 
 // recordForbiddenAndFilter adds forbidden results to history and removes those
 // tool calls from the list. Returns the remaining allowed calls.
 func (s *SessionState) recordForbiddenAndFilter(
+	ctrl *LoopControl,
 	calls []models.ConversationItem,
 	forbidden []models.ConversationItem,
 ) []models.ConversationItem {
 	for _, fr := range forbidden {
 		_ = s.History.AddItem(fr)
+		ctrl.NotifyItemAdded()
 	}
 
 	if len(forbidden) == 0 {
@@ -472,13 +487,14 @@ func (s *SessionState) waitForApprovalAndFilter(
 
 	for _, dr := range deniedResults {
 		_ = s.History.AddItem(dr)
+		ctrl.NotifyItemAdded()
 	}
 
 	return approved, nil
 }
 
 // recordToolResults tracks which tools were executed and adds their outputs to history.
-func (s *SessionState) recordToolResults(calls []models.ConversationItem, results []activities.ToolActivityOutput) {
+func (s *SessionState) recordToolResults(ctrl *LoopControl, calls []models.ConversationItem, results []activities.ToolActivityOutput) {
 	for _, fc := range calls {
 		s.ToolCallsExecuted = append(s.ToolCallsExecuted, fc.Name)
 	}
@@ -493,6 +509,7 @@ func (s *SessionState) recordToolResults(calls []models.ConversationItem, result
 			},
 		}
 		_ = s.History.AddItem(item)
+		ctrl.NotifyItemAdded()
 	}
 }
 

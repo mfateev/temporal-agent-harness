@@ -293,20 +293,34 @@ func (c *OpenAIClient) buildToolDefinitions(specs []tools.ToolSpec, webSearchMod
 	toolDefs := make([]responses.ToolUnionParam, 0, len(specs)+1)
 
 	for _, spec := range specs {
-		properties := make(map[string]interface{})
-		required := make([]string, 0)
+		var paramSchema map[string]interface{}
 
-		for _, p := range spec.Parameters {
-			prop := map[string]interface{}{
-				"type":        p.Type,
-				"description": p.Description,
+		if spec.RawJSONSchema != nil {
+			// MCP tools provide a full JSON Schema directly
+			paramSchema = spec.RawJSONSchema
+		} else {
+			// Build schema from Parameters
+			properties := make(map[string]interface{})
+			required := make([]string, 0)
+
+			for _, p := range spec.Parameters {
+				prop := map[string]interface{}{
+					"type":        p.Type,
+					"description": p.Description,
+				}
+				if p.Items != nil {
+					prop["items"] = p.Items
+				}
+				properties[p.Name] = prop
+				if p.Required {
+					required = append(required, p.Name)
+				}
 			}
-			if p.Items != nil {
-				prop["items"] = p.Items
-			}
-			properties[p.Name] = prop
-			if p.Required {
-				required = append(required, p.Name)
+
+			paramSchema = map[string]interface{}{
+				"type":       "object",
+				"properties": properties,
+				"required":   required,
 			}
 		}
 
@@ -314,11 +328,7 @@ func (c *OpenAIClient) buildToolDefinitions(specs []tools.ToolSpec, webSearchMod
 			OfFunction: &responses.FunctionToolParam{
 				Name:        spec.Name,
 				Description: param.NewOpt(spec.Description),
-				Parameters: map[string]interface{}{
-					"type":       "object",
-					"properties": properties,
-					"required":   required,
-				},
+				Parameters:  paramSchema,
 			},
 		})
 	}

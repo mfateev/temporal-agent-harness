@@ -111,6 +111,7 @@ func (s *SessionState) handleOnFailureEscalation(
 			ctx,
 			[]models.ConversationItem{functionCalls[i]},
 			s.ToolSpecs, s.Config.Cwd, s.Config.SessionTaskQueue,
+			s.ConversationID, s.McpToolLookup,
 		)
 		if err != nil {
 			continue // Keep original failed result

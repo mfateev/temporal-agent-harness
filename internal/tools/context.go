@@ -21,6 +21,15 @@ type ToolOutput struct {
 	Success *bool  `json:"success,omitempty"`
 }
 
+// McpToolRef carries routing metadata for MCP tool dispatch.
+// Stored in ToolActivityInput and ToolInvocation for MCP tool calls.
+//
+// Maps to: MCP tool routing (server + original tool name)
+type McpToolRef struct {
+	ServerName string `json:"server_name"`
+	ToolName   string `json:"tool_name"`
+}
+
 // ToolInvocation provides context for tool execution.
 //
 // Maps to: codex-rs/core/src/tools/context.rs ToolInvocation
@@ -41,6 +50,19 @@ type ToolInvocation struct {
 	// execution to keep the Temporal activity alive. Set by the activity
 	// layer; nil in unit tests.
 	Heartbeat func(details ...interface{}) `json:"-"`
+
+	// MCP fields — populated for mcp__* tool calls.
+
+	// McpToolRef, if set, routes this call to the named MCP server + tool.
+	McpToolRef *McpToolRef `json:"mcp_tool_ref,omitempty"`
+
+	// SessionID identifies the workflow session for MCP store lookup.
+	SessionID string `json:"session_id,omitempty"`
+
+	// McpServers carries the session's MCP server configs for auto-reconnect.
+	// Typed as interface{} to avoid circular imports; the MCPHandler
+	// type-asserts to map[string]mcp.McpServerConfig.
+	McpServers interface{} `json:"-"`
 }
 
 // SandboxPolicyRef is a serializable reference to a sandbox policy.

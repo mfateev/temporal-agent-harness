@@ -13,6 +13,7 @@ import (
 	"github.com/mfateev/temporal-agent-harness/internal/activities"
 	"github.com/mfateev/temporal-agent-harness/internal/execsession"
 	"github.com/mfateev/temporal-agent-harness/internal/llm"
+	"github.com/mfateev/temporal-agent-harness/internal/mcp"
 	"github.com/mfateev/temporal-agent-harness/internal/temporalclient"
 	"github.com/mfateev/temporal-agent-harness/internal/tools"
 	"github.com/mfateev/temporal-agent-harness/internal/tools/handlers"
@@ -74,6 +75,10 @@ func main() {
 	toolRegistry.Register(handlers.NewExecCommandHandler(execStore))
 	toolRegistry.Register(handlers.NewWriteStdinHandler(execStore))
 
+	// MCP: single handler for all mcp__* tool calls
+	mcpStore := mcp.NewMcpStore()
+	toolRegistry.Register(handlers.NewMCPHandler(mcpStore))
+
 	log.Printf("Registered %d tools", toolRegistry.ToolCount())
 
 	// Create multi-provider LLM client (supports both OpenAI and Anthropic)
@@ -92,6 +97,10 @@ func main() {
 	w.RegisterActivity(instructionActivities.LoadWorkerInstructions)
 	w.RegisterActivity(instructionActivities.LoadPersonalInstructions)
 	w.RegisterActivity(instructionActivities.LoadExecPolicy)
+
+	mcpActivities := activities.NewMcpActivities(mcpStore)
+	w.RegisterActivity(mcpActivities.InitializeMcpServers)
+	w.RegisterActivity(mcpActivities.CleanupMcpServers)
 
 	// Start worker
 	log.Printf("Worker version: %s", version.GitCommit)

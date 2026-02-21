@@ -62,6 +62,11 @@ const (
 	// UpdateModel updates the session's model configuration.
 	// Used by the CLI /model command.
 	UpdateModel = "update_model"
+
+	// UpdateGetStateUpdate is a blocking Update that returns state deltas.
+	// Replaces the polling loop: the handler sleeps via workflow.Await until
+	// state actually changes, then returns new items + status in one call.
+	UpdateGetStateUpdate = "get_state_update"
 )
 
 // UpdateModelRequest is the payload for the update_model Update.
@@ -126,10 +131,23 @@ type UserInput struct {
 	Content string `json:"content"`
 }
 
-// UserInputAccepted is returned by the user_input Update after acceptance.
-// Maps to: Codex submit() return value (submission ID)
-type UserInputAccepted struct {
-	TurnID string `json:"turn_id"`
+// StateUpdateRequest is the payload for the get_state_update Update.
+// The caller provides the last-seen sequence number and phase so the handler
+// can determine whether new state is already available or needs to block.
+type StateUpdateRequest struct {
+	SinceSeq   int       `json:"since_seq"`
+	SincePhase TurnPhase `json:"since_phase"`
+}
+
+// StateUpdateResponse is the unified response for both user_input and
+// get_state_update Updates. It carries a snapshot of new conversation items
+// plus the current turn status, eliminating the need for separate queries.
+type StateUpdateResponse struct {
+	TurnID    string                    `json:"turn_id"`
+	Items     []models.ConversationItem `json:"items"`
+	Status    TurnStatus                `json:"status"`
+	Compacted bool                      `json:"compacted,omitempty"`
+	Completed bool                      `json:"completed,omitempty"`
 }
 
 // InterruptRequest is the payload for the interrupt Update.
@@ -324,6 +342,10 @@ type SessionState struct {
 	TotalTokens       int      `json:"total_tokens"`
 	TotalCachedTokens int      `json:"total_cached_tokens"`
 	ToolCallsExecuted []string `json:"tool_calls_executed"`
+
+	// MCP tool routing map: qualified name → McpToolRef (server + original tool name).
+	// Persists across ContinueAsNew so MCP tool dispatch works after CAN.
+	McpToolLookup map[string]tools.McpToolRef `json:"mcp_tool_lookup,omitempty"`
 
 	// Plan maintained by the LLM via the update_plan intercepted tool.
 	// Persists across ContinueAsNew and is exposed via get_turn_status.

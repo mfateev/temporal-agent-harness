@@ -36,7 +36,12 @@ const (
 type ToolSpec struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
-	Parameters  []ToolParameter `json:"parameters"`
+	Parameters  []ToolParameter `json:"parameters,omitempty"`
+
+	// RawJSONSchema, if set, is used directly as the parameter schema instead
+	// of building from Parameters. Used by MCP tools which provide a full
+	// JSON Schema for their input parameters.
+	RawJSONSchema map[string]interface{} `json:"raw_json_schema,omitempty"`
 
 	// DefaultTimeoutMs is the default StartToCloseTimeout for this tool's
 	// activity when the LLM does not provide a timeout_ms argument.
