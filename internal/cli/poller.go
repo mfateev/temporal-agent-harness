@@ -68,23 +68,6 @@ func (p *Poller) Poll(ctx context.Context) PollResult {
 	return result
 }
 
-// RunPolling polls in a loop, sending results to the channel.
-// Stops when context is cancelled.
-func (p *Poller) RunPolling(ctx context.Context, ch chan<- PollResult) {
-	ticker := time.NewTicker(p.interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			result := p.Poll(ctx)
-			select {
-			case ch <- result:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}
-}
+// NOTE: RunPolling has been removed. The CLI now uses the blocking
+// get_state_update Update via Watcher instead of polling queries.
+// The Poller.Poll() method is retained for one-shot use by resumeWorkflowCmd.

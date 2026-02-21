@@ -809,10 +809,10 @@ func TestAgenticWorkflow_MultiTurnInteractive(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	var accepted workflow.UserInputAccepted
-	require.NoError(t, updateHandle.Get(ctx, &accepted))
-	assert.NotEmpty(t, accepted.TurnID)
-	t.Logf("Second turn ID: %s", accepted.TurnID)
+	var resp workflow.StateUpdateResponse
+	require.NoError(t, updateHandle.Get(ctx, &resp))
+	assert.NotEmpty(t, resp.TurnID)
+	t.Logf("Second turn ID: %s", resp.TurnID)
 
 	// Wait for second turn
 	waitForTurnComplete(t, ctx, c, workflowID, 2)
@@ -973,7 +973,7 @@ func TestAgenticWorkflow_AnthropicCaching(t *testing.T) {
 		Config: models.SessionConfiguration{
 			Model: models.ModelConfig{
 				Provider:      "anthropic",
-				Model:         "claude-3.5-haiku-20241022", // 2 048-token cache minimum (prompt is ~2 700 tokens)
+				Model:         "claude-sonnet-4.5-20250929", // 1 024-token cache minimum (prompt is ~2 700 tokens)
 				Temperature:   0,
 				MaxTokens:     32,
 				ContextWindow: 200000,
@@ -1004,9 +1004,9 @@ func TestAgenticWorkflow_AnthropicCaching(t *testing.T) {
 		WaitForStage: client.WorkflowUpdateStageCompleted,
 	})
 	require.NoError(t, err, "Failed to send second user input")
-	var accepted workflow.UserInputAccepted
-	require.NoError(t, updateHandle.Get(ctx, &accepted))
-	t.Logf("Turn 2 sent, turn ID: %s", accepted.TurnID)
+	var resp workflow.StateUpdateResponse
+	require.NoError(t, updateHandle.Get(ctx, &resp))
+	t.Logf("Turn 2 sent, turn ID: %s", resp.TurnID)
 
 	waitForTurnComplete(t, ctx, c, workflowID, 2)
 	t.Log("Turn 2 complete (cache read expected)")
@@ -1094,9 +1094,9 @@ func TestAgenticWorkflow_ProactiveCompaction(t *testing.T) {
 	})
 	require.NoError(t, err, "Failed to send second user input")
 
-	var accepted workflow.UserInputAccepted
-	require.NoError(t, updateHandle.Get(ctx, &accepted))
-	t.Logf("Second input accepted, turn ID: %s", accepted.TurnID)
+	var resp workflow.StateUpdateResponse
+	require.NoError(t, updateHandle.Get(ctx, &resp))
+	t.Logf("Second input accepted, turn ID: %s", resp.TurnID)
 
 	// Wait until we see both a compaction marker AND a TurnComplete in history.
 	// Compaction via ReplaceAll wipes the old history (including turn 1's
@@ -1217,9 +1217,9 @@ func TestAgenticWorkflow_ManualCompact(t *testing.T) {
 	})
 	require.NoError(t, err, "Failed to send second user input")
 
-	var accepted workflow.UserInputAccepted
-	require.NoError(t, updateHandle2.Get(ctx, &accepted))
-	t.Logf("Second input accepted, turn ID: %s", accepted.TurnID)
+	var resp workflow.StateUpdateResponse
+	require.NoError(t, updateHandle2.Get(ctx, &resp))
+	t.Logf("Second input accepted, turn ID: %s", resp.TurnID)
 
 	// Wait for the post-compaction turn to complete.
 	// After compaction ReplaceAll, old TurnComplete markers are gone, so look

@@ -160,13 +160,13 @@ func cmdSend(args []string) {
 		log.Fatalf("Failed to send user input: %v", err)
 	}
 
-	var accepted workflow.UserInputAccepted
-	if err := updateHandle.Get(ctx, &accepted); err != nil {
+	var resp workflow.StateUpdateResponse
+	if err := updateHandle.Get(ctx, &resp); err != nil {
 		log.Fatalf("Update failed: %v", err)
 	}
 
-	log.Printf("Message accepted, turn ID: %s", accepted.TurnID)
-	fmt.Println(accepted.TurnID)
+	log.Printf("Message accepted, turn ID: %s", resp.TurnID)
+	fmt.Println(resp.TurnID)
 }
 
 // cmdHistory queries the conversation history.

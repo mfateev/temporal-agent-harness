@@ -104,7 +104,7 @@ func startWorkflowCmd(c client.Client, config Config) tea.Cmd {
 func resumeWorkflowCmd(c client.Client, workflowID string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
-		poller := NewPoller(c, workflowID, PollInterval)
+		poller := NewPoller(c, workflowID, 0)
 		result := poller.Poll(ctx)
 		if result.Err != nil {
 			return WorkflowStartErrorMsg{Err: fmt.Errorf("failed to query workflow: %w", result.Err)}
@@ -135,12 +135,12 @@ func sendUserInputCmd(c client.Client, workflowID, content string) tea.Cmd {
 			return UserInputErrorMsg{Err: err}
 		}
 
-		var accepted workflow.UserInputAccepted
-		if err := updateHandle.Get(ctx, &accepted); err != nil {
+		var resp workflow.StateUpdateResponse
+		if err := updateHandle.Get(ctx, &resp); err != nil {
 			return UserInputErrorMsg{Err: err}
 		}
 
-		return UserInputSentMsg{TurnID: accepted.TurnID}
+		return UserInputSentMsg{Response: resp}
 	}
 }
 

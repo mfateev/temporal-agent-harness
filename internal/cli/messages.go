@@ -25,9 +25,16 @@ type PollResultMsg struct {
 	Result PollResult
 }
 
+// WatchResultMsg wraps a WatchResult from the blocking watcher goroutine.
+type WatchResultMsg struct {
+	Result WatchResult
+}
+
 // UserInputSentMsg is sent after user input has been successfully sent.
+// Contains a full StateUpdateResponse (items + status) so the CLI can render
+// immediately without an extra round-trip.
 type UserInputSentMsg struct {
-	TurnID string
+	Response workflow.StateUpdateResponse
 }
 
 // UserInputErrorMsg is sent when sending user input fails.

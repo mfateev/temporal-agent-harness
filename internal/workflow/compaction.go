@@ -78,11 +78,13 @@ func (s *SessionState) performCompaction(ctx workflow.Context, ctrl *LoopControl
 		logger.Error("Failed to replace history after compaction", "error", err)
 		return err
 	}
+	ctrl.NotifyItemAdded()
 
 	// Re-add the last model-switch message so the new model retains context
 	// about the transition for subsequent LLM calls.
 	if len(modelSwitchItems) > 0 {
 		_ = s.History.AddItem(modelSwitchItems[len(modelSwitchItems)-1])
+		ctrl.NotifyItemAdded()
 	}
 
 	// Update compaction tracking state

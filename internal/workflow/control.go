@@ -71,6 +71,16 @@ type LoopControl struct {
 	pendingUserInputReq *PendingUserInputRequest
 	suggestion          string
 
+	// State version — monotonically increasing counter bumped on every
+	// mutation visible to external observers (phase changes, item adds,
+	// flag changes). Used by get_state_update to detect changes without
+	// polling.
+	stateVersion uint64
+
+	// Draining — set before AllHandlersFinished wait during ContinueAsNew
+	// so that any blocked get_state_update handlers wake up and return.
+	draining bool
+
 	// Response slots — replace raw bool+*T field pairs in SessionState.
 	approvalSlot   ResponseSlot[ApprovalResponse]
 	escalationSlot ResponseSlot[EscalationResponse]
@@ -84,6 +94,7 @@ type LoopControl struct {
 func (ctrl *LoopControl) DeliverApproval(resp ApprovalResponse) {
 	ctrl.approvalSlot.Deliver(resp)
 	ctrl.pendingApprovals = nil // clear immediately so query handler reflects the response
+	ctrl.stateVersion++
 }
 
 // DeliverEscalation stores an escalation response and clears visible pending state.
@@ -91,6 +102,7 @@ func (ctrl *LoopControl) DeliverApproval(resp ApprovalResponse) {
 func (ctrl *LoopControl) DeliverEscalation(resp EscalationResponse) {
 	ctrl.escalationSlot.Deliver(resp)
 	ctrl.pendingEscalations = nil
+	ctrl.stateVersion++
 }
 
 // DeliverUserInputQ stores a user-input-question response and clears visible
@@ -98,6 +110,7 @@ func (ctrl *LoopControl) DeliverEscalation(resp EscalationResponse) {
 func (ctrl *LoopControl) DeliverUserInputQ(resp UserInputQuestionResponse) {
 	ctrl.userInputQSlot.Deliver(resp)
 	ctrl.pendingUserInputReq = nil
+	ctrl.stateVersion++
 }
 
 // --- Lifecycle setters (called by handlers) ---
@@ -107,40 +120,44 @@ func (ctrl *LoopControl) DeliverUserInputQ(resp UserInputQuestionResponse) {
 func (ctrl *LoopControl) SetPendingUserInput(turnID string) {
 	ctrl.currentTurnID = turnID
 	ctrl.pendingUserInput = true
+	ctrl.stateVersion++
 }
 
 // SetInterrupted marks the current turn as interrupted.
 func (ctrl *LoopControl) SetInterrupted() {
 	ctrl.interrupted = true
+	ctrl.stateVersion++
 }
 
 // SetShutdown marks the session as shut down and interrupts the current turn.
 func (ctrl *LoopControl) SetShutdown() {
 	ctrl.shutdownRequested = true
 	ctrl.interrupted = true
+	ctrl.stateVersion++
 }
 
 // SetCompactRequested requests a manual context compaction.
 func (ctrl *LoopControl) SetCompactRequested() {
 	ctrl.compactRequested = true
+	ctrl.stateVersion++
 }
 
 // --- Phase / tool tracking (called by loop and turn code) ---
 
 // SetPhase updates the current turn phase (visible via get_turn_status).
-func (ctrl *LoopControl) SetPhase(p TurnPhase) { ctrl.phase = p }
+func (ctrl *LoopControl) SetPhase(p TurnPhase) { ctrl.phase = p; ctrl.stateVersion++ }
 
 // Phase returns the current turn phase.
 func (ctrl *LoopControl) Phase() TurnPhase { return ctrl.phase }
 
 // SetToolsInFlight records the names of currently executing tools.
-func (ctrl *LoopControl) SetToolsInFlight(tools []string) { ctrl.toolsInFlight = tools }
+func (ctrl *LoopControl) SetToolsInFlight(tools []string) { ctrl.toolsInFlight = tools; ctrl.stateVersion++ }
 
 // ClearToolsInFlight clears the in-flight tool list.
-func (ctrl *LoopControl) ClearToolsInFlight() { ctrl.toolsInFlight = nil }
+func (ctrl *LoopControl) ClearToolsInFlight() { ctrl.toolsInFlight = nil; ctrl.stateVersion++ }
 
 // SetSuggestion stores the post-turn prompt suggestion.
-func (ctrl *LoopControl) SetSuggestion(s string) { ctrl.suggestion = s }
+func (ctrl *LoopControl) SetSuggestion(s string) { ctrl.suggestion = s; ctrl.stateVersion++ }
 
 // CurrentTurnID returns the active turn ID.
 func (ctrl *LoopControl) CurrentTurnID() string { return ctrl.currentTurnID }
@@ -163,6 +180,26 @@ func (ctrl *LoopControl) PendingUserInputReq() *PendingUserInputRequest {
 
 // Suggestion returns the post-turn prompt suggestion (best-effort).
 func (ctrl *LoopControl) Suggestion() string { return ctrl.suggestion }
+
+// --- State version tracking ---
+
+// BumpStateVersion increments the state version counter.
+// Called internally by mutation methods to wake blocked get_state_update handlers.
+func (ctrl *LoopControl) BumpStateVersion() { ctrl.stateVersion++ }
+
+// StateVersion returns the current state version counter.
+func (ctrl *LoopControl) StateVersion() uint64 { return ctrl.stateVersion }
+
+// NotifyItemAdded bumps the state version to signal that a new history item
+// was added. Called after every History.AddItem() call.
+func (ctrl *LoopControl) NotifyItemAdded() { ctrl.stateVersion++ }
+
+// SetDraining marks the workflow as draining (preparing for ContinueAsNew).
+// Blocked get_state_update handlers will wake and return.
+func (ctrl *LoopControl) SetDraining() { ctrl.draining = true; ctrl.stateVersion++ }
+
+// IsDraining returns true if the workflow is draining for ContinueAsNew.
+func (ctrl *LoopControl) IsDraining() bool { return ctrl.draining }
 
 // --- Flag accessors ---
 
@@ -188,11 +225,13 @@ func (ctrl *LoopControl) StartTurn() {
 	ctrl.pendingUserInput = false
 	ctrl.interrupted = false
 	ctrl.suggestion = ""
+	ctrl.stateVersion++
 }
 
 // ClearCompactRequested marks the compact request as handled.
 func (ctrl *LoopControl) ClearCompactRequested() {
 	ctrl.compactRequested = false
+	ctrl.stateVersion++
 }
 
 // --- Blocking wait methods (encapsulate workflow.Await calls) ---
