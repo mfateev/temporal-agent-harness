@@ -51,6 +51,7 @@ var (
 	temporalClient client.Client
 	tcxBinaryPath  string    // Path to tcx binary built for TUI tests; empty if build failed.
 	tcxBuildOnce   sync.Once // Ensures tcx binary is built at most once.
+	latencyTracker *LatencyTracker
 )
 
 // getTcxBinary lazily builds the tcx binary on first call. Thread-safe.
@@ -122,10 +123,16 @@ func TestMain(m *testing.M) {
 	time.Sleep(200 * time.Millisecond)
 	log.Println("E2E: Worker started")
 
-	// 6. Run tests
+	// 6. Initialize latency tracker
+	latencyTracker = NewLatencyTracker()
+
+	// 7. Run tests
 	code := m.Run()
 
-	// 6b. Write E2E passed marker on success
+	// 7b. Write latency log (always, even on failure — helps debug slow tests)
+	latencyTracker.WriteLog()
+
+	// 7c. Write E2E passed marker on success
 	if code == 0 {
 		writeE2EPassedMarker()
 	}
@@ -205,6 +212,109 @@ func writeE2EPassedMarker() {
 		return
 	}
 	log.Printf("E2E: Wrote passed marker to %s (SHA: %s)", markerPath, sha)
+}
+
+// LatencyTracker records test durations and writes them to e2e/.test-latencies.log.
+// The log is committed to the repo so latency regressions are visible in diffs.
+type LatencyTracker struct {
+	mu      sync.Mutex
+	entries []latencyEntry
+}
+
+type latencyEntry struct {
+	Name     string
+	Duration time.Duration
+	Passed   bool
+}
+
+func NewLatencyTracker() *LatencyTracker {
+	return &LatencyTracker{}
+}
+
+// Track registers a test for latency tracking. Call at the start of each test.
+// Uses t.Cleanup to record the duration when the test finishes.
+func (lt *LatencyTracker) Track(t *testing.T) {
+	t.Helper()
+	start := time.Now()
+	t.Cleanup(func() {
+		elapsed := time.Since(start)
+		lt.mu.Lock()
+		defer lt.mu.Unlock()
+		lt.entries = append(lt.entries, latencyEntry{
+			Name:     t.Name(),
+			Duration: elapsed,
+			Passed:   !t.Failed(),
+		})
+	})
+}
+
+// AddTUIResults parses tui-test output lines (e.g. "  ✔  1 basic.test.ts:16:63 › ... (6.1s)")
+// and records them as latency entries.
+func (lt *LatencyTracker) AddTUIResults(output string) {
+	lt.mu.Lock()
+	defer lt.mu.Unlock()
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		// Match: ✔ or ✗ followed by number, file, name, duration
+		if !strings.Contains(line, "✔") && !strings.Contains(line, "✗") {
+			continue
+		}
+		passed := strings.Contains(line, "✔")
+		// Extract duration from "(Ns)" or "(N.Ns)" at end of line
+		durStart := strings.LastIndex(line, "(")
+		durEnd := strings.LastIndex(line, ")")
+		if durStart < 0 || durEnd <= durStart {
+			continue
+		}
+		durStr := strings.TrimSuffix(line[durStart+1:durEnd], "s")
+		// Parse as float seconds
+		var secs float64
+		if _, err := fmt.Sscanf(durStr, "%f", &secs); err != nil {
+			continue
+		}
+		// Extract test name: everything between › and (duration)
+		nameStart := strings.LastIndex(line, "›")
+		if nameStart < 0 {
+			continue
+		}
+		name := "TUI/" + strings.TrimSpace(line[nameStart+len("›"):durStart])
+
+		lt.entries = append(lt.entries, latencyEntry{
+			Name:     name,
+			Duration: time.Duration(secs * float64(time.Second)),
+			Passed:   passed,
+		})
+	}
+}
+
+// WriteLog writes the collected latencies to e2e/.test-latencies.log.
+func (lt *LatencyTracker) WriteLog() {
+	lt.mu.Lock()
+	defer lt.mu.Unlock()
+
+	rootOut, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		log.Printf("E2E: Failed to find repo root for latency log: %v", err)
+		return
+	}
+	root := strings.TrimSpace(string(rootOut))
+
+	logPath := filepath.Join(root, "e2e", ".test-latencies.log")
+
+	var b strings.Builder
+	for _, e := range lt.entries {
+		status := "PASS"
+		if !e.Passed {
+			status = "FAIL"
+		}
+		b.WriteString(fmt.Sprintf("%-60s %8.2fs  %s\n", e.Name, e.Duration.Seconds(), status))
+	}
+
+	if err := os.WriteFile(logPath, []byte(b.String()), 0644); err != nil {
+		log.Printf("E2E: Failed to write latency log %s: %v", logPath, err)
+		return
+	}
+	log.Printf("E2E: Wrote latency log to %s (%d tests)", logPath, len(lt.entries))
 }
 
 // waitForPort polls a TCP port until it accepts connections or the timeout expires.
@@ -312,6 +422,7 @@ func dialTemporal(t *testing.T) client.Client {
 	if os.Getenv("OPENAI_API_KEY") == "" {
 		t.Skip("OPENAI_API_KEY not set, skipping E2E test")
 	}
+	latencyTracker.Track(t)
 	return temporalClient
 }
 
@@ -1574,6 +1685,7 @@ func TestFetchAvailableModels_E2E(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping E2E test in short mode")
 	}
+	latencyTracker.Track(t)
 
 	hasOpenAI := os.Getenv("OPENAI_API_KEY") != ""
 	hasAnthropic := os.Getenv("ANTHROPIC_API_KEY") != ""

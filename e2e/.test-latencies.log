@@ -1,0 +1,49 @@
+TestAgenticWorkflow_SingleTurn                                   1.52s  PASS
+TestAgenticWorkflow_ApplyPatch                                   5.01s  PASS
+TestAgenticWorkflow_McpToolCall                                  6.51s  PASS
+TestAgenticWorkflow_ExecCommand                                  5.53s  PASS
+TestAgenticWorkflow_CodexModelWithTools                          3.01s  PASS
+TestAgenticWorkflow_UpdatePlan                                   6.51s  PASS
+TestAgenticWorkflow_CodexModel                                   1.51s  PASS
+TestFetchAvailableModels_E2E                                     0.88s  PASS
+TestAgenticWorkflow_ProactiveCompaction                         16.03s  PASS
+TestAgenticWorkflow_SuggestionDisabledE2E                        1.51s  PASS
+TestAgenticWorkflow_PromptSuggestion                             3.02s  PASS
+TestAgenticWorkflow_PlanMode                                     2.62s  PASS
+TestAgenticWorkflow_SpawnAndWait                                 6.50s  PASS
+TestAgenticWorkflow_WriteFile                                    3.01s  PASS
+TestAgenticWorkflow_ManualCompact                               11.03s  PASS
+TestAgenticWorkflow_GrepFiles                                    6.01s  PASS
+TestAgenticWorkflow_MultiTurn                                    4.51s  PASS
+TestAgenticWorkflow_ReadFile                                     2.51s  PASS
+TestAgenticWorkflow_AnthropicProvider                            2.46s  PASS
+TestAgenticWorkflow_AnthropicCaching                             2.52s  PASS
+TestAgenticWorkflow_MultiTurnInteractive                         2.02s  PASS
+TestAgenticWorkflow_Shutdown                                     1.51s  PASS
+TestAgenticWorkflow_AnthropicWithTools                           4.34s  PASS
+TestAgenticWorkflow_QueryHistory                                 1.01s  PASS
+TestAgenticWorkflow_WithShellTool                                3.51s  PASS
+TUI/displays tool output                                         7.10s  PASS
+TUI/displays tool call with verb                                 7.20s  PASS
+TUI/status bar shows token count                                 6.40s  PASS
+TUI/status bar shows model name                                  6.50s  PASS
+TUI/status bar shows ready state after response                  5.90s  PASS
+TUI/status bar shows turn count                                  6.00s  PASS
+TUI/displays Updated verb for update_plan tool call              7.40s  PASS
+TUI/displays plan header in viewport                             8.40s  PASS
+TUI/supports multi-turn conversation                             6.90s  PASS
+TUI/status bar shows cached tokens after second Anthropic turn     8.70s  PASS
+TUI/tcx starts session and displays LLM response                 5.70s  PASS
+TUI//exit command quits                                          7.10s  PASS
+TUI//model command shows model selector                          5.90s  PASS
+TUI/shows Add( title format with file path                       7.00s  PASS
+TUI/shows + lines in the preview                                 6.30s  PASS
+TUI/post-execution shows file path not just Patched              7.50s  PASS
+TUI/shows both file names in terminal                            8.90s  PASS
+TUI/Ctrl+C interrupts during watching state                      5.10s  PASS
+TUI/Ctrl+D exits during input state                              7.10s  PASS
+TUI/shows approval prompt for write_file                         6.70s  PASS
+TUI/approves tool call with y shortcut                           8.50s  PASS
+TUI/denies tool call with n shortcut                             6.70s  PASS
+TestTUI                                                         77.83s  PASS
+TestAgenticWorkflow_ListDir                                     94.01s  PASS
