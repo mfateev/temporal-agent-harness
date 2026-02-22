@@ -180,3 +180,82 @@ func TestReplaceAll_DoesNotMutateInput(t *testing.T) {
 	items, _ := h.GetRawItems()
 	assert.Equal(t, 0, items[0].Seq)
 }
+
+// --- GetItemsSince tests ---
+
+func TestGetItemsSince_ReturnsNewItems(t *testing.T) {
+	h := buildHistory(2) // 8 items, Seq 0-7
+
+	items, compacted, err := h.GetItemsSince(3) // items after Seq 3
+	require.NoError(t, err)
+	assert.False(t, compacted)
+	assert.Len(t, items, 4) // Seq 4,5,6,7
+	assert.Equal(t, 4, items[0].Seq)
+	assert.Equal(t, 7, items[3].Seq)
+}
+
+func TestGetItemsSince_NegativeOne_ReturnsAll(t *testing.T) {
+	h := buildHistory(2) // 8 items
+
+	items, compacted, err := h.GetItemsSince(-1) // everything
+	require.NoError(t, err)
+	assert.False(t, compacted)
+	assert.Len(t, items, 8)
+	assert.Equal(t, 0, items[0].Seq)
+}
+
+func TestGetItemsSince_AtLastSeq_ReturnsEmpty(t *testing.T) {
+	h := buildHistory(2) // 8 items, last Seq=7
+
+	items, compacted, err := h.GetItemsSince(7) // caught up
+	require.NoError(t, err)
+	assert.False(t, compacted)
+	assert.Len(t, items, 0)
+}
+
+func TestGetItemsSince_StaleAfterCompaction(t *testing.T) {
+	h := buildHistory(3) // 12 items, Seq 0-11
+
+	// Compact to 2 items
+	err := h.ReplaceAll([]models.ConversationItem{
+		{Type: models.ItemTypeCompaction, Content: "summary"},
+		{Type: models.ItemTypeUserMessage, Content: "recent"},
+	})
+	require.NoError(t, err)
+
+	// sinceSeq=10 is now stale (only 2 items, Seq 0-1)
+	items, compacted, err := h.GetItemsSince(10)
+	require.NoError(t, err)
+	assert.True(t, compacted, "should detect compaction")
+	assert.Len(t, items, 2, "should return all items")
+	assert.Equal(t, 0, items[0].Seq)
+}
+
+func TestGetItemsSince_EmptyHistory(t *testing.T) {
+	h := NewInMemoryHistory()
+
+	items, compacted, err := h.GetItemsSince(-1)
+	require.NoError(t, err)
+	assert.False(t, compacted)
+	assert.Len(t, items, 0)
+}
+
+// --- GetLatestSeq tests ---
+
+func TestGetLatestSeq_Empty(t *testing.T) {
+	h := NewInMemoryHistory()
+	assert.Equal(t, -1, h.GetLatestSeq())
+}
+
+func TestGetLatestSeq_WithItems(t *testing.T) {
+	h := buildHistory(2) // 8 items
+	assert.Equal(t, 7, h.GetLatestSeq())
+}
+
+func TestGetLatestSeq_AfterReplaceAll(t *testing.T) {
+	h := buildHistory(3)
+	h.ReplaceAll([]models.ConversationItem{
+		{Type: models.ItemTypeCompaction, Content: "c"},
+	})
+	assert.Equal(t, 0, h.GetLatestSeq())
+}

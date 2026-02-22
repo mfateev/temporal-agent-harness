@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/mfateev/temporal-agent-harness/internal/cli"
 	"github.com/mfateev/temporal-agent-harness/internal/models"
@@ -38,7 +39,17 @@ func main() {
 	sandboxNetwork := flag.Bool("sandbox-network", true, "Allow network access in sandbox")
 	codexHome := flag.String("codex-home", "", "Path to codex config directory (default: ~/.codex)")
 	noSuggestions := flag.Bool("no-suggestions", false, "Disable prompt suggestions after turn completion")
+	connTimeout := flag.Duration("connection-timeout", 0, "Per-RPC timeout for Temporal calls (e.g. 10s). 0 = no timeout. Env: TCX_CONNECTION_TIMEOUT")
 	flag.Parse()
+
+	// Support env var override for connection timeout (used by TUI tests)
+	if *connTimeout == 0 {
+		if envTimeout := os.Getenv("TCX_CONNECTION_TIMEOUT"); envTimeout != "" {
+			if d, err := time.ParseDuration(envTimeout); err == nil {
+				*connTimeout = d
+			}
+		}
+	}
 
 	// Support both -m and --message
 	msg := *message
@@ -87,6 +98,7 @@ func main() {
 		Provider:             resolvedProvider,
 		Inline:               *inline,
 		DisableSuggestions:   *noSuggestions,
+		ConnectionTimeout:   *connTimeout,
 	}
 
 	if err := cli.Run(config); err != nil {

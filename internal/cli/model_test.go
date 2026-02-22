@@ -422,7 +422,7 @@ func TestModel_UserInputSentTransitionsToWatching(t *testing.T) {
 	m := newTestModel()
 	m.state = StateInput
 
-	updated, _ := m.Update(UserInputSentMsg{TurnID: "t1"})
+	updated, _ := m.Update(UserInputSentMsg{Response: workflow.StateUpdateResponse{TurnID: "t1"}})
 	um := updated.(*Model)
 	assert.Equal(t, StateWatching, um.state)
 	assert.Equal(t, "Thinking...", um.spinnerMsg)

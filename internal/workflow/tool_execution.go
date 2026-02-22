@@ -24,6 +24,9 @@ type ToolsExecutor struct {
 	toolSpecs        []tools.ToolSpec
 	cwd              string
 	sessionTaskQueue string
+	// MCP fields for routing mcp__* tool calls.
+	sessionID     string
+	mcpToolLookup map[string]tools.McpToolRef
 }
 
 // NewToolsExecutor creates a ToolsExecutor with the given specs, working directory, and task queue.
@@ -31,10 +34,17 @@ func NewToolsExecutor(specs []tools.ToolSpec, cwd, taskQueue string) *ToolsExecu
 	return &ToolsExecutor{toolSpecs: specs, cwd: cwd, sessionTaskQueue: taskQueue}
 }
 
+// WithMcpContext sets MCP routing context on the executor for dispatching MCP tool calls.
+func (e *ToolsExecutor) WithMcpContext(sessionID string, lookup map[string]tools.McpToolRef) *ToolsExecutor {
+	e.sessionID = sessionID
+	e.mcpToolLookup = lookup
+	return e
+}
+
 // ExecuteParallel runs all tool activities in parallel and waits for all.
 // Delegates to executeToolsInParallel.
 func (e *ToolsExecutor) ExecuteParallel(ctx workflow.Context, calls []models.ConversationItem) ([]activities.ToolActivityOutput, error) {
-	return executeToolsInParallel(ctx, calls, e.toolSpecs, e.cwd, e.sessionTaskQueue)
+	return executeToolsInParallel(ctx, calls, e.toolSpecs, e.cwd, e.sessionTaskQueue, e.sessionID, e.mcpToolLookup)
 }
 
 // executeToolsInParallel runs all tool activities in parallel and waits for all.
@@ -48,7 +58,7 @@ func (e *ToolsExecutor) ExecuteParallel(ctx workflow.Context, calls []models.Con
 // (enabling per-session worker routing in multi-host mode).
 //
 // Maps to: codex-rs/core/src/tools/parallel.rs drain_in_flight
-func executeToolsInParallel(ctx workflow.Context, functionCalls []models.ConversationItem, toolSpecs []tools.ToolSpec, cwd, sessionTaskQueue string) ([]activities.ToolActivityOutput, error) {
+func executeToolsInParallel(ctx workflow.Context, functionCalls []models.ConversationItem, toolSpecs []tools.ToolSpec, cwd, sessionTaskQueue, sessionID string, mcpToolLookup map[string]tools.McpToolRef) ([]activities.ToolActivityOutput, error) {
 	logger := workflow.GetLogger(ctx)
 
 	// Build a lookup map from tool name to spec for fast access.
@@ -99,6 +109,13 @@ func executeToolsInParallel(ctx workflow.Context, functionCalls []models.Convers
 			Arguments: args,
 			Cwd:       cwd,
 		}
+
+		// Populate MCP routing info for mcp__* tools
+		if ref, ok := mcpToolLookup[fc.Name]; ok {
+			input.McpToolRef = &ref
+			input.SessionID = sessionID
+		}
+
 		futures[i] = workflow.ExecuteActivity(toolCtx, "ExecuteTool", input)
 	}
 

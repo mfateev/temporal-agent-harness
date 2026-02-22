@@ -307,30 +307,50 @@ func (c *AnthropicClient) buildToolDefinitions(specs []tools.ToolSpec) []anthrop
 	toolDefs := make([]anthropic.ToolUnionParam, 0, len(specs))
 
 	for _, spec := range specs {
-		// Convert our []ToolParameter to Anthropic's format
-		properties := make(map[string]interface{})
-		required := make([]string, 0)
+		var inputSchema anthropic.ToolInputSchemaParam
 
-		for _, param := range spec.Parameters {
-			prop := map[string]interface{}{
-				"type":        param.Type,
-				"description": param.Description,
+		if spec.RawJSONSchema != nil {
+			// MCP tools provide a full JSON Schema directly.
+			// Extract properties and required from the raw schema.
+			if props, ok := spec.RawJSONSchema["properties"].(map[string]interface{}); ok {
+				inputSchema.Properties = props
 			}
-			if param.Items != nil {
-				prop["items"] = param.Items
+			if req, ok := spec.RawJSONSchema["required"].([]interface{}); ok {
+				reqStrings := make([]string, 0, len(req))
+				for _, r := range req {
+					if s, ok := r.(string); ok {
+						reqStrings = append(reqStrings, s)
+					}
+				}
+				if len(reqStrings) > 0 {
+					inputSchema.Required = reqStrings
+				}
 			}
-			properties[param.Name] = prop
-			if param.Required {
-				required = append(required, param.Name)
-			}
-		}
+		} else {
+			// Build schema from Parameters
+			properties := make(map[string]interface{})
+			required := make([]string, 0)
 
-		inputSchema := anthropic.ToolInputSchemaParam{
-			Properties: properties,
-		}
+			for _, param := range spec.Parameters {
+				prop := map[string]interface{}{
+					"type":        param.Type,
+					"description": param.Description,
+				}
+				if param.Items != nil {
+					prop["items"] = param.Items
+				}
+				properties[param.Name] = prop
+				if param.Required {
+					required = append(required, param.Name)
+				}
+			}
 
-		if len(required) > 0 {
-			inputSchema.Required = required
+			inputSchema = anthropic.ToolInputSchemaParam{
+				Properties: properties,
+			}
+			if len(required) > 0 {
+				inputSchema.Required = required
+			}
 		}
 
 		toolDefs = append(toolDefs, anthropic.ToolUnionParam{

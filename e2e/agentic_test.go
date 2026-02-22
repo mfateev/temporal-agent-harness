@@ -29,6 +29,7 @@ import (
 	"github.com/mfateev/temporal-agent-harness/internal/activities"
 	"github.com/mfateev/temporal-agent-harness/internal/execsession"
 	"github.com/mfateev/temporal-agent-harness/internal/llm"
+	"github.com/mfateev/temporal-agent-harness/internal/mcp"
 	"github.com/mfateev/temporal-agent-harness/internal/models"
 	"github.com/mfateev/temporal-agent-harness/internal/tools"
 	"github.com/mfateev/temporal-agent-harness/internal/tools/handlers"
@@ -251,6 +252,10 @@ func createWorker(c client.Client) worker.Worker {
 	toolRegistry.Register(handlers.NewExecCommandHandler(execStore))
 	toolRegistry.Register(handlers.NewWriteStdinHandler(execStore))
 
+	// MCP: single handler for all mcp__* tool calls
+	mcpStore := mcp.NewMcpStore()
+	toolRegistry.Register(handlers.NewMCPHandler(mcpStore))
+
 	// Create multi-provider LLM client
 	llmClient := llm.NewMultiProviderClient()
 
@@ -267,6 +272,10 @@ func createWorker(c client.Client) worker.Worker {
 	w.RegisterActivity(instructionActivities.LoadWorkerInstructions)
 	w.RegisterActivity(instructionActivities.LoadPersonalInstructions)
 	w.RegisterActivity(instructionActivities.LoadExecPolicy)
+
+	mcpActivities := activities.NewMcpActivities(mcpStore)
+	w.RegisterActivity(mcpActivities.InitializeMcpServers)
+	w.RegisterActivity(mcpActivities.CleanupMcpServers)
 
 	return w
 }
@@ -809,10 +818,10 @@ func TestAgenticWorkflow_MultiTurnInteractive(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	var accepted workflow.UserInputAccepted
-	require.NoError(t, updateHandle.Get(ctx, &accepted))
-	assert.NotEmpty(t, accepted.TurnID)
-	t.Logf("Second turn ID: %s", accepted.TurnID)
+	var resp workflow.StateUpdateResponse
+	require.NoError(t, updateHandle.Get(ctx, &resp))
+	assert.NotEmpty(t, resp.TurnID)
+	t.Logf("Second turn ID: %s", resp.TurnID)
 
 	// Wait for second turn
 	waitForTurnComplete(t, ctx, c, workflowID, 2)
@@ -973,7 +982,7 @@ func TestAgenticWorkflow_AnthropicCaching(t *testing.T) {
 		Config: models.SessionConfiguration{
 			Model: models.ModelConfig{
 				Provider:      "anthropic",
-				Model:         "claude-3.5-haiku-20241022", // 2 048-token cache minimum (prompt is ~2 700 tokens)
+				Model:         "claude-sonnet-4.5-20250929", // 1 024-token cache minimum (prompt is ~2 700 tokens)
 				Temperature:   0,
 				MaxTokens:     32,
 				ContextWindow: 200000,
@@ -1004,9 +1013,9 @@ func TestAgenticWorkflow_AnthropicCaching(t *testing.T) {
 		WaitForStage: client.WorkflowUpdateStageCompleted,
 	})
 	require.NoError(t, err, "Failed to send second user input")
-	var accepted workflow.UserInputAccepted
-	require.NoError(t, updateHandle.Get(ctx, &accepted))
-	t.Logf("Turn 2 sent, turn ID: %s", accepted.TurnID)
+	var resp workflow.StateUpdateResponse
+	require.NoError(t, updateHandle.Get(ctx, &resp))
+	t.Logf("Turn 2 sent, turn ID: %s", resp.TurnID)
 
 	waitForTurnComplete(t, ctx, c, workflowID, 2)
 	t.Log("Turn 2 complete (cache read expected)")
@@ -1094,9 +1103,9 @@ func TestAgenticWorkflow_ProactiveCompaction(t *testing.T) {
 	})
 	require.NoError(t, err, "Failed to send second user input")
 
-	var accepted workflow.UserInputAccepted
-	require.NoError(t, updateHandle.Get(ctx, &accepted))
-	t.Logf("Second input accepted, turn ID: %s", accepted.TurnID)
+	var resp workflow.StateUpdateResponse
+	require.NoError(t, updateHandle.Get(ctx, &resp))
+	t.Logf("Second input accepted, turn ID: %s", resp.TurnID)
 
 	// Wait until we see both a compaction marker AND a TurnComplete in history.
 	// Compaction via ReplaceAll wipes the old history (including turn 1's
@@ -1217,9 +1226,9 @@ func TestAgenticWorkflow_ManualCompact(t *testing.T) {
 	})
 	require.NoError(t, err, "Failed to send second user input")
 
-	var accepted workflow.UserInputAccepted
-	require.NoError(t, updateHandle2.Get(ctx, &accepted))
-	t.Logf("Second input accepted, turn ID: %s", accepted.TurnID)
+	var resp workflow.StateUpdateResponse
+	require.NoError(t, updateHandle2.Get(ctx, &resp))
+	t.Logf("Second input accepted, turn ID: %s", resp.TurnID)
 
 	// Wait for the post-compaction turn to complete.
 	// After compaction ReplaceAll, old TurnComplete markers are gone, so look
@@ -1821,4 +1830,89 @@ func truncateStr(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// TestAgenticWorkflow_McpToolCall verifies that MCP tools are discovered
+// and callable end-to-end through the Temporal workflow stack.
+//
+// Uses the official @modelcontextprotocol/server-everything MCP test server
+// (installed via npx) which exposes an "echo" tool that returns its input.
+//
+// Flow: configure McpServers → start workflow → LLM discovers mcp__echo__echo
+// → LLM calls mcp__echo__echo → verify tool was called and response includes
+// the echoed content.
+func TestAgenticWorkflow_McpToolCall(t *testing.T) {
+	t.Parallel()
+	c := dialTemporal(t)
+
+	if os.Getenv("OPENAI_API_KEY") == "" {
+		t.Skip("OPENAI_API_KEY not set, skipping MCP E2E test")
+	}
+
+	// Verify npx / everything server is available
+	if _, err := exec.LookPath("npx"); err != nil {
+		t.Skip("npx not found in PATH; skipping MCP E2E test")
+	}
+
+	workflowID := "test-mcp-tool-" + uuid.New().String()[:8]
+	t.Logf("Starting workflow: %s", workflowID)
+
+	toolsConfig := models.ToolsConfig{}
+	toolsConfig.AddTools("request_user_input")
+
+	input := workflow.WorkflowInput{
+		ConversationID: workflowID,
+		UserMessage:    `Use the echo tool from the "echo" MCP server to echo the word "persimmon". Do NOT use any other tools. Report what the echo tool returned.`,
+		Config: models.SessionConfiguration{
+			Model: models.ModelConfig{
+				Model:         CheapModel,
+				Temperature:   0,
+				MaxTokens:     256,
+				ContextWindow: 128000,
+			},
+			Tools:              toolsConfig,
+			DisableSuggestions: true,
+			McpServers: map[string]mcp.McpServerConfig{
+				"echo": {
+					Transport: mcp.McpServerTransportConfig{
+						Command: "npx",
+						Args:    []string{"-y", "@modelcontextprotocol/server-everything"},
+					},
+				},
+			},
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), WorkflowTimeout)
+	defer cancel()
+
+	// Start workflow
+	run, err := c.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
+		ID:        workflowID,
+		TaskQueue: TaskQueue,
+	}, "AgenticWorkflow", input)
+	require.NoError(t, err)
+
+	// Wait for first turn to complete
+	waitForTurnComplete(t, ctx, c, workflowID, 1)
+
+	// Shut down and collect result
+	shutdownWorkflow(t, ctx, c, workflowID)
+
+	var result workflow.WorkflowResult
+	require.NoError(t, run.Get(ctx, &result))
+
+	// Verify MCP tool was called
+	hasMcpTool := false
+	for _, tool := range result.ToolCallsExecuted {
+		if strings.HasPrefix(tool, "mcp__") {
+			hasMcpTool = true
+			break
+		}
+	}
+	assert.True(t, hasMcpTool, "Should have called an MCP tool (mcp__*), got: %v", result.ToolCallsExecuted)
+	assert.Greater(t, result.TotalTokens, 0, "Should have consumed tokens")
+
+	t.Logf("MCP tool call - Total tokens: %d, Iterations: %d, Tools: %v",
+		result.TotalTokens, result.TotalIterations, result.ToolCallsExecuted)
 }

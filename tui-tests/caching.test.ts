@@ -1,19 +1,22 @@
 import { test, expect } from "@microsoft/tui-test";
-import { tcxBinary, baseArgs, EXPECT_TIMEOUT, selectNewSession } from "./helpers.js";
+import { tcxBinary, baseArgs, selectNewSession } from "./helpers.js";
 
 // Validates that Anthropic prompt caching is visible in the TUI after a second
 // turn. The status bar renders "(N cached)" when totalCachedTokens > 0.
 //
-// The built-in base system prompt is ~2 700 tokens, above the 2 048-token
-// minimum cacheable block size for Claude Haiku 3.5. After turn 1 the API
-// writes the system prompt to its cache; turn 2 reads from it.
+// The built-in base system prompt is ~2 700 tokens, above Sonnet 4.5's
+// 1 024-token cache minimum. After turn 1 the API writes the system prompt
+// to its cache; turn 2 reads from it.
 //
-// Uses claude-3.5-haiku-20241022 (2 048-token minimum) rather than Haiku 4.5
-// (4 096-token minimum) because the base system prompt is ~2 700 tokens.
+// Uses claude-sonnet-4.5-20250929 (1 024-token cache minimum).
 //
 // Requires: ANTHROPIC_API_KEY set in the environment.
 
-const anthropicModel = "claude-3.5-haiku-20241022";
+const anthropicModel = "claude-sonnet-4.5-20250929";
+
+// Tight per-assertion timeout: each LLM call should return in <15s.
+// Using 120s per await caused 10+ minute hangs when the model was unavailable.
+const ASSERTION_TIMEOUT = 30_000;
 
 test.use({
   program: {
@@ -44,7 +47,7 @@ test("status bar shows cached tokens after second Anthropic turn", async ({
   // Wait for the TUI to reach ready state (StateInput).
   await expect(
     terminal.getByText(/ready/g, { full: true, strict: false }),
-  ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+  ).toBeVisible({ timeout: ASSERTION_TIMEOUT });
 
   // Submit the first message. The first LLM call WRITES the system prompt to
   // Anthropic's cache (cache_creation_input_tokens > 0).
@@ -52,12 +55,12 @@ test("status bar shows cached tokens after second Anthropic turn", async ({
 
   await expect(
     terminal.getByText(/lychee/gi, { full: true, strict: false }),
-  ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+  ).toBeVisible({ timeout: ASSERTION_TIMEOUT });
 
   // Wait for the status bar to return to "ready" before the second turn.
   await expect(
     terminal.getByText(/ready/g, { full: true, strict: false }),
-  ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+  ).toBeVisible({ timeout: ASSERTION_TIMEOUT });
 
   // ── Turn 2 ────────────────────────────────────────────────────────────────
   // The second call sends the same system prompt → Anthropic serves it from
@@ -67,18 +70,15 @@ test("status bar shows cached tokens after second Anthropic turn", async ({
 
   await expect(
     terminal.getByText(/durian/gi, { full: true, strict: false }),
-  ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+  ).toBeVisible({ timeout: ASSERTION_TIMEOUT });
 
   await expect(
     terminal.getByText(/ready/g, { full: true, strict: false }),
-  ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+  ).toBeVisible({ timeout: ASSERTION_TIMEOUT });
 
   // ── Cache assertion ───────────────────────────────────────────────────────
-  // Status bar format after a cache hit: "claude-haiku-... · 1,234 (567 cached) tokens · turn 3 · ready"
+  // Status bar format after a cache hit: "claude-sonnet-... · 1,234 (567 cached) tokens · turn 3 · ready"
   await expect(
     terminal.getByText(/cached/g, { full: true, strict: false }),
-  ).toBeVisible({
-    timeout: EXPECT_TIMEOUT,
-    // Provide a clear message if this assertion fails.
-  });
+  ).toBeVisible({ timeout: ASSERTION_TIMEOUT });
 });

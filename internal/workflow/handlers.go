@@ -15,6 +15,40 @@ import (
 	"github.com/mfateev/temporal-agent-harness/internal/version"
 )
 
+// buildTurnStatus constructs a TurnStatus from the current session and control state.
+// Extracted as a helper so it can be reused by both the get_turn_status query
+// and the get_state_update / user_input Update handlers.
+func (s *SessionState) buildTurnStatus(ctrl *LoopControl) TurnStatus {
+	turnCount, _ := s.History.GetTurnCount()
+	status := TurnStatus{
+		Phase:                   ctrl.Phase(),
+		CurrentTurnID:           ctrl.CurrentTurnID(),
+		ToolsInFlight:           ctrl.ToolsInFlight(),
+		PendingApprovals:        ctrl.PendingApprovals(),
+		PendingEscalations:      ctrl.PendingEscalations(),
+		PendingUserInputRequest: ctrl.PendingUserInputReq(),
+		IterationCount:          s.IterationCount,
+		TotalTokens:             s.TotalTokens,
+		TotalCachedTokens:       s.TotalCachedTokens,
+		TurnCount:               turnCount,
+		WorkerVersion:           version.GitCommit,
+		Suggestion:              ctrl.Suggestion(),
+		Plan:                    s.Plan,
+	}
+	// Populate child agent summaries from AgentControl
+	if s.AgentCtl != nil {
+		for _, info := range s.AgentCtl.Agents {
+			status.ChildAgents = append(status.ChildAgents, ChildAgentSummary{
+				AgentID:    info.AgentID,
+				WorkflowID: info.WorkflowID,
+				Role:       info.Role,
+				Status:     info.Status,
+			})
+		}
+	}
+	return status
+}
+
 // registerHandlers registers query and update handlers on the workflow.
 func (s *SessionState) registerHandlers(ctx workflow.Context, ctrl *LoopControl) {
 	logger := workflow.GetLogger(ctx)
@@ -31,34 +65,7 @@ func (s *SessionState) registerHandlers(ctx workflow.Context, ctrl *LoopControl)
 	// Query: get_turn_status
 	// Returns current turn phase and stats for CLI polling.
 	err = workflow.SetQueryHandler(ctx, QueryGetTurnStatus, func() (TurnStatus, error) {
-		turnCount, _ := s.History.GetTurnCount()
-		status := TurnStatus{
-			Phase:                   ctrl.Phase(),
-			CurrentTurnID:           ctrl.CurrentTurnID(),
-			ToolsInFlight:           ctrl.ToolsInFlight(),
-			PendingApprovals:        ctrl.PendingApprovals(),
-			PendingEscalations:      ctrl.PendingEscalations(),
-			PendingUserInputRequest: ctrl.PendingUserInputReq(),
-			IterationCount:          s.IterationCount,
-			TotalTokens:             s.TotalTokens,
-			TotalCachedTokens:       s.TotalCachedTokens,
-			TurnCount:               turnCount,
-			WorkerVersion:           version.GitCommit,
-			Suggestion:              ctrl.Suggestion(),
-			Plan:                    s.Plan,
-		}
-		// Populate child agent summaries from AgentControl
-		if s.AgentCtl != nil {
-			for _, info := range s.AgentCtl.Agents {
-				status.ChildAgents = append(status.ChildAgents, ChildAgentSummary{
-					AgentID:    info.AgentID,
-					WorkflowID: info.WorkflowID,
-					Role:       info.Role,
-					Status:     info.Status,
-				})
-			}
-		}
-		return status, nil
+		return s.buildTurnStatus(ctrl), nil
 	})
 	if err != nil {
 		logger.Error("Failed to register get_turn_status query handler", "error", err)
@@ -66,10 +73,12 @@ func (s *SessionState) registerHandlers(ctx workflow.Context, ctrl *LoopControl)
 
 	// Update: user_input
 	// Maps to: Codex Op::UserInput / turn/start
+	// Returns StateUpdateResponse with a full snapshot so the CLI can render
+	// immediately without an extra query round-trip.
 	err = workflow.SetUpdateHandlerWithOptions(
 		ctx,
 		UpdateUserInput,
-		func(ctx workflow.Context, input UserInput) (UserInputAccepted, error) {
+		func(ctx workflow.Context, input UserInput) (StateUpdateResponse, error) {
 			turnID := s.nextTurnID()
 
 			// Add TurnStarted marker
@@ -77,8 +86,9 @@ func (s *SessionState) registerHandlers(ctx workflow.Context, ctrl *LoopControl)
 				Type:   models.ItemTypeTurnStarted,
 				TurnID: turnID,
 			}); err != nil {
-				return UserInputAccepted{}, fmt.Errorf("failed to add turn started: %w", err)
+				return StateUpdateResponse{}, fmt.Errorf("failed to add turn started: %w", err)
 			}
+			ctrl.NotifyItemAdded()
 
 			// Add user message
 			if err := s.History.AddItem(models.ConversationItem{
@@ -86,12 +96,19 @@ func (s *SessionState) registerHandlers(ctx workflow.Context, ctrl *LoopControl)
 				Content: input.Content,
 				TurnID:  turnID,
 			}); err != nil {
-				return UserInputAccepted{}, fmt.Errorf("failed to add user message: %w", err)
+				return StateUpdateResponse{}, fmt.Errorf("failed to add user message: %w", err)
 			}
+			ctrl.NotifyItemAdded()
 
 			ctrl.SetPendingUserInput(turnID)
 
-			return UserInputAccepted{TurnID: turnID}, nil
+			// Build full snapshot for the caller
+			allItems, _ := s.History.GetRawItems()
+			return StateUpdateResponse{
+				TurnID: turnID,
+				Items:  allItems,
+				Status: s.buildTurnStatus(ctrl),
+			}, nil
 		},
 		workflow.UpdateHandlerOptions{
 			Validator: func(ctx workflow.Context, input UserInput) error {
@@ -124,6 +141,7 @@ func (s *SessionState) registerHandlers(ctx workflow.Context, ctrl *LoopControl)
 					TurnID:  ctrl.CurrentTurnID(),
 					Content: "interrupted",
 				})
+				ctrl.NotifyItemAdded()
 			}
 
 			return InterruptResponse{Acknowledged: true}, nil
@@ -379,6 +397,52 @@ func (s *SessionState) registerHandlers(ctx workflow.Context, ctrl *LoopControl)
 		logger.Error("Failed to register plan_request update handler", "error", err)
 	}
 
+	// Update: get_state_update
+	// Blocking long-poll Update that replaces the CLI's query-based polling loop.
+	// Sleeps via workflow.Await until state changes, then returns delta items +
+	// current status in a single response.
+	err = workflow.SetUpdateHandlerWithOptions(
+		ctx,
+		UpdateGetStateUpdate,
+		func(ctx workflow.Context, req StateUpdateRequest) (StateUpdateResponse, error) {
+			entryVersion := ctrl.StateVersion()
+
+			// Check if new state is immediately available
+			items, compacted, _ := s.History.GetItemsSince(req.SinceSeq)
+			if len(items) > 0 || compacted || ctrl.Phase() != req.SincePhase || ctrl.IsShutdown() || ctrl.IsDraining() {
+				return StateUpdateResponse{
+					TurnID:    ctrl.CurrentTurnID(),
+					Items:     items,
+					Status:    s.buildTurnStatus(ctrl),
+					Compacted: compacted,
+					Completed: ctrl.IsShutdown(),
+				}, nil
+			}
+
+			// Block until state changes
+			awaitErr := workflow.Await(ctx, func() bool {
+				return ctrl.StateVersion() != entryVersion || ctrl.IsShutdown() || ctrl.IsDraining()
+			})
+			if awaitErr != nil {
+				return StateUpdateResponse{}, fmt.Errorf("get_state_update await failed: %w", awaitErr)
+			}
+
+			// Re-fetch state after waking
+			items, compacted, _ = s.History.GetItemsSince(req.SinceSeq)
+			return StateUpdateResponse{
+				TurnID:    ctrl.CurrentTurnID(),
+				Items:     items,
+				Status:    s.buildTurnStatus(ctrl),
+				Compacted: compacted,
+				Completed: ctrl.IsShutdown(),
+			}, nil
+		},
+		workflow.UpdateHandlerOptions{},
+	)
+	if err != nil {
+		logger.Error("Failed to register get_state_update update handler", "error", err)
+	}
+
 	// Signal channels for child workflow mode (subagent).
 	// These are drained in goroutines so signals are processed asynchronously.
 	// Maps to: codex-rs/core/src/agent/control.rs agent signal handling
@@ -400,11 +464,13 @@ func (s *SessionState) registerHandlers(ctx workflow.Context, ctrl *LoopControl)
 				Type:   models.ItemTypeTurnStarted,
 				TurnID: turnID,
 			})
+			ctrl.NotifyItemAdded()
 			_ = s.History.AddItem(models.ConversationItem{
 				Type:    models.ItemTypeUserMessage,
 				Content: signal.Content,
 				TurnID:  turnID,
 			})
+			ctrl.NotifyItemAdded()
 
 			ctrl.SetPendingUserInput(turnID)
 		}

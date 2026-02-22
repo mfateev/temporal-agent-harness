@@ -18,8 +18,12 @@ import (
 )
 
 // harnessWorkflowID returns a stable harness workflow ID derived from the
-// working directory path.
+// working directory path. If TCX_HARNESS_ID is set, it is used directly
+// (enables tests to predict the workflow ID for monitoring).
 func harnessWorkflowID(cwd string) string {
+	if id := os.Getenv("TCX_HARNESS_ID"); id != "" {
+		return id
+	}
 	h := sha256.New()
 	h.Write([]byte(cwd))
 	return fmt.Sprintf("harness-%x", h.Sum(nil)[:8])
@@ -104,7 +108,7 @@ func startWorkflowCmd(c client.Client, config Config) tea.Cmd {
 func resumeWorkflowCmd(c client.Client, workflowID string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
-		poller := NewPoller(c, workflowID, PollInterval)
+		poller := NewPoller(c, workflowID, 0)
 		result := poller.Poll(ctx)
 		if result.Err != nil {
 			return WorkflowStartErrorMsg{Err: fmt.Errorf("failed to query workflow: %w", result.Err)}
@@ -135,12 +139,12 @@ func sendUserInputCmd(c client.Client, workflowID, content string) tea.Cmd {
 			return UserInputErrorMsg{Err: err}
 		}
 
-		var accepted workflow.UserInputAccepted
-		if err := updateHandle.Get(ctx, &accepted); err != nil {
+		var resp workflow.StateUpdateResponse
+		if err := updateHandle.Get(ctx, &resp); err != nil {
 			return UserInputErrorMsg{Err: err}
 		}
 
-		return UserInputSentMsg{TurnID: accepted.TurnID}
+		return UserInputSentMsg{Response: resp}
 	}
 }
 

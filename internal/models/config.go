@@ -1,6 +1,9 @@
 package models
 
-import "github.com/mfateev/temporal-agent-harness/internal/tools"
+import (
+	"github.com/mfateev/temporal-agent-harness/internal/mcp"
+	"github.com/mfateev/temporal-agent-harness/internal/tools"
+)
 
 // ModelConfig configures the LLM model parameters
 //
@@ -175,6 +178,10 @@ type SessionConfiguration struct {
 	// Task queue for session-specific activities (tools, instruction loading).
 	// If empty, uses the workflow's default queue (backward compat).
 	SessionTaskQueue string `json:"session_task_queue,omitempty"`
+
+	// MCP server configurations. Each key is the server name.
+	// Maps to: codex-rs SessionConfiguration.mcp_servers
+	McpServers map[string]mcp.McpServerConfig `json:"mcp_servers,omitempty"`
 }
 
 // DefaultSessionConfiguration returns sensible defaults.

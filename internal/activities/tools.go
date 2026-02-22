@@ -3,6 +3,7 @@ package activities
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"go.temporal.io/sdk/activity"
 
@@ -20,6 +21,10 @@ type ToolActivityInput struct {
 	Cwd           string                 `json:"cwd,omitempty"`            // Working directory for tool execution
 	SandboxPolicy *tools.SandboxPolicyRef `json:"sandbox_policy,omitempty"` // Sandbox restrictions
 	EnvPolicy     *tools.EnvPolicyRef     `json:"env_policy,omitempty"`     // Environment variable filtering
+
+	// MCP fields — populated for mcp__* tool calls.
+	McpToolRef *tools.McpToolRef `json:"mcp_tool_ref,omitempty"` // Server/tool routing
+	SessionID  string            `json:"session_id,omitempty"`   // Session ID for MCP store lookup
 }
 
 // ToolActivityOutput is the output from tool execution.
@@ -54,7 +59,13 @@ func NewToolActivities(registry *tools.ToolRegistry) *ToolActivities {
 //
 // Maps to: codex-rs/core/src/tools/router.rs ToolRouter.dispatch()
 func (a *ToolActivities) ExecuteTool(ctx context.Context, input ToolActivityInput) (ToolActivityOutput, error) {
-	handler, err := a.registry.GetHandler(input.ToolName)
+	// Route mcp__* tool names to the "mcp" handler.
+	handlerName := input.ToolName
+	if strings.HasPrefix(input.ToolName, "mcp__") || input.McpToolRef != nil {
+		handlerName = "mcp"
+	}
+
+	handler, err := a.registry.GetHandler(handlerName)
 	if err != nil {
 		return ToolActivityOutput{}, models.NewToolNotFoundError(input.ToolName)
 	}
@@ -66,6 +77,8 @@ func (a *ToolActivities) ExecuteTool(ctx context.Context, input ToolActivityInpu
 		Cwd:           input.Cwd,
 		SandboxPolicy: input.SandboxPolicy,
 		EnvPolicy:     input.EnvPolicy,
+		McpToolRef:    input.McpToolRef,
+		SessionID:     input.SessionID,
 		Heartbeat: func(details ...interface{}) {
 			activity.RecordHeartbeat(ctx, details...)
 		},

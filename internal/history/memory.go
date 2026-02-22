@@ -154,6 +154,42 @@ func (h *InMemoryHistory) GetRawItems() ([]models.ConversationItem, error) {
 	return result, nil
 }
 
+// GetItemsSince returns items with Seq > sinceSeq.
+// Since Seq == array index (assigned in AddItem), this is simply items[sinceSeq+1:].
+// If sinceSeq >= len(items), it means compaction has reset the sequence space,
+// so we return all items with compacted=true.
+func (h *InMemoryHistory) GetItemsSince(sinceSeq int) ([]models.ConversationItem, bool, error) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	if sinceSeq >= len(h.items) {
+		// sinceSeq is beyond our current range — compaction must have occurred.
+		// Return all items so the caller can re-sync.
+		result := make([]models.ConversationItem, len(h.items))
+		copy(result, h.items)
+		return result, true, nil
+	}
+
+	startIdx := sinceSeq + 1
+	if startIdx < 0 {
+		startIdx = 0
+	}
+
+	result := make([]models.ConversationItem, len(h.items)-startIdx)
+	copy(result, h.items[startIdx:])
+	return result, false, nil
+}
+
+// GetLatestSeq returns the Seq of the most recent item, or -1 if empty.
+func (h *InMemoryHistory) GetLatestSeq() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if len(h.items) == 0 {
+		return -1
+	}
+	return len(h.items) - 1
+}
+
 // GetTurnCount returns the number of user turns.
 func (h *InMemoryHistory) GetTurnCount() (int, error) {
 	h.mu.RLock()

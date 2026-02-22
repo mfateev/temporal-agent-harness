@@ -71,8 +71,7 @@ func (m *Model) modelOptionAt(idx int) (provider, model string) {
 }
 
 const (
-	TaskQueue    = "temporal-agent-harness"
-	PollInterval = 200 * time.Millisecond
+	TaskQueue         = "temporal-agent-harness"
 	MaxTextareaHeight = 10 // Maximum height for multi-line input
 )
 
@@ -112,6 +111,11 @@ type Config struct {
 	Provider           string // LLM provider (openai, anthropic, google)
 	Inline             bool   // Disable alt-screen mode
 	DisableSuggestions bool   // Disable prompt suggestions
+
+	// ConnectionTimeout limits how long each Temporal RPC waits before giving up.
+	// 0 means no per-call timeout (default for interactive use).
+	// Short values (e.g. 10s) make tests fail fast when the server is dead.
+	ConnectionTimeout time.Duration
 }
 
 // Model is the bubbletea model for the interactive CLI.
@@ -180,9 +184,10 @@ type Model struct {
 	// Ctrl+C tracking
 	lastInterruptTime time.Time
 
-	// Polling
-	pollCh            chan PollResult
-	pollCancel        context.CancelFunc
+	// Watching (blocking get_state_update)
+	watchCh           chan WatchResult
+	watchCancel       context.CancelFunc
+	lastPhase         workflow.TurnPhase
 	consecutiveErrors int
 
 	// Error/exit state
@@ -240,7 +245,7 @@ func NewModel(config Config, c client.Client) Model {
 		lastRenderedSeq: -1,
 		textarea:        ta,
 		spinner:         sp,
-		pollCh:          make(chan PollResult, 1),
+		watchCh:         make(chan WatchResult, 1),
 		modelName:       config.Model,
 		provider:        config.Provider,
 	}
@@ -310,10 +315,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PollResultMsg:
 		return m.handlePollResult(msg)
 
+	case WatchResultMsg:
+		return m.handleWatchResult(msg)
+
 	case UserInputSentMsg:
 		m.state = StateWatching
 		m.spinnerMsg = "Thinking..."
-		cmds = append(cmds, m.startPolling())
+		// Render initial items from the response snapshot
+		m.renderNewItems(msg.Response.Items)
+		// Update status from snapshot
+		m.totalTokens = msg.Response.Status.TotalTokens
+		m.totalCachedTokens = msg.Response.Status.TotalCachedTokens
+		m.turnCount = msg.Response.Status.TurnCount
+		if msg.Response.Status.WorkerVersion != "" {
+			m.workerVersion = msg.Response.Status.WorkerVersion
+		}
+		m.lastPhase = msg.Response.Status.Phase
+		cmds = append(cmds, m.startWatching())
 
 	case UserInputErrorMsg:
 		// Show error, return to input
@@ -345,7 +363,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.selector = nil
 		m.state = StateWatching
 		m.spinnerMsg = "Running tools..."
-		cmds = append(cmds, m.startPolling())
+		cmds = append(cmds, m.startWatching())
 
 	case ApprovalErrorMsg:
 		m.appendToViewport(fmt.Sprintf("Error sending approval: %v\n", msg.Err))
@@ -355,7 +373,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.selector = nil
 		m.state = StateWatching
 		m.spinnerMsg = "Re-running tools..."
-		cmds = append(cmds, m.startPolling())
+		cmds = append(cmds, m.startWatching())
 
 	case EscalationErrorMsg:
 		m.appendToViewport(fmt.Sprintf("Error sending escalation response: %v\n", msg.Err))
@@ -364,7 +382,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appendToViewport(m.renderer.RenderSystemMessage("Context compacted."))
 		m.state = StateWatching
 		m.spinnerMsg = "Compacting..."
-		cmds = append(cmds, m.startPolling())
+		cmds = append(cmds, m.startWatching())
 
 	case CompactErrorMsg:
 		m.appendToViewport(fmt.Sprintf("Error compacting context: %v\n", msg.Err))
@@ -407,7 +425,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.selector = nil
 		m.state = StateWatching
 		m.spinnerMsg = "Processing answer..."
-		cmds = append(cmds, m.startPolling())
+		cmds = append(cmds, m.startWatching())
 
 	case UserInputQuestionErrorMsg:
 		m.appendToViewport(fmt.Sprintf("Error sending user input response: %v\n", msg.Err))
@@ -429,11 +447,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SessionCompletedMsg:
 		if m.plannerActive {
 			// Planner child completed — extract plan and return to parent
-			m.stopPolling()
+			m.stopWatching()
 			childWfID := m.workflowID
 			return &m, queryChildConversationItems(m.client, childWfID)
 		}
-		m.stopPolling()
+		m.stopWatching()
 		if msg.Result != nil {
 			sessionEndMsg := fmt.Sprintf("Session ended. Tokens: %d", msg.Result.TotalTokens)
 			if msg.Result.TotalCachedTokens > 0 {
@@ -450,7 +468,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SessionErrorMsg:
 		if m.plannerActive {
 			// Planner child errored or completed while polling — extract plan
-			m.stopPolling()
+			m.stopWatching()
 			childWfID := m.workflowID
 			return &m, queryChildConversationItems(m.client, childWfID)
 		}
@@ -1135,7 +1153,7 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		}
 		if !m.plannerActive && now.Sub(m.lastInterruptTime) < 2*time.Second {
 			// Second Ctrl+C within 2s — disconnect
-			m.stopPolling()
+			m.stopWatching()
 			m.quitting = true
 			return m, tea.Quit
 		}
@@ -1158,7 +1176,7 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.textarea.Blur()
 		cmds := []tea.Cmd{
 			sendInterruptCmd(m.client, m.workflowID),
-			m.startPolling(),
+			m.startWatching(),
 		}
 		return m, tea.Batch(cmds...)
 
@@ -1172,7 +1190,7 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.textarea.Blur()
 		cmds := []tea.Cmd{
 			sendInterruptCmd(m.client, m.workflowID),
-			m.startPolling(),
+			m.startWatching(),
 		}
 		return m, tea.Batch(cmds...)
 
@@ -1186,7 +1204,7 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.textarea.Blur()
 		cmds := []tea.Cmd{
 			sendInterruptCmd(m.client, m.workflowID),
-			m.startPolling(),
+			m.startWatching(),
 		}
 		return m, tea.Batch(cmds...)
 
@@ -1268,7 +1286,7 @@ func (m *Model) handleWorkflowStarted(msg WorkflowStartedMsg) (tea.Model, tea.Cm
 		default:
 			m.state = StateWatching
 			m.spinnerMsg = "Thinking..."
-			return m, m.startPolling()
+			return m, m.startWatching()
 		}
 	}
 
@@ -1277,7 +1295,7 @@ func (m *Model) handleWorkflowStarted(msg WorkflowStartedMsg) (tea.Model, tea.Cm
 	if m.config.Message != "" {
 		m.state = StateWatching
 		m.spinnerMsg = "Thinking..."
-		return m, m.startPolling()
+		return m, m.startWatching()
 	}
 	m.state = StateInput
 	return m, m.focusTextarea()
@@ -1291,26 +1309,26 @@ func (m *Model) handlePollResult(msg PollResultMsg) (tea.Model, tea.Cmd) {
 		case pollErrorCompleted:
 			if m.plannerActive {
 				// Planner child completed — extract plan and return to parent
-				m.stopPolling()
+				m.stopWatching()
 				childWfID := m.workflowID
 				return m, queryChildConversationItems(m.client, childWfID)
 			}
-			m.stopPolling()
+			m.stopWatching()
 			m.appendToViewport("Session ended.\n")
 			m.quitting = true
 			return m, tea.Quit
 		case pollErrorTransient:
-			return m, m.waitForPollResult()
+			return m, m.waitForWatchResult()
 		case pollErrorFatal:
 			m.consecutiveErrors++
 			if m.consecutiveErrors >= 5 {
-				m.stopPolling()
+				m.stopWatching()
 				m.appendToViewport(fmt.Sprintf("Error: %v\n", result.Err))
 				m.err = result.Err
 				m.quitting = true
 				return m, tea.Quit
 			}
-			return m, m.waitForPollResult()
+			return m, m.waitForWatchResult()
 		}
 	}
 	m.consecutiveErrors = 0
@@ -1346,7 +1364,7 @@ func (m *Model) handlePollResult(msg PollResultMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, sendApprovalResponseCmd(m.client, m.workflowID, workflow.ApprovalResponse{Approved: callIDs})
 		}
-		m.stopPolling()
+		m.stopWatching()
 		m.state = StateApproval
 		m.pendingApprovals = result.Status.PendingApprovals
 		m.appendToViewport(m.renderer.RenderApprovalContext(result.Status.PendingApprovals))
@@ -1357,7 +1375,7 @@ func (m *Model) handlePollResult(msg PollResultMsg) (tea.Model, tea.Cmd) {
 	// Check for escalation pending
 	if result.Status.Phase == workflow.PhaseEscalationPending &&
 		len(result.Status.PendingEscalations) > 0 && m.state == StateWatching {
-		m.stopPolling()
+		m.stopWatching()
 		m.state = StateEscalation
 		m.pendingEscalations = result.Status.PendingEscalations
 		m.appendToViewport(m.renderer.RenderEscalationContext(result.Status.PendingEscalations))
@@ -1368,7 +1386,7 @@ func (m *Model) handlePollResult(msg PollResultMsg) (tea.Model, tea.Cmd) {
 	// Check for user input question pending
 	if result.Status.Phase == workflow.PhaseUserInputPending &&
 		result.Status.PendingUserInputRequest != nil && m.state == StateWatching {
-		m.stopPolling()
+		m.stopWatching()
 		m.state = StateUserInputQuestion
 		m.pendingUserInputReq = result.Status.PendingUserInputRequest
 		sel := m.buildUserInputSelector(result.Status.PendingUserInputRequest)
@@ -1385,7 +1403,7 @@ func (m *Model) handlePollResult(msg PollResultMsg) (tea.Model, tea.Cmd) {
 	// Check if turn is complete (only transition from Watching to avoid duplicates
 	// when a stale poll result arrives after we already transitioned to Input)
 	if m.isTurnComplete(result.Items) && result.Status.Phase == workflow.PhaseWaitingForInput && m.state == StateWatching {
-		m.stopPolling()
+		m.stopWatching()
 		m.state = StateInput
 		m.suggestion = ""
 
@@ -1401,7 +1419,142 @@ func (m *Model) handlePollResult(msg PollResultMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Continue polling
-	return m, m.waitForPollResult()
+	return m, m.waitForWatchResult()
+}
+
+func (m *Model) handleWatchResult(msg WatchResultMsg) (tea.Model, tea.Cmd) {
+	result := msg.Result
+
+	if result.Err != nil {
+		switch classifyPollError(result.Err) {
+		case pollErrorCompleted:
+			if m.plannerActive {
+				m.stopWatching()
+				childWfID := m.workflowID
+				return m, queryChildConversationItems(m.client, childWfID)
+			}
+			m.stopWatching()
+			m.appendToViewport("Session ended.\n")
+			m.quitting = true
+			return m, tea.Quit
+		case pollErrorTransient:
+			return m, m.waitForWatchResult()
+		case pollErrorFatal:
+			m.consecutiveErrors++
+			if m.consecutiveErrors >= 5 {
+				m.stopWatching()
+				m.appendToViewport(fmt.Sprintf("Error: %v\n", result.Err))
+				m.err = result.Err
+				m.quitting = true
+				return m, tea.Quit
+			}
+			return m, m.waitForWatchResult()
+		}
+	}
+	m.consecutiveErrors = 0
+
+	// Handle compaction: reset rendered seq to re-render all items
+	if result.Compacted {
+		m.lastRenderedSeq = -1
+	}
+
+	// Render new items
+	m.renderNewItems(result.Items)
+
+	// Update status
+	m.spinnerMsg = PhaseMessage(result.Status.Phase, result.Status.ToolsInFlight)
+	m.totalTokens = result.Status.TotalTokens
+	m.totalCachedTokens = result.Status.TotalCachedTokens
+	m.turnCount = result.Status.TurnCount
+	if result.Status.WorkerVersion != "" {
+		m.workerVersion = result.Status.WorkerVersion
+	}
+	m.lastPhase = result.Status.Phase
+
+	// Check for plan changes and render
+	if planChanged(m.lastRenderedPlan, result.Status.Plan) {
+		rendered := m.renderer.RenderPlan(result.Status.Plan)
+		if rendered != "" {
+			m.appendToViewport(rendered)
+		}
+		m.lastRenderedPlan = result.Status.Plan
+	}
+
+	// Check for approval pending
+	if result.Status.Phase == workflow.PhaseApprovalPending &&
+		len(result.Status.PendingApprovals) > 0 && m.state == StateWatching {
+		if m.autoApprove {
+			callIDs := make([]string, len(result.Status.PendingApprovals))
+			for i, ap := range result.Status.PendingApprovals {
+				callIDs[i] = ap.CallID
+			}
+			return m, sendApprovalResponseCmd(m.client, m.workflowID, workflow.ApprovalResponse{Approved: callIDs})
+		}
+		m.stopWatching()
+		m.state = StateApproval
+		m.pendingApprovals = result.Status.PendingApprovals
+		m.appendToViewport(m.renderer.RenderApprovalContext(result.Status.PendingApprovals))
+		m.selector = m.buildApprovalSelector(result.Status.PendingApprovals)
+		return m, nil
+	}
+
+	// Check for escalation pending
+	if result.Status.Phase == workflow.PhaseEscalationPending &&
+		len(result.Status.PendingEscalations) > 0 && m.state == StateWatching {
+		m.stopWatching()
+		m.state = StateEscalation
+		m.pendingEscalations = result.Status.PendingEscalations
+		m.appendToViewport(m.renderer.RenderEscalationContext(result.Status.PendingEscalations))
+		m.selector = m.buildEscalationSelector()
+		return m, nil
+	}
+
+	// Check for user input question pending
+	if result.Status.Phase == workflow.PhaseUserInputPending &&
+		result.Status.PendingUserInputRequest != nil && m.state == StateWatching {
+		m.stopWatching()
+		m.state = StateUserInputQuestion
+		m.pendingUserInputReq = result.Status.PendingUserInputRequest
+		sel := m.buildUserInputSelector(result.Status.PendingUserInputRequest)
+		if sel != nil {
+			m.appendToViewport(m.renderer.RenderUserInputQuestionContext(result.Status.PendingUserInputRequest))
+			m.selector = sel
+			return m, nil
+		}
+		m.appendToViewport(m.renderer.RenderUserInputQuestionPrompt(result.Status.PendingUserInputRequest))
+		return m, m.focusTextarea()
+	}
+
+	// Check if completed
+	if result.Completed {
+		m.stopWatching()
+		if m.plannerActive {
+			childWfID := m.workflowID
+			return m, queryChildConversationItems(m.client, childWfID)
+		}
+		m.appendToViewport("Session ended.\n")
+		m.quitting = true
+		return m, tea.Quit
+	}
+
+	// Check if turn is complete
+	if m.isTurnComplete(result.Items) && result.Status.Phase == workflow.PhaseWaitingForInput && m.state == StateWatching {
+		m.stopWatching()
+		m.state = StateInput
+		m.suggestion = ""
+
+		cmds := []tea.Cmd{m.focusTextarea()}
+
+		if result.Status.Suggestion != "" {
+			m.applySuggestion(result.Status.Suggestion)
+		} else if !m.config.DisableSuggestions {
+			cmds = append(cmds, m.scheduleSuggestionPoll())
+		}
+		return m, tea.Batch(cmds...)
+	}
+
+	// Continue watching
+	return m, m.waitForWatchResult()
 }
 
 func (m *Model) renderNewItems(items []models.ConversationItem) {
@@ -1444,7 +1597,7 @@ func (m *Model) handlePlanRequestAccepted(msg PlanRequestAcceptedMsg) (tea.Model
 
 	m.state = StateWatching
 	m.spinnerMsg = "Planning..."
-	return m, m.startPolling()
+	return m, m.startWatching()
 }
 
 func (m *Model) handlePlannerCompleted(msg PlannerCompletedMsg) (tea.Model, tea.Cmd) {
@@ -1493,33 +1646,40 @@ func (m *Model) focusTextarea() tea.Cmd {
 	return textarea.Blink
 }
 
-func (m *Model) startPolling() tea.Cmd {
-	m.stopPolling()
+func (m *Model) startWatching() tea.Cmd {
+	m.stopWatching()
 
-	var pollCtx context.Context
-	pollCtx, m.pollCancel = context.WithCancel(context.Background())
+	if m.client == nil {
+		return nil // No client (test mode) — skip watching
+	}
 
-	poller := NewPoller(m.client, m.workflowID, PollInterval)
-	go poller.RunPolling(pollCtx, m.pollCh)
+	var watchCtx context.Context
+	watchCtx, m.watchCancel = context.WithCancel(context.Background())
 
-	return m.waitForPollResult()
+	watcher := NewWatcher(m.client, m.workflowID)
+	if m.config.ConnectionTimeout > 0 {
+		watcher.WithRPCTimeout(m.config.ConnectionTimeout)
+	}
+	go watcher.RunWatching(watchCtx, m.watchCh, m.lastRenderedSeq, m.lastPhase)
+
+	return m.waitForWatchResult()
 }
 
-func (m *Model) waitForPollResult() tea.Cmd {
-	ch := m.pollCh
+func (m *Model) waitForWatchResult() tea.Cmd {
+	ch := m.watchCh
 	return func() tea.Msg {
 		result, ok := <-ch
 		if !ok {
 			return SessionCompletedMsg{}
 		}
-		return PollResultMsg{Result: result}
+		return WatchResultMsg{Result: result}
 	}
 }
 
-func (m *Model) stopPolling() {
-	if m.pollCancel != nil {
-		m.pollCancel()
-		m.pollCancel = nil
+func (m *Model) stopWatching() {
+	if m.watchCancel != nil {
+		m.watchCancel()
+		m.watchCancel = nil
 	}
 }
 

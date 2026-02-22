@@ -44,6 +44,11 @@ func AgenticWorkflow(ctx workflow.Context, input WorkflowInput) (WorkflowResult,
 	// Build tool specs based on configuration and profile
 	state.ToolSpecs = buildToolSpecs(input.Config.Tools, state.ResolvedProfile)
 
+	// Initialize MCP servers and discover tools (before first turn)
+	if err := state.initMcpServers(ctx); err != nil {
+		return WorkflowResult{}, err
+	}
+
 	// If BaseInstructions is empty, config was not pre-assembled by HarnessWorkflow
 	// (e.g. direct invocation from E2E tests or CLI). Load from the worker filesystem.
 	if state.Config.BaseInstructions == "" {
@@ -129,7 +134,7 @@ func (s *SessionState) runMultiTurnLoop(ctx workflow.Context, ctrl *LoopControl)
 					logger.Info("Idle timeout reached but active children exist, deferring CAN")
 				} else {
 					logger.Info("Idle timeout reached, triggering ContinueAsNew")
-					return s.continueAsNew(ctx)
+					return s.continueAsNew(ctx, ctrl)
 				}
 			}
 		}
@@ -171,7 +176,7 @@ func (s *SessionState) runMultiTurnLoop(ctx workflow.Context, ctrl *LoopControl)
 
 		if done {
 			// ContinueAsNew was triggered
-			return s.continueAsNew(ctx)
+			return s.continueAsNew(ctx, ctrl)
 		}
 
 		// Accumulate iterations for CAN threshold across turns.
@@ -186,7 +191,7 @@ func (s *SessionState) runMultiTurnLoop(ctx workflow.Context, ctrl *LoopControl)
 			} else {
 				logger.Info("Total iterations across turns reached CAN threshold",
 					"total", s.TotalIterationsForCAN)
-				return s.continueAsNew(ctx)
+				return s.continueAsNew(ctx, ctrl)
 			}
 		}
 
@@ -196,6 +201,7 @@ func (s *SessionState) runMultiTurnLoop(ctx workflow.Context, ctrl *LoopControl)
 				Type:   models.ItemTypeTurnComplete,
 				TurnID: ctrl.CurrentTurnID(),
 			})
+			ctrl.NotifyItemAdded()
 		}
 
 		// Workflows without request_user_input auto-complete after a turn.
@@ -241,7 +247,11 @@ func awaitWithIdleTimeout(ctx workflow.Context, condition func() bool) (bool, er
 }
 
 // continueAsNew prepares state and triggers ContinueAsNew.
-func (s *SessionState) continueAsNew(ctx workflow.Context) (WorkflowResult, error) {
+// Accepts ctrl so it can set draining to wake any blocked get_state_update handlers.
+func (s *SessionState) continueAsNew(ctx workflow.Context, ctrl *LoopControl) (WorkflowResult, error) {
+	// Mark as draining so blocked get_state_update handlers wake up and return.
+	ctrl.SetDraining()
+
 	// Wait for all update handlers to finish before ContinueAsNew
 	_ = workflow.Await(ctx, func() bool {
 		return workflow.AllHandlersFinished(ctx)

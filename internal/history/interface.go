@@ -50,4 +50,12 @@ type ContextManager interface {
 
 	// GetTurnCount returns the number of user turns
 	GetTurnCount() (int, error)
+
+	// GetItemsSince returns items with Seq > sinceSeq.
+	// If sinceSeq refers to a stale position (after compaction reset Seq numbers),
+	// returns all items with compacted=true so the caller can reset its cursor.
+	GetItemsSince(sinceSeq int) (items []models.ConversationItem, compacted bool, err error)
+
+	// GetLatestSeq returns the Seq of the most recent item, or -1 if empty.
+	GetLatestSeq() int
 }
