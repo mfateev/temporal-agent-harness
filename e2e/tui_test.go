@@ -1,8 +1,10 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -96,15 +98,23 @@ func TestTUI(t *testing.T) {
 		cmd.Env = append(cmd.Env, "RESUME_SESSION_ID="+seedID)
 		t.Logf("Seed session for resume test: %s", seedID)
 	}
-	cmd.Stdout = os.Stdout
+	// Capture stdout for latency tracking while still printing to os.Stdout.
+	var tuiOutput bytes.Buffer
+	cmd.Stdout = io.MultiWriter(os.Stdout, &tuiOutput)
 	cmd.Stderr = os.Stderr
 
 	t.Log("Running: npx @microsoft/tui-test")
-	if err := cmd.Run(); err != nil {
+	latencyTracker.Track(t)
+	runErr := cmd.Run()
+
+	// Record TUI sub-test latencies from tui-test output (✔/✗ lines with durations).
+	latencyTracker.AddTUIResults(tuiOutput.String())
+
+	if runErr != nil {
 		if tuiCtx.Err() != nil {
-			t.Fatalf("TUI tests killed (workflow failure or 4m deadline): %v", err)
+			t.Fatalf("TUI tests killed (workflow failure or 4m deadline): %v", runErr)
 		}
-		t.Fatalf("TUI tests failed: %v", err)
+		t.Fatalf("TUI tests failed: %v", runErr)
 	}
 }
 
