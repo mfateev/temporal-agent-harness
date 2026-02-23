@@ -103,7 +103,8 @@ const (
 	// ApprovalNever auto-approves everything, never prompts.
 	ApprovalNever ApprovalMode = "never"
 	// ApprovalOnFailure auto-approves in sandbox, escalates on failure.
-	// Maps to: codex-rs on-failure approval mode
+	// DEPRECATED: prefer ApprovalUnlessTrusted for interactive runs or
+	// ApprovalNever for non-interactive runs (Codex PR #11631).
 	ApprovalOnFailure ApprovalMode = "on-failure"
 )
 

@@ -33,7 +33,7 @@ func main() {
 	noColor := flag.Bool("no-color", false, "Disable colored output")
 	inline := flag.Bool("inline", false, "Disable alt-screen mode (inline output)")
 	fullAuto := flag.Bool("full-auto", false, "Auto-approve all tool calls without prompting")
-	approvalMode := flag.String("approval-mode", "", "Approval mode: unless-trusted, never, on-failure")
+	approvalMode := flag.String("approval-mode", "", "Approval mode: unless-trusted, never, on-failure (deprecated)")
 	sandboxMode := flag.String("sandbox", "", "Sandbox mode: full-access, read-only, workspace-write")
 	sandboxWritable := flag.String("sandbox-writable", "", "Comma-separated writable roots for workspace-write sandbox")
 	sandboxNetwork := flag.Bool("sandbox-network", true, "Allow network access in sandbox")

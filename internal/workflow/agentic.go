@@ -55,6 +55,11 @@ func AgenticWorkflow(ctx workflow.Context, input WorkflowInput) (WorkflowResult,
 		state.resolveInstructions(ctx)
 	}
 
+	// Warn if using deprecated on-failure mode (Codex PR #11631)
+	if state.Config.ApprovalMode == models.ApprovalOnFailure {
+		workflow.GetLogger(ctx).Warn("`on-failure` approval policy is deprecated and will be removed in a future release. Use `unless-trusted` for interactive approvals or `never` for non-interactive runs.")
+	}
+
 	// Copy pre-loaded exec policy rules, or load from the worker if not provided.
 	state.ExecPolicyRules = input.Config.ExecPolicyRules
 	if state.ExecPolicyRules == "" {
