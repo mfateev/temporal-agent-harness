@@ -41,20 +41,11 @@ type CLIOverrides struct {
 	// Provider overrides the model provider.
 	Provider string `json:"provider,omitempty"`
 
-	// ApprovalMode overrides the approval policy.
-	ApprovalMode models.ApprovalMode `json:"approval_mode,omitempty"`
+	// Permissions overrides (approval, sandbox, env).
+	Permissions models.Permissions `json:"permissions,omitempty"`
 
 	// SessionTaskQueue overrides the task queue for session activities.
 	SessionTaskQueue string `json:"session_task_queue,omitempty"`
-
-	// SandboxMode overrides the sandbox mode ("full-access", "read-only", "workspace-write").
-	SandboxMode string `json:"sandbox_mode,omitempty"`
-
-	// SandboxWritableRoots overrides the writable roots for workspace-write mode.
-	SandboxWritableRoots []string `json:"sandbox_writable_roots,omitempty"`
-
-	// SandboxNetworkAccess overrides whether network is allowed in the sandbox.
-	SandboxNetworkAccess bool `json:"sandbox_network_access,omitempty"`
 
 	// DisableSuggestions disables prompt suggestions after turn completion.
 	DisableSuggestions bool `json:"disable_suggestions,omitempty"`
@@ -265,7 +256,7 @@ func resolveHarnessConfig(ctx workflow.Context, overrides CLIOverrides) (models.
 	merged := instructions.MergeInstructions(instructions.MergeInput{
 		WorkerProjectDocs:        workerDocs,
 		UserPersonalInstructions: personalInstructions,
-		ApprovalMode:             string(overrides.ApprovalMode),
+		ApprovalMode:             string(overrides.Permissions.ApprovalMode),
 		Cwd:                      overrides.Cwd,
 	})
 
@@ -280,8 +271,8 @@ func resolveHarnessConfig(ctx workflow.Context, overrides CLIOverrides) (models.
 	cfg.CodexHome = overrides.CodexHome
 	cfg.SessionTaskQueue = overrides.SessionTaskQueue
 
-	if overrides.ApprovalMode != "" {
-		cfg.ApprovalMode = overrides.ApprovalMode
+	if overrides.Permissions.ApprovalMode != "" {
+		cfg.Permissions.ApprovalMode = overrides.Permissions.ApprovalMode
 	}
 	if overrides.Provider != "" {
 		cfg.Model.Provider = overrides.Provider
@@ -376,20 +367,20 @@ func applyOverrides(cfg *models.SessionConfiguration, o *CLIOverrides) {
 	if o.Provider != "" {
 		cfg.Model.Provider = o.Provider
 	}
-	if o.ApprovalMode != "" {
-		cfg.ApprovalMode = o.ApprovalMode
+	if o.Permissions.ApprovalMode != "" {
+		cfg.Permissions.ApprovalMode = o.Permissions.ApprovalMode
+	}
+	if o.Permissions.SandboxMode != "" {
+		cfg.Permissions.SandboxMode = o.Permissions.SandboxMode
+	}
+	if len(o.Permissions.SandboxWritableRoots) > 0 {
+		cfg.Permissions.SandboxWritableRoots = o.Permissions.SandboxWritableRoots
+	}
+	if o.Permissions.SandboxNetworkAccess {
+		cfg.Permissions.SandboxNetworkAccess = o.Permissions.SandboxNetworkAccess
 	}
 	if o.SessionTaskQueue != "" {
 		cfg.SessionTaskQueue = o.SessionTaskQueue
-	}
-	if o.SandboxMode != "" {
-		cfg.SandboxMode = o.SandboxMode
-	}
-	if len(o.SandboxWritableRoots) > 0 {
-		cfg.SandboxWritableRoots = o.SandboxWritableRoots
-	}
-	if o.SandboxNetworkAccess {
-		cfg.SandboxNetworkAccess = o.SandboxNetworkAccess
 	}
 	if o.DisableSuggestions {
 		cfg.DisableSuggestions = o.DisableSuggestions

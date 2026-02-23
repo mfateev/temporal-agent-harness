@@ -25,7 +25,7 @@ import (
 func (s *SessionState) runAgenticTurn(ctx workflow.Context, ctrl *LoopControl) (bool, error) {
 	logger := workflow.GetLogger(ctx)
 	s.compactedThisTurn = false
-	gate := NewApprovalGate(s.Config.ApprovalMode, s.ExecPolicyRules)
+	gate := NewApprovalGate(s.Config.Permissions.ApprovalMode, s.ExecPolicyRules)
 	executor := NewToolsExecutor(s.ToolSpecs, s.Config.Cwd, s.Config.SessionTaskQueue)
 	if len(s.McpToolLookup) > 0 {
 		executor.WithMcpContext(s.ConversationID, s.McpToolLookup)
@@ -420,7 +420,7 @@ func (s *SessionState) approveAndExecuteTools(
 	ctrl.ClearToolsInFlight()
 
 	// On-failure mode escalation
-	if s.Config.ApprovalMode == models.ApprovalOnFailure {
+	if s.Config.Permissions.ApprovalMode == models.ApprovalOnFailure {
 		toolResults, err = s.handleOnFailureEscalation(ctx, ctrl, functionCalls, toolResults)
 		if err != nil {
 			return false, err

@@ -108,6 +108,21 @@ const (
 	ApprovalOnFailure ApprovalMode = "on-failure"
 )
 
+// Permissions consolidates all permission-related session settings.
+//
+// Maps to: codex-rs/protocol/src/config_types.rs Permissions
+type Permissions struct {
+	ApprovalMode             ApprovalMode      `json:"approval_mode,omitempty"`
+	SandboxMode              string            `json:"sandbox_mode,omitempty"`           // "full-access", "read-only", "workspace-write"
+	SandboxWritableRoots     []string          `json:"sandbox_writable_roots,omitempty"` // Directories writable in workspace-write mode
+	SandboxNetworkAccess     bool              `json:"sandbox_network_access,omitempty"` // Whether network is allowed in sandbox
+	EnvInherit               string            `json:"env_inherit,omitempty"`                 // "all" (default), "none", "core"
+	EnvIgnoreDefaultExcludes *bool             `json:"env_ignore_default_excludes,omitempty"` // nil = true (default: keep sensitive vars)
+	EnvExclude               []string          `json:"env_exclude,omitempty"`                 // Wildcard patterns to exclude
+	EnvSet                   map[string]string `json:"env_set,omitempty"`                     // Explicit overrides
+	EnvIncludeOnly           []string          `json:"env_include_only,omitempty"`             // Whitelist (if non-empty)
+}
+
 // SessionConfiguration configures a complete agentic session.
 //
 // Maps to: codex-rs/core/src/codex.rs SessionConfiguration
@@ -123,8 +138,8 @@ type SessionConfiguration struct {
 	// Tool configuration
 	Tools ToolsConfig `json:"tools"`
 
-	// Approval mode (empty/unset treated as "never" for backward compat)
-	ApprovalMode ApprovalMode `json:"approval_mode,omitempty"`
+	// Permissions (approval mode, sandbox, environment)
+	Permissions Permissions `json:"permissions,omitempty"`
 
 	// Execution context
 	Cwd string `json:"cwd,omitempty"` // Working directory for tool execution
@@ -139,19 +154,6 @@ type SessionConfiguration struct {
 	// LoadExecPolicy activity.
 	// Empty string means no rules loaded.
 	ExecPolicyRules string `json:"exec_policy_rules,omitempty"`
-
-	// Sandbox configuration
-	SandboxMode          string   `json:"sandbox_mode,omitempty"`           // "full-access", "read-only", "workspace-write"
-	SandboxWritableRoots []string `json:"sandbox_writable_roots,omitempty"` // Directories writable in workspace-write mode
-	SandboxNetworkAccess bool     `json:"sandbox_network_access,omitempty"` // Whether network is allowed in sandbox
-
-	// Environment variable filtering for shell commands.
-	// Maps to: codex-rs ShellEnvironmentPolicy
-	EnvInherit               string            `json:"env_inherit,omitempty"`                 // "all" (default), "none", "core"
-	EnvIgnoreDefaultExcludes *bool             `json:"env_ignore_default_excludes,omitempty"` // nil = true (default: keep sensitive vars)
-	EnvExclude               []string          `json:"env_exclude,omitempty"`                 // Wildcard patterns to exclude
-	EnvSet                   map[string]string `json:"env_set,omitempty"`                     // Explicit overrides
-	EnvIncludeOnly           []string          `json:"env_include_only,omitempty"`             // Whitelist (if non-empty)
 
 	// Context compaction threshold (in estimated tokens). When the conversation
 	// history exceeds this limit, proactive compaction is triggered. 0 = disabled.
