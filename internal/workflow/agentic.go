@@ -56,7 +56,7 @@ func AgenticWorkflow(ctx workflow.Context, input WorkflowInput) (WorkflowResult,
 	}
 
 	// Warn if using deprecated on-failure mode (Codex PR #11631)
-	if state.Config.ApprovalMode == models.ApprovalOnFailure {
+	if state.Config.Permissions.ApprovalMode == models.ApprovalOnFailure {
 		workflow.GetLogger(ctx).Warn("`on-failure` approval policy is deprecated and will be removed in a future release. Use `unless-trusted` for interactive approvals or `never` for non-interactive runs.")
 	}
 

@@ -87,22 +87,24 @@ func main() {
 	}
 
 	config := cli.Config{
-		TemporalHost:         *temporalHost,
-		Message:              msg,
-		Model:                *model,
-		NoMarkdown:           *noMarkdown,
-		NoColor:              *noColor,
-		ApprovalMode:         resolvedApproval,
-		SandboxMode:          *sandboxMode,
-		SandboxWritableRoots: writableRoots,
-		SandboxNetworkAccess: *sandboxNetwork,
-		CodexHome:            *codexHome,
-		Provider:             resolvedProvider,
-		Inline:               *inline,
-		DisableSuggestions:   *noSuggestions,
-		MemoryEnabled:        *memory,
-		MemoryDbPath:         *memoryDb,
-		ConnectionTimeout:    *connTimeout,
+		TemporalHost: *temporalHost,
+		Message:      msg,
+		Model:        *model,
+		NoMarkdown:   *noMarkdown,
+		NoColor:      *noColor,
+		Permissions: models.Permissions{
+			ApprovalMode:         resolvedApproval,
+			SandboxMode:          *sandboxMode,
+			SandboxWritableRoots: writableRoots,
+			SandboxNetworkAccess: *sandboxNetwork,
+		},
+		CodexHome:          *codexHome,
+		Provider:           resolvedProvider,
+		Inline:             *inline,
+		DisableSuggestions: *noSuggestions,
+		MemoryEnabled:      *memory,
+		MemoryDbPath:       *memoryDb,
+		ConnectionTimeout:  *connTimeout,
 	}
 
 	if err := cli.Run(config); err != nil {

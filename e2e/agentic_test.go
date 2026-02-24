@@ -127,12 +127,23 @@ func TestMain(m *testing.M) {
 	latencyTracker = NewLatencyTracker()
 
 	// 7. Run tests
+	start := time.Now()
 	code := m.Run()
+	elapsed := time.Since(start)
 
 	// 7b. Write latency log (always, even on failure — helps debug slow tests)
 	latencyTracker.WriteLog()
 
-	// 7c. Write E2E passed marker on success
+	// 7c. Check total suite time against threshold
+	const e2eTimeoutThreshold = 90 * time.Second
+	if elapsed > e2eTimeoutThreshold {
+		log.Printf("E2E: REGRESSION: total suite time %.1fs exceeds %v threshold", elapsed.Seconds(), e2eTimeoutThreshold)
+		if code == 0 {
+			code = 1
+		}
+	}
+
+	// 7d. Write E2E passed marker on success
 	if code == 0 {
 		writeE2EPassedMarker()
 	}
@@ -287,7 +298,38 @@ func (lt *LatencyTracker) AddTUIResults(output string) {
 	}
 }
 
-// WriteLog writes the collected latencies to e2e/.test-latencies.log.
+// readBaseline reads the existing .test-latencies.log and returns a map of
+// test name → duration. Returns nil if the file doesn't exist or can't be parsed.
+func readBaseline(path string) map[string]time.Duration {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	baseline := make(map[string]time.Duration)
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Format: "%-60s %8.2fs  %s" — name (up to 60 chars, padded), duration, status
+		// Find the duration by looking for the "s  " pattern (seconds followed by two spaces and status)
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		name := fields[0]
+		durStr := strings.TrimSuffix(fields[1], "s")
+		var secs float64
+		if _, err := fmt.Sscanf(durStr, "%f", &secs); err != nil {
+			continue
+		}
+		baseline[name] = time.Duration(secs * float64(time.Second))
+	}
+	return baseline
+}
+
+// WriteLog writes the collected latencies to e2e/.test-latencies.log and prints
+// a delta report comparing current run against the previous baseline.
 func (lt *LatencyTracker) WriteLog() {
 	lt.mu.Lock()
 	defer lt.mu.Unlock()
@@ -301,6 +343,10 @@ func (lt *LatencyTracker) WriteLog() {
 
 	logPath := filepath.Join(root, "e2e", ".test-latencies.log")
 
+	// Read baseline before overwriting
+	baseline := readBaseline(logPath)
+
+	// Write new log
 	var b strings.Builder
 	for _, e := range lt.entries {
 		status := "PASS"
@@ -315,6 +361,63 @@ func (lt *LatencyTracker) WriteLog() {
 		return
 	}
 	log.Printf("E2E: Wrote latency log to %s (%d tests)", logPath, len(lt.entries))
+
+	// Print delta report
+	lt.printDeltaReport(baseline)
+}
+
+// printDeltaReport prints a comparison table between baseline and current latencies.
+func (lt *LatencyTracker) printDeltaReport(baseline map[string]time.Duration) {
+	var report strings.Builder
+	report.WriteString("E2E Latency Delta Report:\n")
+	report.WriteString(fmt.Sprintf("  %-55s %10s %10s %12s\n", "Test Name", "Baseline", "Current", "Delta"))
+
+	var totalBaseline, totalCurrent time.Duration
+	hasBaseline := len(baseline) > 0
+
+	for _, e := range lt.entries {
+		currentSecs := e.Duration.Seconds()
+		totalCurrent += e.Duration
+
+		if base, ok := baseline[e.Name]; ok {
+			baseSecs := base.Seconds()
+			totalBaseline += base
+			delta := currentSecs - baseSecs
+			pct := 0.0
+			if baseSecs > 0 {
+				pct = (delta / baseSecs) * 100
+			}
+			sign := "+"
+			if delta < 0 {
+				sign = ""
+			}
+			report.WriteString(fmt.Sprintf("  %-55s %9.2fs %9.2fs %s%.2fs (%s%.0f%%)\n",
+				e.Name, baseSecs, currentSecs, sign, delta, sign, pct))
+		} else {
+			report.WriteString(fmt.Sprintf("  %-55s %10s %9.2fs\n",
+				e.Name, "\u2014", currentSecs))
+		}
+	}
+
+	// Total line
+	if hasBaseline {
+		totalDelta := totalCurrent.Seconds() - totalBaseline.Seconds()
+		totalPct := 0.0
+		if totalBaseline.Seconds() > 0 {
+			totalPct = (totalDelta / totalBaseline.Seconds()) * 100
+		}
+		sign := "+"
+		if totalDelta < 0 {
+			sign = ""
+		}
+		report.WriteString(fmt.Sprintf("  %-55s %9.1fs %9.1fs %s%.2fs (%s%.0f%%)\n",
+			"TOTAL", totalBaseline.Seconds(), totalCurrent.Seconds(), sign, totalDelta, sign, totalPct))
+	} else {
+		report.WriteString(fmt.Sprintf("  %-55s %10s %9.1fs\n",
+			"TOTAL", "\u2014", totalCurrent.Seconds()))
+	}
+
+	log.Print(report.String())
 }
 
 // waitForPort polls a TCP port until it accepts connections or the timeout expires.

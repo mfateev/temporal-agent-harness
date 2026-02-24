@@ -831,7 +831,7 @@ func (s *AgenticWorkflowTestSuite) TestMultiTurn_ManualCompact_RejectsWhenCompac
 // testInputWithApproval returns a WorkflowInput with ApprovalMode set.
 func testInputWithApproval(message string, mode models.ApprovalMode) WorkflowInput {
 	input := testInput(message)
-	input.Config.ApprovalMode = mode
+	input.Config.Permissions.ApprovalMode = mode
 	return input
 }
 
@@ -3487,7 +3487,7 @@ func (s *AgenticWorkflowTestSuite) TestUpdatePlan_ApprovalSkip() {
 
 	// Use unless-trusted approval mode
 	input := testInput("Plan my task with approval")
-	input.Config.ApprovalMode = models.ApprovalUnlessTrusted
+	input.Config.Permissions.ApprovalMode = models.ApprovalUnlessTrusted
 
 	s.env.ExecuteWorkflow(AgenticWorkflow, input)
 

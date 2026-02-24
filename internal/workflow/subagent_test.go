@@ -167,8 +167,10 @@ func TestBuildAgentSharedConfig(t *testing.T) {
 		Tools: models.ToolsConfig{
 			EnabledTools: allTools(),
 		},
-		Cwd:          "/workspace",
-		ApprovalMode: models.ApprovalNever,
+		Cwd: "/workspace",
+		Permissions: models.Permissions{
+			ApprovalMode: models.ApprovalNever,
+		},
 	}
 
 	t.Run("child at max depth has collab disabled", func(t *testing.T) {
@@ -187,7 +189,7 @@ func TestBuildAgentSharedConfig(t *testing.T) {
 	t.Run("inherits parent config", func(t *testing.T) {
 		cfg := buildAgentSharedConfig(parent, 1)
 		assert.Equal(t, parent.Cwd, cfg.Cwd)
-		assert.Equal(t, parent.ApprovalMode, cfg.ApprovalMode)
+		assert.Equal(t, parent.Permissions.ApprovalMode, cfg.Permissions.ApprovalMode)
 		assert.Equal(t, parent.Model.Model, cfg.Model.Model)
 	})
 }

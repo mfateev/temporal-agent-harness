@@ -97,12 +97,9 @@ type Config struct {
 	NoMarkdown   bool
 	NoColor      bool
 	Cwd          string
-	ApprovalMode models.ApprovalMode
 
-	// Sandbox settings
-	SandboxMode          string   // "full-access", "read-only", "workspace-write"
-	SandboxWritableRoots []string // Writable roots for workspace-write mode
-	SandboxNetworkAccess bool     // Whether network is allowed
+	// Permissions (approval, sandbox, env)
+	Permissions models.Permissions
 
 	// Codex config
 	CodexHome string // Path to codex config directory (default: ~/.codex)

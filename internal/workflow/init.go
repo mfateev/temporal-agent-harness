@@ -75,7 +75,7 @@ func (s *SessionState) resolveInstructions(ctx workflow.Context) {
 	merged := instructions.MergeInstructions(instructions.MergeInput{
 		PromptSuffix:      s.ResolvedProfile.PromptSuffix,
 		WorkerProjectDocs: workerDocs,
-		ApprovalMode:      string(s.Config.ApprovalMode),
+		ApprovalMode:      string(s.Config.Permissions.ApprovalMode),
 		Cwd:               s.Config.Cwd,
 	})
 
