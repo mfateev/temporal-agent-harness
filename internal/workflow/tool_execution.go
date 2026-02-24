@@ -80,17 +80,12 @@ func executeToolsInParallel(ctx workflow.Context, functionCalls []models.Convers
 			}
 		}
 
-		// Resolve per-tool timeout for StartToCloseTimeout.
+		// Resolve per-tool timeout and retry policy.
 		timeout := resolveToolTimeout(specByName, fc.Name, args)
 
 		actOpts := workflow.ActivityOptions{
 			StartToCloseTimeout: timeout,
-			RetryPolicy: &temporal.RetryPolicy{
-				InitialInterval:    time.Second,
-				BackoffCoefficient: 2.0,
-				MaximumInterval:    time.Minute,
-				MaximumAttempts:    5,
-			},
+			RetryPolicy:         resolveRetryPolicy(specByName, fc.Name),
 		}
 		// exec_command and write_stdin are long-running activities that
 		// heartbeat during output collection. Set HeartbeatTimeout so
@@ -235,4 +230,41 @@ func resolveToolTimeout(specByName map[string]tools.ToolSpec, toolName string, a
 
 	// 3. Global fallback.
 	return time.Duration(tools.DefaultToolTimeoutMs) * time.Millisecond
+}
+
+// resolveRetryPolicy returns the Temporal RetryPolicy for a tool activity.
+//
+// Priority:
+//  1. ToolSpec.RetryPolicy if set on the tool
+//  2. Default policy (3 attempts with exponential backoff)
+//
+// Mutating tools (shell, write_file, apply_patch) set NonRetryable=true
+// to prevent re-execution of side-effecting commands.
+func resolveRetryPolicy(specByName map[string]tools.ToolSpec, toolName string) *temporal.RetryPolicy {
+	if spec, ok := specByName[toolName]; ok && spec.RetryPolicy != nil {
+		p := spec.RetryPolicy
+		if p.NonRetryable {
+			return &temporal.RetryPolicy{MaximumAttempts: 1}
+		}
+		maxAttempts := p.MaxAttempts
+		if maxAttempts == 0 {
+			maxAttempts = 3
+		}
+		return &temporal.RetryPolicy{
+			InitialInterval:    time.Second,
+			BackoffCoefficient: 2.0,
+			MaximumInterval:    time.Minute,
+			MaximumAttempts:    maxAttempts,
+		}
+	}
+
+	// Default: 3 attempts with exponential backoff.
+	// Used for unknown tools (e.g. MCP tools) where transient network
+	// errors are likely and retrying is safe.
+	return &temporal.RetryPolicy{
+		InitialInterval:    time.Second,
+		BackoffCoefficient: 2.0,
+		MaximumInterval:    time.Minute,
+		MaximumAttempts:    3,
+	}
 }

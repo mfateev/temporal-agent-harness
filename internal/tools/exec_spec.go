@@ -74,6 +74,7 @@ func NewExecCommandToolSpec() ToolSpec {
 - yield_time_ms controls how long to wait for initial output (default 10s, max 30s).`,
 		Parameters:       params,
 		DefaultTimeoutMs: DefaultExecCommandTimeoutMs,
+		RetryPolicy:      RetryNone, // stateful session — don't retry
 	}
 }
 
@@ -115,5 +116,6 @@ func NewWriteStdinToolSpec() ToolSpec {
 			},
 		},
 		DefaultTimeoutMs: DefaultWriteStdinTimeoutMs,
+		RetryPolicy:      RetryNone, // stateful session — don't retry
 	}
 }

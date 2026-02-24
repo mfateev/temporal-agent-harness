@@ -30,6 +30,24 @@ const (
 	DefaultToolTimeoutMs       = 120_000 // 2min — fallback for tools without a default
 )
 
+// ToolRetryPolicy configures Temporal activity retry behavior for a tool.
+// nil on a ToolSpec means "use the default policy" (3 attempts, exponential backoff).
+type ToolRetryPolicy struct {
+	MaxAttempts        int32 // 0 = use default (3)
+	NonRetryable       bool  // true = single attempt, no retries
+}
+
+// Convenience constructors for common retry policies.
+var (
+	// RetryNone disables retries (single attempt). Use for mutating or
+	// stateful tools where retrying could cause side effects.
+	RetryNone = &ToolRetryPolicy{NonRetryable: true}
+
+	// RetryDefault uses the standard policy (3 attempts with backoff).
+	// Use for read-only or idempotent tools.
+	RetryDefault = &ToolRetryPolicy{MaxAttempts: 3}
+)
+
 // ToolSpec defines the specification for a tool (sent to LLM in prompt).
 //
 // Maps to: codex-rs/core/src/tools/spec.rs ToolSpec::Function
@@ -47,6 +65,11 @@ type ToolSpec struct {
 	// activity when the LLM does not provide a timeout_ms argument.
 	// Tools that expose timeout_ms as a parameter let the LLM override this.
 	DefaultTimeoutMs int64 `json:"-"` // not sent to LLM
+
+	// RetryPolicy configures Temporal activity retries for this tool.
+	// nil means use the default policy (3 attempts with exponential backoff).
+	// Mutating tools (shell, write_file, apply_patch) should use RetryNone.
+	RetryPolicy *ToolRetryPolicy `json:"-"` // not sent to LLM
 }
 
 // ToolParameter defines a parameter for a tool.
@@ -125,6 +148,7 @@ func NewShellToolSpec(includePrefixRule bool) ToolSpec {
 - Always set the ` + "`workdir`" + ` param. Do not use ` + "`cd`" + ` unless absolutely necessary.`,
 		Parameters:       params,
 		DefaultTimeoutMs: DefaultShellTimeoutMs,
+		RetryPolicy:      RetryNone, // mutating — don't retry
 	}
 }
 
@@ -168,6 +192,7 @@ func NewShellCommandToolSpec(includePrefixRule bool) ToolSpec {
 - Always set the ` + "`workdir`" + ` param when using the shell_command function. Do not use ` + "`cd`" + ` unless absolutely necessary.`,
 		Parameters:       params,
 		DefaultTimeoutMs: DefaultShellTimeoutMs,
+		RetryPolicy:      RetryNone, // mutating — don't retry
 	}
 }
 
@@ -235,6 +260,7 @@ func NewReadFileToolSpec() ToolSpec {
 			},
 		},
 		DefaultTimeoutMs: DefaultReadFileTimeoutMs,
+		RetryPolicy:      RetryDefault, // read-only — safe to retry
 	}
 }
 
@@ -320,6 +346,7 @@ It is important to remember:
 			},
 		},
 		DefaultTimeoutMs: DefaultApplyPatchTimeoutMs,
+		RetryPolicy:      RetryNone, // mutating — don't retry
 	}
 }
 
@@ -346,6 +373,7 @@ func NewWriteFileToolSpec() ToolSpec {
 			},
 		},
 		DefaultTimeoutMs: DefaultWriteFileTimeoutMs,
+		RetryPolicy:      RetryNone, // mutating — don't retry
 	}
 }
 
@@ -383,6 +411,7 @@ func NewListDirToolSpec() ToolSpec {
 			},
 		},
 		DefaultTimeoutMs: DefaultListDirTimeoutMs,
+		RetryPolicy:      RetryDefault, // read-only — safe to retry
 	}
 }
 
@@ -475,5 +504,6 @@ func NewGrepFilesToolSpec() ToolSpec {
 			},
 		},
 		DefaultTimeoutMs: DefaultGrepFilesTimeoutMs,
+		RetryPolicy:      RetryDefault, // read-only — safe to retry
 	}
 }
