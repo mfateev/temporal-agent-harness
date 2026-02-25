@@ -482,6 +482,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case DiffResultMsg:
 		m.appendToViewport(msg.Output + "\n")
 
+	case InitResultMsg:
+		if msg.AlreadyExists {
+			m.appendToViewport(m.renderer.RenderSystemMessage(
+				fmt.Sprintf("AGENTS.md already exists at %s", msg.Path)))
+		} else if msg.Created {
+			m.appendToViewport(m.renderer.RenderSystemMessage(
+				fmt.Sprintf("Created AGENTS.md at %s", msg.Path)))
+		}
+
+	case InitErrorMsg:
+		m.appendToViewport(fmt.Sprintf("Error creating AGENTS.md: %v\n", msg.Err))
+
 	case ReviewResultMsg:
 		reviewMsg := buildReviewMessage(msg.Output)
 		if reviewMsg == "" {
@@ -935,6 +947,13 @@ func (m *Model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.state = StateWatching
 			m.textarea.Blur()
 			return m, cleanExecSessionsCmd(m.client, m.workflowID)
+		}
+		if line == "/init" {
+			cwd := m.config.Cwd
+			if cwd == "" {
+				cwd, _ = os.Getwd()
+			}
+			return m, runInitCmd(cwd)
 		}
 		if line == "/review" {
 			if m.workflowID == "" {

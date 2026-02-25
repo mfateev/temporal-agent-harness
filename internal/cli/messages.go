@@ -151,6 +151,18 @@ type ReviewResultMsg struct {
 	Output string
 }
 
+// InitResultMsg is sent when the /init scaffold completes.
+type InitResultMsg struct {
+	Path          string
+	Created       bool
+	AlreadyExists bool
+}
+
+// InitErrorMsg is sent when the /init scaffold fails.
+type InitErrorMsg struct {
+	Err error
+}
+
 // McpToolsResultMsg is sent when the MCP tools query completes.
 type McpToolsResultMsg struct {
 	Tools []workflow.McpToolSummary
