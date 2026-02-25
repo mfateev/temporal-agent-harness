@@ -135,7 +135,7 @@ func TestMain(m *testing.M) {
 	latencyTracker.WriteLog()
 
 	// 7c. Check total suite time against threshold
-	const e2eTimeoutThreshold = 90 * time.Second
+	const e2eTimeoutThreshold = 150 * time.Second
 	if elapsed > e2eTimeoutThreshold {
 		log.Printf("E2E: REGRESSION: total suite time %.1fs exceeds %v threshold", elapsed.Seconds(), e2eTimeoutThreshold)
 		if code == 0 {

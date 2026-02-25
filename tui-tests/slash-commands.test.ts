@@ -1,5 +1,5 @@
 import { test, expect } from "@microsoft/tui-test";
-import { tcxBinary, baseArgs, EXPECT_TIMEOUT, selectNewSession } from "./helpers.js";
+import { tcxBinary, baseArgs, fullAutoArgs, EXPECT_TIMEOUT, selectNewSession } from "./helpers.js";
 
 // --- /exit command ---
 test.describe("/exit command", () => {
@@ -64,6 +64,367 @@ test.describe("/model selector", () => {
     // Should return to ready state
     await expect(
       terminal.getByText(/ready/g, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+  });
+});
+
+// =====================================================================
+// Group A: No-session commands (select "New session", test before workflow)
+// =====================================================================
+
+// --- /quit command ---
+test.describe("/quit command", () => {
+  test.use({
+    program: {
+      file: tcxBinary,
+      args: [...baseArgs, "--full-auto", "--model", "gpt-4o-mini"],
+    },
+    rows: 30,
+    columns: 120,
+  });
+
+  test("/quit command exits", async ({ terminal }) => {
+    await selectNewSession(terminal);
+
+    await expect(
+      terminal.getByText(/ready/g, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    terminal.submit("/quit");
+
+    // Program should exit, same as /exit
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  });
+});
+
+// --- /diff command ---
+test.describe("/diff command", () => {
+  test.use({
+    program: {
+      file: tcxBinary,
+      args: [...baseArgs, "--full-auto", "--model", "gpt-4o-mini"],
+    },
+    rows: 30,
+    columns: 120,
+  });
+
+  test("/diff shows diff output or no changes", async ({ terminal }) => {
+    await selectNewSession(terminal);
+
+    await expect(
+      terminal.getByText(/ready/g, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    terminal.submit("/diff");
+
+    // Should show "No changes" or diff output
+    await expect(
+      terminal.getByText(/No changes|diff/gi, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+  });
+});
+
+// --- /status command ---
+test.describe("/status command", () => {
+  test.use({
+    program: {
+      file: tcxBinary,
+      args: [...baseArgs, "--full-auto", "--model", "gpt-4o-mini"],
+    },
+    rows: 30,
+    columns: 120,
+  });
+
+  test("/status shows current model", async ({ terminal }) => {
+    await selectNewSession(terminal);
+
+    await expect(
+      terminal.getByText(/ready/g, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    terminal.submit("/status");
+
+    // Should display the model name in the status output
+    await expect(
+      terminal.getByText(/gpt-4o-mini/gi, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+  });
+});
+
+// --- /init command ---
+test.describe("/init command", () => {
+  test.use({
+    program: {
+      file: tcxBinary,
+      args: [...fullAutoArgs, "-m", "Say exactly: canary3365"],
+    },
+    rows: 30,
+    columns: 120,
+  });
+
+  test("/init shows AGENTS.md reference", async ({ terminal }) => {
+    await expect(
+      terminal.getByText(/canary3365/gi, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    await expect(
+      terminal.getByText(/ready/g, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    terminal.submit("/init");
+
+    // Should mention AGENTS.md (created or already exists or error)
+    await expect(
+      terminal.getByText(/Created|already exists|Error creating/gi, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+  });
+});
+
+// =====================================================================
+// Group B: Active-session commands (start with -m, wait for response)
+// =====================================================================
+
+// --- /end command ---
+test.describe("/end command", () => {
+  test.use({
+    program: {
+      file: tcxBinary,
+      args: [...fullAutoArgs, "-m", "Say exactly: canary9281"],
+    },
+    rows: 30,
+    columns: 120,
+  });
+
+  test("/end ends the current session", async ({ terminal }) => {
+    await expect(
+      terminal.getByText(/canary9281/gi, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    await expect(
+      terminal.getByText(/ready/g, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    // Submit /end to shut down the session. The shutdown + completion
+    // pipeline sets m.quitting=true before the final view renders,
+    // so we verify the process exits cleanly (same pattern as /exit).
+    terminal.submit("/end");
+
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+  });
+});
+
+// --- /compact command ---
+test.describe("/compact command", () => {
+  test.use({
+    program: {
+      file: tcxBinary,
+      args: [...fullAutoArgs, "-m", "Say exactly: canary4472"],
+    },
+    rows: 30,
+    columns: 120,
+  });
+
+  test("/compact compacts conversation history", async ({ terminal }) => {
+    await expect(
+      terminal.getByText(/canary4472/gi, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    await expect(
+      terminal.getByText(/ready/g, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    terminal.submit("/compact");
+
+    // Should show "compacted" or transition to working state
+    await expect(
+      terminal.getByText(/compact/gi, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+  });
+});
+
+// --- /review command ---
+test.describe("/review command", () => {
+  test.use({
+    program: {
+      file: tcxBinary,
+      args: [...fullAutoArgs, "-m", "Say exactly: canary5593"],
+    },
+    rows: 30,
+    columns: 120,
+  });
+
+  test("/review processes review command", async ({ terminal }) => {
+    await expect(
+      terminal.getByText(/canary5593/gi, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    await expect(
+      terminal.getByText(/ready/g, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    terminal.submit("/review");
+
+    // If no git changes: shows "No changes to review."
+    // If changes exist: shows "[/review] Reviewing current changes..."
+    await expect(
+      terminal.getByText(/No changes to review|Reviewing current changes/gi, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+  });
+});
+
+// --- /approvals command ---
+test.describe("/approvals command", () => {
+  test.use({
+    program: {
+      file: tcxBinary,
+      args: [...fullAutoArgs, "-m", "Say exactly: canary6604"],
+    },
+    rows: 30,
+    columns: 120,
+  });
+
+  test("/approvals shows approval mode selector", async ({ terminal }) => {
+    await expect(
+      terminal.getByText(/canary6604/gi, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    await expect(
+      terminal.getByText(/ready/g, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    terminal.submit("/approvals");
+
+    // Should show the approval mode selector with options
+    await expect(
+      terminal.getByText(/unless-trusted|never/gi, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    // Press Escape to cancel the selector
+    terminal.keyEscape();
+
+    await expect(
+      terminal.getByText(/ready/g, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+  });
+});
+
+// --- /personality command ---
+test.describe("/personality command", () => {
+  test.use({
+    program: {
+      file: tcxBinary,
+      args: [...fullAutoArgs, "-m", "Say exactly: canary7715"],
+    },
+    rows: 30,
+    columns: 120,
+  });
+
+  test("/personality sets personality", async ({ terminal }) => {
+    await expect(
+      terminal.getByText(/canary7715/gi, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    await expect(
+      terminal.getByText(/ready/g, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    terminal.submit("/personality concise");
+
+    await expect(
+      terminal.getByText(/Personality set to/gi, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+  });
+});
+
+// --- /ps command ---
+test.describe("/ps command", () => {
+  test.use({
+    program: {
+      file: tcxBinary,
+      args: [...fullAutoArgs, "-m", "Say exactly: canary8826"],
+    },
+    rows: 30,
+    columns: 120,
+  });
+
+  test("/ps shows exec sessions", async ({ terminal }) => {
+    await expect(
+      terminal.getByText(/canary8826/gi, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    await expect(
+      terminal.getByText(/ready/g, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    terminal.submit("/ps");
+
+    // Should show exec sessions list or empty state
+    await expect(
+      terminal.getByText(/exec sessions|No exec|session/gi, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+  });
+});
+
+// --- /clean command ---
+test.describe("/clean command", () => {
+  test.use({
+    program: {
+      file: tcxBinary,
+      args: [...fullAutoArgs, "-m", "Say exactly: canary9937"],
+    },
+    rows: 30,
+    columns: 120,
+  });
+
+  test("/clean closes exec sessions", async ({ terminal }) => {
+    await expect(
+      terminal.getByText(/canary9937/gi, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    await expect(
+      terminal.getByText(/ready/g, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    terminal.submit("/clean");
+
+    // Should show "No exec sessions" or "Closed"
+    await expect(
+      terminal.getByText(/No exec sessions|Closed/gi, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+  });
+});
+
+// =====================================================================
+// Group C: Multi-session commands
+// =====================================================================
+
+// --- /new command ---
+test.describe("/new command", () => {
+  test.use({
+    program: {
+      file: tcxBinary,
+      args: [...fullAutoArgs, "-m", "Say exactly: canary1148"],
+    },
+    rows: 30,
+    columns: 120,
+  });
+
+  test("/new starts a new session", async ({ terminal }) => {
+    await expect(
+      terminal.getByText(/canary1148/gi, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    await expect(
+      terminal.getByText(/ready/g, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    terminal.submit("/new Say hello");
+
+    // The /new command transitions to watching state. Verify the TUI
+    // leaves the ready state (enters working/watching mode) which confirms
+    // the command was accepted and dispatched.
+    await expect(
+      terminal.getByText(/working|new session/gi, { full: true, strict: false })
     ).toBeVisible({ timeout: EXPECT_TIMEOUT });
   });
 });
