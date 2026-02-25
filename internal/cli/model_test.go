@@ -856,6 +856,49 @@ func TestModel_TurnCompleteNoSuggestionPollWhenDisabled(t *testing.T) {
 	assert.Equal(t, "", m.suggestion)
 }
 
+// --- /new command tests ---
+
+func TestModel_NewCommand_NoMessage(t *testing.T) {
+	m := newTestModel()
+	m.workflowID = "test-wf"
+
+	m.textarea.SetValue("/new")
+	result, _ := m.handleInputKey(tea.KeyMsg{Type: tea.KeyEnter})
+	rm := result.(*Model)
+	assert.Equal(t, StateInput, rm.state)
+	assert.Contains(t, rm.viewportContent, "Usage: /new <message>")
+}
+
+func TestModel_NewCommand_WithMessage(t *testing.T) {
+	m := newTestModel()
+	m.workflowID = "test-wf"
+	m.harnessID = "harness-abc"
+
+	m.textarea.SetValue("/new hello world")
+	result, cmd := m.handleInputKey(tea.KeyMsg{Type: tea.KeyEnter})
+	rm := result.(*Model)
+	assert.Equal(t, StateWatching, rm.state)
+	assert.Equal(t, "Starting new session...", rm.spinnerMsg)
+	assert.NotNil(t, cmd)
+	assert.Contains(t, rm.viewportContent, "Starting new session")
+}
+
+func TestModel_NewSessionStartedMsg_ResetsState(t *testing.T) {
+	m := newTestModel()
+	m.state = StateWatching
+	m.workflowID = "old-wf"
+	m.totalTokens = 5000
+	m.turnCount = 10
+
+	result, _ := m.Update(NewSessionStartedMsg{WorkflowID: "new-wf"})
+	rm := result.(*Model)
+	assert.Equal(t, "new-wf", rm.workflowID)
+	assert.Equal(t, 0, rm.totalTokens)
+	assert.Equal(t, 0, rm.turnCount)
+	assert.Equal(t, -1, rm.lastRenderedSeq)
+	assert.Contains(t, rm.viewportContent, "Started new session new-wf")
+}
+
 // --- /personality command tests ---
 
 func TestModel_PersonalityCommand_NoSession(t *testing.T) {

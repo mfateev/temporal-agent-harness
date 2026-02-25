@@ -183,6 +183,16 @@ type PersonalityUpdateErrorMsg struct {
 	Err error
 }
 
+// NewSessionStartedMsg is sent when a /new session has been started.
+type NewSessionStartedMsg struct {
+	WorkflowID string
+}
+
+// NewSessionErrorMsg is sent when starting a new session fails.
+type NewSessionErrorMsg struct {
+	Err error
+}
+
 // McpToolsResultMsg is sent when the MCP tools query completes.
 type McpToolsResultMsg struct {
 	Tools []workflow.McpToolSummary

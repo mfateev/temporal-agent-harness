@@ -214,6 +214,9 @@ type Model struct {
 
 	// /approvals command state
 	selectingApprovalMode bool
+
+	// Harness workflow ID (derived from cwd, used by /new and /resume)
+	harnessID string
 }
 
 // NewModel creates a new bubbletea model.
@@ -241,6 +244,11 @@ func NewModel(config Config, c client.Client) Model {
 		initialState = StateSessionPicker // show picker while fetching sessions
 	}
 
+	cwd := config.Cwd
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+
 	return Model{
 		config:          config,
 		client:          c,
@@ -253,6 +261,7 @@ func NewModel(config Config, c client.Client) Model {
 		watchCh:         make(chan WatchResult, 1),
 		modelName:       config.Model,
 		provider:        config.Provider,
+		harnessID:       harnessWorkflowID(cwd),
 	}
 }
 
@@ -484,6 +493,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case DiffResultMsg:
 		m.appendToViewport(msg.Output + "\n")
+
+	case NewSessionStartedMsg:
+		// Reset state for the new session
+		m.stopWatching()
+		m.viewportContent = ""
+		m.viewport.SetContent("")
+		m.lastRenderedSeq = -1
+		m.totalTokens = 0
+		m.totalCachedTokens = 0
+		m.contextWindowPct = 100
+		m.turnCount = 0
+		m.workerVersion = ""
+		m.lastPhase = ""
+		m.consecutiveErrors = 0
+		m.plannerActive = false
+		m.suggestion = ""
+		m.workflowID = msg.WorkflowID
+		m.appendToViewport(m.renderer.RenderSystemMessage(
+			fmt.Sprintf("Started new session %s", msg.WorkflowID)))
+		m.state = StateWatching
+		m.spinnerMsg = "Thinking..."
+		cmds = append(cmds, m.startWatching())
+
+	case NewSessionErrorMsg:
+		m.appendToViewport(fmt.Sprintf("Error starting new session: %v\n", msg.Err))
+		m.state = StateInput
+		cmds = append(cmds, m.focusTextarea())
 
 	case PersonalityUpdateSentMsg:
 		if msg.Personality == "" {
@@ -1020,6 +1056,18 @@ func (m *Model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.state = StateWatching
 			m.textarea.Blur()
 			return m, cleanExecSessionsCmd(m.client, m.workflowID)
+		}
+		if strings.HasPrefix(line, "/new") {
+			newMsg := strings.TrimSpace(strings.TrimPrefix(line, "/new"))
+			if newMsg == "" {
+				m.appendToViewport("Usage: /new <message>\n")
+				return m, nil
+			}
+			m.appendToViewport(m.renderer.RenderSystemMessage("Starting new session..."))
+			m.spinnerMsg = "Starting new session..."
+			m.state = StateWatching
+			m.textarea.Blur()
+			return m, startNewSessionCmd(m.client, m.harnessID, newMsg, m.config)
 		}
 		if strings.HasPrefix(line, "/personality") {
 			if m.workflowID == "" {
