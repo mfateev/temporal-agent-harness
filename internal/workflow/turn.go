@@ -300,6 +300,7 @@ func (s *SessionState) recordLLMResponse(ctx workflow.Context, ctrl *LoopControl
 
 	s.TotalTokens += result.TokenUsage.TotalTokens
 	s.TotalCachedTokens += result.TokenUsage.CachedTokens
+	s.LastTokenUsage = result.TokenUsage
 	logger.Info("LLM call completed",
 		"tokens", result.TokenUsage.TotalTokens,
 		"cached_tokens", result.TokenUsage.CachedTokens,

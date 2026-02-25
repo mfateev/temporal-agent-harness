@@ -48,6 +48,18 @@ test("status bar shows turn count", async ({ terminal }) => {
   ).toBeVisible({ timeout: EXPECT_TIMEOUT });
 });
 
+test("status bar shows context window percentage", async ({ terminal }) => {
+  await expect(
+    terminal.getByText(/kumquat/gi, { full: true, strict: false })
+  ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+  // After a turn completes, estimated history tokens > 0 so context window
+  // remaining is < 100%, which triggers the "ctx NN%" display.
+  await expect(
+    terminal.getByText(/ctx \d+%/g, { full: true, strict: false })
+  ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+});
+
 test("status bar shows ready state after response", async ({ terminal }) => {
   await expect(
     terminal.getByText(/kumquat/gi, { full: true, strict: false })
