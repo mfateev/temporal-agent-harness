@@ -856,6 +856,66 @@ func TestModel_TurnCompleteNoSuggestionPollWhenDisabled(t *testing.T) {
 	assert.Equal(t, "", m.suggestion)
 }
 
+// --- /resume command tests ---
+
+func TestModel_ResumeCommand_StartsSessionFetch(t *testing.T) {
+	m := newTestModel()
+	m.workflowID = "test-wf"
+	m.harnessID = "harness-abc"
+
+	m.textarea.SetValue("/resume")
+	result, cmd := m.handleInputKey(tea.KeyMsg{Type: tea.KeyEnter})
+	rm := result.(*Model)
+	assert.True(t, rm.resumingSession)
+	assert.Equal(t, StateWatching, rm.state)
+	assert.NotNil(t, cmd)
+}
+
+func TestModel_ResumeSessionsList_NoSessions(t *testing.T) {
+	m := newTestModel()
+	m.state = StateWatching
+	m.resumingSession = true
+
+	result, _ := m.Update(HarnessSessionsListMsg{Entries: nil})
+	rm := result.(*Model)
+	assert.False(t, rm.resumingSession)
+	assert.Equal(t, StateInput, rm.state)
+	assert.Contains(t, rm.viewportContent, "No running sessions found")
+}
+
+func TestModel_ResumeSessionsList_ShowsPicker(t *testing.T) {
+	m := newTestModel()
+	m.state = StateWatching
+	m.resumingSession = true
+
+	entries := []SessionListEntry{
+		{WorkflowID: "harness-abc/sess-001", StartTime: time.Now(), Status: "running"},
+	}
+	result, _ := m.Update(HarnessSessionsListMsg{Entries: entries})
+	rm := result.(*Model)
+	assert.Equal(t, StateSessionPicker, rm.state)
+	assert.True(t, rm.selectingSession)
+	assert.NotNil(t, rm.selector)
+}
+
+func TestModel_ResumeSessionPicker_EscReturnsToInput(t *testing.T) {
+	m := newTestModel()
+	m.state = StateSessionPicker
+	m.resumingSession = true
+	m.selectingSession = true
+	m.sessionEntries = []SessionListEntry{
+		{WorkflowID: "harness-abc/sess-001", StartTime: time.Now(), Status: "running"},
+	}
+	m.selector = m.buildResumeSessionSelector(m.sessionEntries)
+
+	// Press Esc
+	result, _ := m.handleSessionPickerKey(tea.KeyMsg{Type: tea.KeyEsc})
+	rm := result.(*Model)
+	assert.False(t, rm.resumingSession)
+	assert.Equal(t, StateInput, rm.state)
+	assert.False(t, rm.quitting, "should not quit on Esc during /resume")
+}
+
 // --- /new command tests ---
 
 func TestModel_NewCommand_NoMessage(t *testing.T) {

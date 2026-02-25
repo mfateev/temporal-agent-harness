@@ -217,6 +217,9 @@ type Model struct {
 
 	// Harness workflow ID (derived from cwd, used by /new and /resume)
 	harnessID string
+
+	// /resume command state — distinguishes resume picker from startup picker
+	resumingSession bool
 }
 
 // NewModel creates a new bubbletea model.
@@ -307,11 +310,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case HarnessSessionsListMsg:
 		if msg.Err != nil {
-			// Failed to fetch sessions — fall back to input so user can still type
 			m.appendToViewport(fmt.Sprintf("Failed to fetch sessions: %v\n", msg.Err))
+			m.resumingSession = false
 			m.state = StateInput
 			return &m, m.focusTextarea()
 		}
+		if m.resumingSession {
+			// /resume picker — show sessions for mid-session switching
+			if len(msg.Entries) == 0 {
+				m.appendToViewport("No running sessions found.\n")
+				m.resumingSession = false
+				m.state = StateInput
+				return &m, m.focusTextarea()
+			}
+			m.sessionEntries = msg.Entries
+			m.selectingSession = true
+			m.selector = m.buildResumeSessionSelector(msg.Entries)
+			m.state = StateSessionPicker
+			return &m, nil
+		}
+		// Startup picker
 		m.sessionEntries = msg.Entries
 		m.selectingSession = true
 		m.selector = m.buildSessionSelector(msg.Entries)
@@ -1057,6 +1075,14 @@ func (m *Model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.textarea.Blur()
 			return m, cleanExecSessionsCmd(m.client, m.workflowID)
 		}
+		if line == "/resume" {
+			m.appendToViewport(m.renderer.RenderSystemMessage("Fetching sessions..."))
+			m.resumingSession = true
+			m.spinnerMsg = "Fetching sessions..."
+			m.state = StateWatching
+			m.textarea.Blur()
+			return m, fetchSessionsCmd(m.client, m.harnessID)
+		}
 		if strings.HasPrefix(line, "/new") {
 			newMsg := strings.TrimSpace(strings.TrimPrefix(line, "/new"))
 			if newMsg == "" {
@@ -1204,9 +1230,15 @@ func (m *Model) handleSessionPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	done := m.selector.Update(msg)
 	if done {
 		if m.selector.Cancelled() {
-			// Esc — quit
 			m.selector = nil
 			m.selectingSession = false
+			if m.resumingSession {
+				// Esc during /resume — go back to input
+				m.resumingSession = false
+				m.state = StateInput
+				return m, m.focusTextarea()
+			}
+			// Esc during startup — quit
 			m.quitting = true
 			return m, tea.Quit
 		}
@@ -1214,6 +1246,35 @@ func (m *Model) handleSessionPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.selector = nil
 		m.selectingSession = false
 
+		if m.resumingSession {
+			// /resume picker — no "New session" option, direct index mapping
+			m.resumingSession = false
+			if idx < 0 || idx >= len(m.sessionEntries) {
+				m.appendToViewport("Invalid selection.\n")
+				m.state = StateInput
+				return m, m.focusTextarea()
+			}
+			entry := m.sessionEntries[idx]
+			// Stop watching current session, switch to selected
+			m.stopWatching()
+			m.viewportContent = ""
+			m.viewport.SetContent("")
+			m.lastRenderedSeq = -1
+			m.totalTokens = 0
+			m.totalCachedTokens = 0
+			m.contextWindowPct = 100
+			m.turnCount = 0
+			m.workerVersion = ""
+			m.lastPhase = ""
+			m.consecutiveErrors = 0
+			m.plannerActive = false
+			m.suggestion = ""
+			m.state = StateWatching
+			m.spinnerMsg = "Connecting..."
+			return m, resumeWorkflowCmd(m.client, entry.WorkflowID)
+		}
+
+		// Startup picker
 		if idx == 0 {
 			// "New session" selected — go to input
 			m.state = StateInput
@@ -2058,6 +2119,24 @@ func (m *Model) buildSessionSelector(entries []SessionListEntry) *SelectorModel 
 	}
 	for _, e := range entries {
 		// Extract the last path segment (e.g. "sess-20260219-150405-1")
+		short := e.WorkflowID
+		if idx := strings.LastIndex(short, "/"); idx >= 0 {
+			short = short[idx+1:]
+		}
+		icon := sessionStatusIcon(e.Status)
+		label := fmt.Sprintf("%-32s %s %-10s  %s",
+			short, icon, e.Status, e.StartTime.Local().Format("Jan 02, 15:04"))
+		opts = append(opts, SelectorOption{Label: label})
+	}
+	sel := NewSelectorModel(opts, m.styles)
+	sel.SetWidth(m.width)
+	return sel
+}
+
+// buildResumeSessionSelector creates a session picker for /resume (no "New session" option).
+func (m *Model) buildResumeSessionSelector(entries []SessionListEntry) *SelectorModel {
+	var opts []SelectorOption
+	for _, e := range entries {
 		short := e.WorkflowID
 		if idx := strings.LastIndex(short, "/"); idx >= 0 {
 			short = short[idx+1:]
