@@ -394,6 +394,124 @@ test.describe("/clean command", () => {
   });
 });
 
+// --- /mcp command ---
+test.describe("/mcp command", () => {
+  test.use({
+    program: {
+      file: tcxBinary,
+      args: [...fullAutoArgs, "-m", "Say exactly: canary2256"],
+    },
+    rows: 30,
+    columns: 120,
+  });
+
+  test("/mcp shows MCP tools status", async ({ terminal }) => {
+    await expect(
+      terminal.getByText(/canary2256/gi, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    await expect(
+      terminal.getByText(/ready/g, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    terminal.submit("/mcp");
+
+    // No MCP servers configured in default test env → "No MCP tools registered."
+    // OR shows "Fetching MCP tools..." spinner, then result
+    await expect(
+      terminal.getByText(/No MCP tools|MCP Tools/gi, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+  });
+});
+
+// --- /plan command ---
+test.describe("/plan command", () => {
+  test.use({
+    program: {
+      file: tcxBinary,
+      args: [...fullAutoArgs, "-m", "Say exactly: canary4467"],
+    },
+    rows: 30,
+    columns: 120,
+  });
+
+  test("/plan starts plan mode", async ({ terminal }) => {
+    await expect(
+      terminal.getByText(/canary4467/gi, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    await expect(
+      terminal.getByText(/ready/g, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    terminal.submit("/plan What is 2+2?");
+
+    // Sync: "Starting plan mode..." / Async: "Plan mode active"
+    await expect(
+      terminal.getByText(/plan mode/gi, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+  });
+});
+
+// --- /done command ---
+test.describe("/done command", () => {
+  test.use({
+    program: {
+      file: tcxBinary,
+      args: [...fullAutoArgs, "-m", "Say exactly: canary5578"],
+    },
+    rows: 30,
+    columns: 120,
+  });
+
+  test("/done outside plan mode shows usage hint", async ({ terminal }) => {
+    await expect(
+      terminal.getByText(/canary5578/gi, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    await expect(
+      terminal.getByText(/ready/g, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    terminal.submit("/done");
+
+    // Not in plan mode → shows usage hint
+    await expect(
+      terminal.getByText(/Not in plan mode/gi, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+  });
+});
+
+// --- /resume command ---
+test.describe("/resume command", () => {
+  test.use({
+    program: {
+      file: tcxBinary,
+      args: [...fullAutoArgs, "-m", "Say exactly: canary6689"],
+    },
+    rows: 30,
+    columns: 120,
+  });
+
+  test("/resume shows session picker or no-sessions message", async ({ terminal }) => {
+    await expect(
+      terminal.getByText(/canary6689/gi, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    await expect(
+      terminal.getByText(/ready/g, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+
+    terminal.submit("/resume");
+
+    // Shows "Fetching sessions..." in viewport, then either a session picker
+    // (with workflow IDs and status like "running") or "No running sessions found."
+    await expect(
+      terminal.getByText(/Fetching sessions|No running sessions|running/gi, { full: true, strict: false })
+    ).toBeVisible({ timeout: EXPECT_TIMEOUT });
+  });
+});
+
 // =====================================================================
 // Group C: Multi-session commands
 // =====================================================================
