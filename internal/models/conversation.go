@@ -103,3 +103,32 @@ type TokenUsage struct {
 	CachedTokens         int `json:"cached_tokens"`
 	CacheCreationTokens  int `json:"cache_creation_tokens,omitempty"`
 }
+
+// RateLimitWindow describes a single rate-limit bucket (e.g. requests or tokens).
+//
+// Maps to: codex-rs/protocol/src/protocol.rs RateLimitWindow
+type RateLimitWindow struct {
+	Limit     *int    `json:"limit,omitempty"`
+	Remaining *int    `json:"remaining,omitempty"`
+	Reset     *string `json:"reset,omitempty"` // ISO-8601 timestamp or duration string
+}
+
+// CreditsSnapshot describes API credit balance state.
+//
+// Maps to: codex-rs/protocol/src/protocol.rs CreditsSnapshot
+type CreditsSnapshot struct {
+	Remaining *float64 `json:"remaining,omitempty"`
+	Granted   *float64 `json:"granted,omitempty"`
+}
+
+// RateLimitSnapshot captures rate-limit state from the most recent API response.
+// All fields are pointers so they are omitted when not populated.
+// Go SDKs do not currently expose HTTP response headers, so this struct will
+// remain nil until that support is added.
+//
+// Maps to: codex-rs/protocol/src/protocol.rs RateLimitSnapshot
+type RateLimitSnapshot struct {
+	Requests *RateLimitWindow `json:"requests,omitempty"`
+	Tokens   *RateLimitWindow `json:"tokens,omitempty"`
+	Credits  *CreditsSnapshot `json:"credits,omitempty"`
+}

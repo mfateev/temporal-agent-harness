@@ -111,6 +111,10 @@ type TurnStatus struct {
 	WorkerVersion           string                   `json:"worker_version,omitempty"`
 	Suggestion              string                   `json:"suggestion,omitempty"`
 	Plan                    *PlanState               `json:"plan,omitempty"`
+	LastTokenUsage          *models.TokenUsage       `json:"last_token_usage,omitempty"`
+	ContextWindowRemaining  int                      `json:"context_window_remaining_percent"`
+	ContextWindowTotal      int                      `json:"context_window_total"`
+	RateLimitSnapshot       *models.RateLimitSnapshot `json:"rate_limit_snapshot,omitempty"`
 }
 
 // WorkflowInput is the initial input to start a conversation.
@@ -339,9 +343,10 @@ type SessionState struct {
 	TurnCounter int `json:"turn_counter"`
 
 	// Cumulative stats (persist across ContinueAsNew)
-	TotalTokens       int      `json:"total_tokens"`
-	TotalCachedTokens int      `json:"total_cached_tokens"`
-	ToolCallsExecuted []string `json:"tool_calls_executed"`
+	TotalTokens       int                `json:"total_tokens"`
+	TotalCachedTokens int                `json:"total_cached_tokens"`
+	LastTokenUsage    models.TokenUsage  `json:"last_token_usage"`
+	ToolCallsExecuted []string           `json:"tool_calls_executed"`
 
 	// MCP tool routing map: qualified name → McpToolRef (server + original tool name).
 	// Persists across ContinueAsNew so MCP tool dispatch works after CAN.

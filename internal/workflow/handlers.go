@@ -35,6 +35,29 @@ func (s *SessionState) buildTurnStatus(ctrl *LoopControl) TurnStatus {
 		Suggestion:              ctrl.Suggestion(),
 		Plan:                    s.Plan,
 	}
+
+	// Per-turn token usage: copy as pointer if populated
+	if s.LastTokenUsage.TotalTokens > 0 {
+		tu := s.LastTokenUsage
+		status.LastTokenUsage = &tu
+	}
+
+	// Context window % remaining
+	total := s.Config.Model.ContextWindow
+	status.ContextWindowTotal = total
+	if total > 0 {
+		estimated, _ := s.History.EstimateTokenCount()
+		pct := (total - estimated) * 100 / total
+		if pct < 0 {
+			pct = 0
+		} else if pct > 100 {
+			pct = 100
+		}
+		status.ContextWindowRemaining = pct
+	}
+
+	// RateLimitSnapshot stays nil — Go SDKs don't expose HTTP response headers yet.
+
 	// Populate child agent summaries from AgentControl
 	if s.AgentCtl != nil {
 		for _, info := range s.AgentCtl.Agents {

@@ -152,6 +152,7 @@ type Model struct {
 	modelName         string
 	totalTokens       int
 	totalCachedTokens int
+	contextWindowPct  int
 	turnCount         int
 	spinnerMsg        string
 	workerVersion     string
@@ -327,6 +328,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Update status from snapshot
 		m.totalTokens = msg.Response.Status.TotalTokens
 		m.totalCachedTokens = msg.Response.Status.TotalCachedTokens
+		m.contextWindowPct = msg.Response.Status.ContextWindowRemaining
 		m.turnCount = msg.Response.Status.TurnCount
 		if msg.Response.Status.WorkerVersion != "" {
 			m.workerVersion = msg.Response.Status.WorkerVersion
@@ -548,6 +550,10 @@ func (m Model) renderStatusBar() string {
 	if m.totalCachedTokens > 0 {
 		tokens += fmt.Sprintf(" (%s cached)", formatTokens(m.totalCachedTokens))
 	}
+	ctxPct := ""
+	if m.contextWindowPct < 100 {
+		ctxPct = fmt.Sprintf(" · ctx %d%%", m.contextWindowPct)
+	}
 	turn := fmt.Sprintf("turn %d", m.turnCount)
 
 	var stateLabel string
@@ -585,7 +591,7 @@ func (m Model) renderStatusBar() string {
 	if wv == "" {
 		wv = "?"
 	}
-	left := fmt.Sprintf(" %s · %s tokens · %s · %s", model, tokens, turn, stateLabel)
+	left := fmt.Sprintf(" %s · %s tokens%s · %s · %s", model, tokens, ctxPct, turn, stateLabel)
 	right := fmt.Sprintf("cli:%s · worker:%s ", version.GitCommit, wv)
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
@@ -1341,6 +1347,7 @@ func (m *Model) handlePollResult(msg PollResultMsg) (tea.Model, tea.Cmd) {
 	m.spinnerMsg = PhaseMessage(result.Status.Phase, result.Status.ToolsInFlight)
 	m.totalTokens = result.Status.TotalTokens
 	m.totalCachedTokens = result.Status.TotalCachedTokens
+	m.contextWindowPct = result.Status.ContextWindowRemaining
 	m.turnCount = result.Status.TurnCount
 	if result.Status.WorkerVersion != "" {
 		m.workerVersion = result.Status.WorkerVersion
@@ -1466,6 +1473,7 @@ func (m *Model) handleWatchResult(msg WatchResultMsg) (tea.Model, tea.Cmd) {
 	m.spinnerMsg = PhaseMessage(result.Status.Phase, result.Status.ToolsInFlight)
 	m.totalTokens = result.Status.TotalTokens
 	m.totalCachedTokens = result.Status.TotalCachedTokens
+	m.contextWindowPct = result.Status.ContextWindowRemaining
 	m.turnCount = result.Status.TurnCount
 	if result.Status.WorkerVersion != "" {
 		m.workerVersion = result.Status.WorkerVersion
