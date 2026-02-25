@@ -90,6 +90,22 @@ func (s *SessionState) resolveInstructions(ctx workflow.Context) {
 		"user_len", len(merged.User))
 }
 
+// rebuildInstructions re-merges instructions from existing config values.
+// Used when config fields that affect instructions (personality, approval mode)
+// change mid-session. Does not reload worker docs — uses cached values.
+func (s *SessionState) rebuildInstructions() {
+	merged := instructions.MergeInstructions(instructions.MergeInput{
+		PromptSuffix:             s.ResolvedProfile.PromptSuffix,
+		CLIProjectDocs:           s.Config.CLIProjectDocs,
+		UserPersonalInstructions: s.Config.UserPersonalInstructions,
+		ApprovalMode:             string(s.Config.Permissions.ApprovalMode),
+		Cwd:                      s.Config.Cwd,
+		Personality:              s.Config.Personality,
+	})
+	s.Config.DeveloperInstructions = merged.Developer
+	s.Config.UserInstructions = merged.User
+}
+
 // loadExecPolicy loads exec policy rules from the worker filesystem.
 // Called when ExecPolicyRules is empty (i.e. not pre-loaded by HarnessWorkflow).
 // Non-fatal: falls back to empty policy on failure.

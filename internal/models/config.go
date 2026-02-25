@@ -186,6 +186,10 @@ type SessionConfiguration struct {
 	// Maps to: codex-rs SessionConfiguration.mcp_servers
 	McpServers map[string]mcp.McpServerConfig `json:"mcp_servers,omitempty"`
 
+	// Personality sets a communication style that gets prepended to instructions.
+	// Set via the CLI /personality command. Empty means no personality override.
+	Personality string `json:"personality,omitempty"`
+
 	// Memory subsystem configuration.
 	// Maps to: codex-rs MemoriesConfig
 	MemoryEnabled bool           `json:"memory_enabled,omitempty"`

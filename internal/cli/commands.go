@@ -350,6 +350,98 @@ func sendUpdateModelCmd(c client.Client, workflowID, provider, model string) tea
 	}
 }
 
+// startNewSessionCmd sends a start_session Update to the harness workflow to
+// spawn a new child AgenticWorkflow. Returns NewSessionStartedMsg on success.
+func startNewSessionCmd(c client.Client, harnessID, message string, config Config) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		cwd := config.Cwd
+		if cwd == "" {
+			cwd, _ = os.Getwd()
+		}
+
+		updateHandle, err := c.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
+			WorkflowID: harnessID,
+			UpdateName: workflow.UpdateStartSession,
+			Args: []interface{}{workflow.StartSessionRequest{
+				UserMessage: message,
+				OverrideConfig: &workflow.CLIOverrides{
+					Provider:           config.Provider,
+					Model:              config.Model,
+					Permissions:        config.Permissions,
+					DisableSuggestions: config.DisableSuggestions,
+					MemoryEnabled:      config.MemoryEnabled,
+					MemoryDbPath:       config.MemoryDbPath,
+					Cwd:                cwd,
+				},
+			}},
+			WaitForStage: client.WorkflowUpdateStageCompleted,
+		})
+		if err != nil {
+			return NewSessionErrorMsg{Err: fmt.Errorf("failed to send start_session: %w", err)}
+		}
+
+		var resp workflow.StartSessionResponse
+		if err := updateHandle.Get(ctx, &resp); err != nil {
+			return NewSessionErrorMsg{Err: fmt.Errorf("start_session failed: %w", err)}
+		}
+
+		return NewSessionStartedMsg{WorkflowID: resp.SessionWorkflowID}
+	}
+}
+
+// sendUpdatePersonalityCmd sends an update_personality Update to the workflow.
+func sendUpdatePersonalityCmd(c client.Client, workflowID, personality string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		updateHandle, err := c.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
+			WorkflowID:   workflowID,
+			UpdateName:   workflow.UpdatePersonality,
+			Args:         []interface{}{workflow.UpdatePersonalityRequest{Personality: personality}},
+			WaitForStage: client.WorkflowUpdateStageCompleted,
+		})
+		if err != nil {
+			return PersonalityUpdateErrorMsg{Err: err}
+		}
+
+		var resp workflow.UpdatePersonalityResponse
+		if err := updateHandle.Get(ctx, &resp); err != nil {
+			return PersonalityUpdateErrorMsg{Err: err}
+		}
+
+		return PersonalityUpdateSentMsg{Personality: personality}
+	}
+}
+
+// sendUpdateApprovalModeCmd sends an update_approval_mode Update to the workflow.
+func sendUpdateApprovalModeCmd(c client.Client, workflowID, mode string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		updateHandle, err := c.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
+			WorkflowID:   workflowID,
+			UpdateName:   workflow.UpdateApprovalMode,
+			Args:         []interface{}{workflow.UpdateApprovalModeRequest{ApprovalMode: mode}},
+			WaitForStage: client.WorkflowUpdateStageCompleted,
+		})
+		if err != nil {
+			return ApprovalModeUpdateErrorMsg{Err: err}
+		}
+
+		var resp workflow.UpdateApprovalModeResponse
+		if err := updateHandle.Get(ctx, &resp); err != nil {
+			return ApprovalModeUpdateErrorMsg{Err: err}
+		}
+
+		return ApprovalModeUpdateSentMsg{Mode: mode}
+	}
+}
+
 // queryMcpToolsCmd queries the workflow for its MCP tool lookup table.
 func queryMcpToolsCmd(c client.Client, workflowID string) tea.Cmd {
 	return func() tea.Msg {

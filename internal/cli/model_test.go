@@ -856,6 +856,188 @@ func TestModel_TurnCompleteNoSuggestionPollWhenDisabled(t *testing.T) {
 	assert.Equal(t, "", m.suggestion)
 }
 
+// --- /resume command tests ---
+
+func TestModel_ResumeCommand_StartsSessionFetch(t *testing.T) {
+	m := newTestModel()
+	m.workflowID = "test-wf"
+	m.harnessID = "harness-abc"
+
+	m.textarea.SetValue("/resume")
+	result, cmd := m.handleInputKey(tea.KeyMsg{Type: tea.KeyEnter})
+	rm := result.(*Model)
+	assert.True(t, rm.resumingSession)
+	assert.Equal(t, StateWatching, rm.state)
+	assert.NotNil(t, cmd)
+}
+
+func TestModel_ResumeSessionsList_NoSessions(t *testing.T) {
+	m := newTestModel()
+	m.state = StateWatching
+	m.resumingSession = true
+
+	result, _ := m.Update(HarnessSessionsListMsg{Entries: nil})
+	rm := result.(*Model)
+	assert.False(t, rm.resumingSession)
+	assert.Equal(t, StateInput, rm.state)
+	assert.Contains(t, rm.viewportContent, "No running sessions found")
+}
+
+func TestModel_ResumeSessionsList_ShowsPicker(t *testing.T) {
+	m := newTestModel()
+	m.state = StateWatching
+	m.resumingSession = true
+
+	entries := []SessionListEntry{
+		{WorkflowID: "harness-abc/sess-001", StartTime: time.Now(), Status: "running"},
+	}
+	result, _ := m.Update(HarnessSessionsListMsg{Entries: entries})
+	rm := result.(*Model)
+	assert.Equal(t, StateSessionPicker, rm.state)
+	assert.True(t, rm.selectingSession)
+	assert.NotNil(t, rm.selector)
+}
+
+func TestModel_ResumeSessionPicker_EscReturnsToInput(t *testing.T) {
+	m := newTestModel()
+	m.state = StateSessionPicker
+	m.resumingSession = true
+	m.selectingSession = true
+	m.sessionEntries = []SessionListEntry{
+		{WorkflowID: "harness-abc/sess-001", StartTime: time.Now(), Status: "running"},
+	}
+	m.selector = m.buildResumeSessionSelector(m.sessionEntries)
+
+	// Press Esc
+	result, _ := m.handleSessionPickerKey(tea.KeyMsg{Type: tea.KeyEsc})
+	rm := result.(*Model)
+	assert.False(t, rm.resumingSession)
+	assert.Equal(t, StateInput, rm.state)
+	assert.False(t, rm.quitting, "should not quit on Esc during /resume")
+}
+
+// --- /new command tests ---
+
+func TestModel_NewCommand_NoMessage(t *testing.T) {
+	m := newTestModel()
+	m.workflowID = "test-wf"
+
+	m.textarea.SetValue("/new")
+	result, _ := m.handleInputKey(tea.KeyMsg{Type: tea.KeyEnter})
+	rm := result.(*Model)
+	assert.Equal(t, StateInput, rm.state)
+	assert.Contains(t, rm.viewportContent, "Usage: /new <message>")
+}
+
+func TestModel_NewCommand_WithMessage(t *testing.T) {
+	m := newTestModel()
+	m.workflowID = "test-wf"
+	m.harnessID = "harness-abc"
+
+	m.textarea.SetValue("/new hello world")
+	result, cmd := m.handleInputKey(tea.KeyMsg{Type: tea.KeyEnter})
+	rm := result.(*Model)
+	assert.Equal(t, StateWatching, rm.state)
+	assert.Equal(t, "Starting new session...", rm.spinnerMsg)
+	assert.NotNil(t, cmd)
+	assert.Contains(t, rm.viewportContent, "Starting new session")
+}
+
+func TestModel_NewSessionStartedMsg_ResetsState(t *testing.T) {
+	m := newTestModel()
+	m.state = StateWatching
+	m.workflowID = "old-wf"
+	m.totalTokens = 5000
+	m.turnCount = 10
+
+	result, _ := m.Update(NewSessionStartedMsg{WorkflowID: "new-wf"})
+	rm := result.(*Model)
+	assert.Equal(t, "new-wf", rm.workflowID)
+	assert.Equal(t, 0, rm.totalTokens)
+	assert.Equal(t, 0, rm.turnCount)
+	assert.Equal(t, -1, rm.lastRenderedSeq)
+	assert.Contains(t, rm.viewportContent, "Started new session new-wf")
+}
+
+// --- /personality command tests ---
+
+func TestModel_PersonalityCommand_NoSession(t *testing.T) {
+	m := newTestModel()
+	m.workflowID = ""
+
+	m.textarea.SetValue("/personality concise")
+	result, _ := m.handleInputKey(tea.KeyMsg{Type: tea.KeyEnter})
+	rm := result.(*Model)
+	assert.Equal(t, StateInput, rm.state)
+	assert.Contains(t, rm.viewportContent, "No active session")
+}
+
+func TestModel_PersonalityCommand_SetStyle(t *testing.T) {
+	m := newTestModel()
+	m.workflowID = "test-wf"
+
+	m.textarea.SetValue("/personality concise and friendly")
+	result, cmd := m.handleInputKey(tea.KeyMsg{Type: tea.KeyEnter})
+	rm := result.(*Model)
+	assert.Equal(t, StateWatching, rm.state)
+	assert.Equal(t, "Setting personality...", rm.spinnerMsg)
+	assert.NotNil(t, cmd)
+}
+
+func TestModel_PersonalityCommand_Clear(t *testing.T) {
+	m := newTestModel()
+	m.workflowID = "test-wf"
+
+	m.textarea.SetValue("/personality")
+	result, cmd := m.handleInputKey(tea.KeyMsg{Type: tea.KeyEnter})
+	rm := result.(*Model)
+	assert.Equal(t, StateWatching, rm.state)
+	assert.Equal(t, "Clearing personality...", rm.spinnerMsg)
+	assert.NotNil(t, cmd)
+}
+
+// --- /approvals command tests ---
+
+func TestModel_ApprovalsCommand_NoSession(t *testing.T) {
+	m := newTestModel()
+	m.workflowID = ""
+
+	m.textarea.SetValue("/approvals")
+	result, _ := m.handleInputKey(tea.KeyMsg{Type: tea.KeyEnter})
+	rm := result.(*Model)
+	assert.Equal(t, StateInput, rm.state)
+	assert.Contains(t, rm.viewportContent, "No active session")
+}
+
+func TestModel_ApprovalsCommand_ShowsSelector(t *testing.T) {
+	m := newTestModel()
+	m.workflowID = "test-wf"
+
+	m.textarea.SetValue("/approvals")
+	result, _ := m.handleInputKey(tea.KeyMsg{Type: tea.KeyEnter})
+	rm := result.(*Model)
+	assert.True(t, rm.selectingApprovalMode)
+	assert.NotNil(t, rm.selector)
+	assert.Contains(t, rm.viewportContent, "Select approval mode")
+}
+
+func TestModel_ApprovalsCommand_EscCancels(t *testing.T) {
+	m := newTestModel()
+	m.workflowID = "test-wf"
+	m.selectingApprovalMode = true
+	m.selector = NewSelectorModel([]SelectorOption{
+		{Label: "unless-trusted"},
+		{Label: "never"},
+	}, m.styles)
+	m.selector.SetWidth(m.width)
+
+	result, _ := m.handleInputKey(tea.KeyMsg{Type: tea.KeyEsc})
+	rm := result.(*Model)
+	assert.False(t, rm.selectingApprovalMode)
+	assert.Nil(t, rm.selector)
+	assert.Equal(t, StateInput, rm.state)
+}
+
 // --- Plan change detection tests ---
 
 func TestPlanChanged(t *testing.T) {

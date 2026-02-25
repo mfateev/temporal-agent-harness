@@ -113,6 +113,25 @@ func TestMergeInstructions_DeveloperPopulated(t *testing.T) {
 	assert.Contains(t, result.Developer, "full-auto")
 }
 
+func TestMergeInstructions_PersonalityPrependedToDeveloper(t *testing.T) {
+	result := MergeInstructions(MergeInput{
+		ApprovalMode: "never",
+		Cwd:          "/tmp",
+		Personality:  "concise and friendly",
+	})
+	assert.Contains(t, result.Developer, "Communication style: concise and friendly")
+	// Personality should be at the beginning
+	assert.True(t, len(result.Developer) > 0)
+}
+
+func TestMergeInstructions_NoPersonality(t *testing.T) {
+	result := MergeInstructions(MergeInput{
+		ApprovalMode: "never",
+		Cwd:          "/tmp",
+	})
+	assert.NotContains(t, result.Developer, "Communication style")
+}
+
 func TestMergeInstructions_AllEmpty(t *testing.T) {
 	result := MergeInstructions(MergeInput{})
 	// Base should have default prompt

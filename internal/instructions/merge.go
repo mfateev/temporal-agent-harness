@@ -32,6 +32,10 @@ type MergeInput struct {
 	// MemorySummary is the formatted memory section to inject into
 	// developer instructions. Set by the workflow when memory is enabled.
 	MemorySummary string
+
+	// Personality is the user's preferred communication style.
+	// Prepended to developer instructions when non-empty.
+	Personality string
 }
 
 // MergedInstructions is the result of merging all instruction sources.
@@ -62,6 +66,11 @@ func MergeInstructions(input MergeInput) MergedInstructions {
 		base += "\n\n" + input.PromptSuffix
 	}
 	developer := ComposeDeveloperInstructions(input.ApprovalMode, input.Cwd)
+
+	// Prepend personality to developer instructions
+	if input.Personality != "" {
+		developer = "Communication style: " + input.Personality + "\n\n" + developer
+	}
 
 	// Assemble user instructions: project docs + personal preferences
 	var userParts []string

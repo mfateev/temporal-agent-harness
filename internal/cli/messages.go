@@ -146,6 +146,53 @@ type DiffResultMsg struct {
 	Output string
 }
 
+// ReviewResultMsg is sent when the background git diff for /review completes.
+type ReviewResultMsg struct {
+	Output string
+}
+
+// InitResultMsg is sent when the /init scaffold completes.
+type InitResultMsg struct {
+	Path          string
+	Created       bool
+	AlreadyExists bool
+}
+
+// InitErrorMsg is sent when the /init scaffold fails.
+type InitErrorMsg struct {
+	Err error
+}
+
+// ApprovalModeUpdateSentMsg is sent after an approval mode update succeeds.
+type ApprovalModeUpdateSentMsg struct {
+	Mode string
+}
+
+// ApprovalModeUpdateErrorMsg is sent when an approval mode update fails.
+type ApprovalModeUpdateErrorMsg struct {
+	Err error
+}
+
+// PersonalityUpdateSentMsg is sent after a personality update succeeds.
+type PersonalityUpdateSentMsg struct {
+	Personality string
+}
+
+// PersonalityUpdateErrorMsg is sent when a personality update fails.
+type PersonalityUpdateErrorMsg struct {
+	Err error
+}
+
+// NewSessionStartedMsg is sent when a /new session has been started.
+type NewSessionStartedMsg struct {
+	WorkflowID string
+}
+
+// NewSessionErrorMsg is sent when starting a new session fails.
+type NewSessionErrorMsg struct {
+	Err error
+}
+
 // McpToolsResultMsg is sent when the MCP tools query completes.
 type McpToolsResultMsg struct {
 	Tools []workflow.McpToolSummary
