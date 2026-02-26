@@ -1214,7 +1214,7 @@ func (m *Model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.textarea.Blur()
 			return m, sendUpdatePersonalityCmd(m.client, m.workflowID, personality)
 		}
-		if line == "/approvals" {
+		if line == "/approvals" || line == "/permissions" {
 			if m.workflowID == "" {
 				m.appendToViewport("No active session.\n")
 				return m, nil
