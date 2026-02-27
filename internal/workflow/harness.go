@@ -14,7 +14,6 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
-	"github.com/mfateev/temporal-agent-harness/internal/activities"
 	"github.com/mfateev/temporal-agent-harness/internal/models"
 )
 
@@ -243,6 +242,22 @@ func handleStartSession(
 		model = state.Overrides.Model
 	}
 
+	// Agent workflow ID is derived by convention from the session workflow ID.
+	agentWfID := sessionWfID + "/main"
+
+	// Record the session entry immediately with PendingInit status.
+	// The update_session_status signal from SessionWorkflow will flip it to Running.
+	entry := SessionEntry{
+		SessionID:         sessionID,
+		SessionWorkflowID: sessionWfID,
+		WorkflowID:        agentWfID,
+		UserMessage:       req.UserMessage,
+		Model:             model,
+		Status:            AgentStatusPendingInit,
+		StartedAt:         workflow.Now(ctx),
+	}
+	state.Sessions = append(state.Sessions, entry)
+
 	// Start SessionWorkflow as child with ABANDON policy so the harness
 	// can ContinueAsNew without terminating running sessions.
 	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
@@ -257,37 +272,22 @@ func handleStartSession(
 		return StartSessionResponse{}, fmt.Errorf("failed to start SessionWorkflow %s: %w", sessionWfID, err)
 	}
 
-	// Poll SessionWorkflow until AgenticWorkflow is started.
-	actOpts := workflow.ActivityOptions{
-		StartToCloseTimeout: 5 * time.Minute, // init (MCP, etc.) can be slow
-		HeartbeatTimeout:    30 * time.Second,
-		RetryPolicy: &temporal.RetryPolicy{
-			MaximumAttempts: 2,
-		},
+	// Wait for the update_session_status signal from SessionWorkflow to
+	// flip status from PendingInit → Running (meaning AgenticWorkflow is up).
+	// This avoids an activity-based polling loop that bloats harness history.
+	if err := workflow.Await(ctx, func() bool {
+		for _, s := range state.Sessions {
+			if s.SessionID == sessionID {
+				return s.Status != AgentStatusPendingInit
+			}
+		}
+		return false
+	}); err != nil {
+		return StartSessionResponse{}, fmt.Errorf("session %s readiness wait cancelled: %w", sessionID, err)
 	}
-	actCtx := workflow.WithActivityOptions(ctx, actOpts)
-
-	var readyOutput activities.WaitForSessionReadyOutput
-	if err := workflow.ExecuteActivity(actCtx, "WaitForSessionReady",
-		activities.WaitForSessionReadyInput{SessionWorkflowID: sessionWfID},
-	).Get(ctx, &readyOutput); err != nil {
-		return StartSessionResponse{}, fmt.Errorf("session %s failed to become ready: %w", sessionID, err)
-	}
-
-	// Record the session entry.
-	entry := SessionEntry{
-		SessionID:         sessionID,
-		SessionWorkflowID: sessionWfID,
-		WorkflowID:        readyOutput.AgentWorkflowID,
-		UserMessage:       req.UserMessage,
-		Model:             model,
-		Status:            AgentStatusRunning,
-		StartedAt:         workflow.Now(ctx),
-	}
-	state.Sessions = append(state.Sessions, entry)
 
 	// Spawn goroutine to watch child completion and update status.
-	// This is belt-and-suspenders: SessionWorkflow also signals on completion,
+	// Belt-and-suspenders: SessionWorkflow also signals on completion,
 	// which handles the case where the harness CAN'd (goroutine lost).
 	workflow.Go(ctx, func(gctx workflow.Context) {
 		var result WorkflowResult
@@ -301,7 +301,7 @@ func handleStartSession(
 
 	return StartSessionResponse{
 		SessionID:         sessionID,
-		SessionWorkflowID: readyOutput.AgentWorkflowID,
+		SessionWorkflowID: agentWfID,
 	}, nil
 }
 

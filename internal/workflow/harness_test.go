@@ -2,7 +2,6 @@
 package workflow
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -11,14 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"go.temporal.io/sdk/testsuite"
-
-	"github.com/mfateev/temporal-agent-harness/internal/activities"
 )
-
-// Stub activity function for the WaitForSessionReady activity.
-func WaitForSessionReady(_ context.Context, _ activities.WaitForSessionReadyInput) (activities.WaitForSessionReadyOutput, error) {
-	panic("stub: should be mocked")
-}
 
 // HarnessWorkflowTestSuite runs HarnessWorkflow tests with the Temporal test environment.
 type HarnessWorkflowTestSuite struct {
@@ -33,18 +25,6 @@ func TestHarnessWorkflowSuite(t *testing.T) {
 
 func (s *HarnessWorkflowTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
-
-	// Register stub activity for WaitForSessionReady.
-	s.env.RegisterActivity(WaitForSessionReady)
-
-	// Default mock for WaitForSessionReady — returns a predictable agent workflow ID.
-	s.env.OnActivity("WaitForSessionReady", mock.Anything, mock.Anything).
-		Return(func(_ context.Context, input activities.WaitForSessionReadyInput) (activities.WaitForSessionReadyOutput, error) {
-			// Derive the agent workflow ID by convention.
-			return activities.WaitForSessionReadyOutput{
-				AgentWorkflowID: input.SessionWorkflowID + "/main",
-			}, nil
-		}).Maybe()
 
 	// Register SessionWorkflow as a child workflow that completes immediately.
 	s.env.RegisterWorkflow(SessionWorkflow)
@@ -63,28 +43,36 @@ func harnessInput() HarnessWorkflowInput {
 	}
 }
 
-// cancelWorkflow cancels the workflow via a delayed callback to terminate the
-// harness's infinite loop.
+// cancelWorkflow cancels the workflow via a delayed callback.
 func (s *HarnessWorkflowTestSuite) cancelWorkflow(delay time.Duration) {
 	s.env.RegisterDelayedCallback(func() {
 		s.env.CancelWorkflow()
 	}, delay)
 }
 
-// assertWorkflowCompleted verifies the workflow completed (regardless of reason).
 func (s *HarnessWorkflowTestSuite) assertWorkflowCompleted() {
 	require.True(s.T(), s.env.IsWorkflowCompleted(),
 		"harness workflow should have completed")
 }
 
+// sendSessionReadySignal sends a mock update_session_status signal to
+// simulate what SessionWorkflow does after starting the AgenticWorkflow.
+// The sessionWfID must match the convention: harnessID + "/" + sessionID.
+func (s *HarnessWorkflowTestSuite) sendSessionReadySignal(delay time.Duration, sessionWfID string) {
+	s.env.RegisterDelayedCallback(func() {
+		s.env.SignalWorkflow(SignalUpdateSessionStatus, UpdateSessionStatusRequest{
+			SessionWorkflowID: sessionWfID,
+			Status:            AgentStatusRunning,
+		})
+	}, delay)
+}
+
 // TestHarness_StartSessionSpawnsChild verifies that sending a start_session
-// Update spawns a SessionWorkflow child and returns a non-empty SessionWorkflowID
-// (the AgenticWorkflow ID). It also queries get_sessions to confirm the session
-// is recorded.
+// Update spawns a SessionWorkflow child and returns a non-empty SessionWorkflowID.
 func (s *HarnessWorkflowTestSuite) TestHarness_StartSessionSpawnsChild() {
 	var sessionWorkflowID string
 
-	// After a brief delay, send a start_session Update.
+	// T=1s: send start_session Update.
 	s.env.RegisterDelayedCallback(func() {
 		s.env.UpdateWorkflow(UpdateStartSession, "start-1", &testsuite.TestUpdateCallback{
 			OnAccept: func() {},
@@ -102,7 +90,24 @@ func (s *HarnessWorkflowTestSuite) TestHarness_StartSessionSpawnsChild() {
 		}, StartSessionRequest{UserMessage: "hello"})
 	}, time.Second*1)
 
-	// After the Update is processed, query the session list.
+	// T=1.5s: simulate SessionWorkflow sending ready signal.
+	// Query the session list to find the session workflow ID dynamically.
+	s.env.RegisterDelayedCallback(func() {
+		result, err := s.env.QueryWorkflow(QueryGetSessions)
+		if err != nil {
+			return
+		}
+		var sessions []SessionEntry
+		if err := result.Get(&sessions); err != nil || len(sessions) == 0 {
+			return
+		}
+		s.env.SignalWorkflow(SignalUpdateSessionStatus, UpdateSessionStatusRequest{
+			SessionWorkflowID: sessions[0].SessionWorkflowID,
+			Status:            AgentStatusRunning,
+		})
+	}, 1500*time.Millisecond)
+
+	// T=2s: query session list.
 	s.env.RegisterDelayedCallback(func() {
 		result, err := s.env.QueryWorkflow(QueryGetSessions)
 		require.NoError(s.T(), err)
@@ -113,19 +118,15 @@ func (s *HarnessWorkflowTestSuite) TestHarness_StartSessionSpawnsChild() {
 		require.Len(s.T(), sessions, 1, "should have exactly one session")
 		assert.Equal(s.T(), sessionWorkflowID, sessions[0].WorkflowID,
 			"WorkflowID in session list should match the returned SessionWorkflowID")
-		// Status is either Running (if the child goroutine hasn't completed yet)
-		// or Completed (if the mock child returned immediately).
 		assert.Contains(s.T(),
 			[]AgentStatus{AgentStatusRunning, AgentStatusCompleted},
 			sessions[0].Status,
 			"session status should be running or completed")
 	}, time.Second*2)
 
-	// Cancel the workflow to terminate the harness's idle loop.
 	s.cancelWorkflow(time.Second * 3)
 
 	s.env.ExecuteWorkflow(HarnessWorkflow, harnessInput())
-
 	s.assertWorkflowCompleted()
 }
 
@@ -139,16 +140,13 @@ func (s *HarnessWorkflowTestSuite) TestHarness_QuerySessionsEmpty() {
 		var sessions []SessionEntry
 		require.NoError(s.T(), result.Get(&sessions))
 
-		// Must not be nil (query handler returns []SessionEntry{}) and must be empty.
 		assert.NotNil(s.T(), sessions, "sessions should not be nil")
 		assert.Empty(s.T(), sessions, "sessions should be empty before any start_session")
 	}, time.Second*1)
 
-	// Cancel the workflow to terminate the harness's idle loop.
 	s.cancelWorkflow(time.Second * 2)
 
 	s.env.ExecuteWorkflow(HarnessWorkflow, harnessInput())
-
 	s.assertWorkflowCompleted()
 }
 
@@ -164,33 +162,25 @@ func (s *HarnessWorkflowTestSuite) TestHarness_StartSession_EmptyMessageRejected
 			},
 			OnReject: func(err error) {
 				require.Error(s.T(), err)
-				assert.Contains(s.T(), err.Error(), "user_message must not be empty",
-					"rejection error should mention user_message")
+				assert.Contains(s.T(), err.Error(), "user_message must not be empty")
 				rejected = true
 			},
 			OnComplete: func(interface{}, error) {},
 		}, StartSessionRequest{UserMessage: ""})
 	}, time.Second*1)
 
-	// Cancel the workflow to terminate the harness's idle loop.
 	s.cancelWorkflow(time.Second * 2)
 
 	s.env.ExecuteWorkflow(HarnessWorkflow, harnessInput())
 
 	require.True(s.T(), s.env.IsWorkflowCompleted())
-	assert.True(s.T(), rejected, "empty user_message Update should have been rejected")
+	assert.True(s.T(), rejected)
 }
 
 // TestHarness_NoConfigActivitiesOnStart verifies that the slimmed harness does
-// NOT call any config-loading activities directly. Config resolution is now
-// handled by SessionWorkflow.
+// NOT call any config-loading activities directly.
 func (s *HarnessWorkflowTestSuite) TestHarness_NoConfigActivitiesOnStart() {
-	// Cancel the workflow to terminate the harness's idle loop.
 	s.cancelWorkflow(time.Second * 2)
-
 	s.env.ExecuteWorkflow(HarnessWorkflow, harnessInput())
-
 	require.True(s.T(), s.env.IsWorkflowCompleted())
-	// The harness should NOT call any config-loading activities.
-	// The only activities it calls are WaitForSessionReady (when starting a session).
 }
