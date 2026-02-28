@@ -448,3 +448,119 @@ func (s *SessionState) extractMemoryOnShutdown(ctx workflow.Context) {
 	logger.Info("Memory extraction completed and consolidation signaled",
 		"workflow_id", s.ConversationID)
 }
+
+// resolveHarnessConfig loads all file-based configuration via activities and
+// assembles a SessionConfiguration to use as the base for new sessions.
+// Used by SessionWorkflow for per-session config resolution.
+func resolveHarnessConfig(ctx workflow.Context, overrides CLIOverrides) (models.SessionConfiguration, error) {
+	logger := workflow.GetLogger(ctx)
+
+	actOpts := workflow.ActivityOptions{
+		StartToCloseTimeout: 30 * time.Second,
+		RetryPolicy: &temporal.RetryPolicy{
+			MaximumAttempts: 2,
+		},
+	}
+	if overrides.SessionTaskQueue != "" {
+		actOpts.TaskQueue = overrides.SessionTaskQueue
+	}
+	actCtx := workflow.WithActivityOptions(ctx, actOpts)
+
+	// Load worker-side project docs (AGENTS.md).
+	var workerDocs string
+	var loadWorkerResult activities.LoadWorkerInstructionsOutput
+	loadWorkerInput := activities.LoadWorkerInstructionsInput{
+		Cwd:             overrides.Cwd,
+		AgentsFileNames: nil, // use defaults
+	}
+	if err := workflow.ExecuteActivity(actCtx, "LoadWorkerInstructions", loadWorkerInput).Get(ctx, &loadWorkerResult); err != nil {
+		logger.Warn("Failed to load worker instructions", "error", err)
+	} else {
+		workerDocs = loadWorkerResult.ProjectDocs
+	}
+
+	// Load exec policy rules.
+	var execPolicyRules string
+	if overrides.CodexHome != "" {
+		var loadExecResult activities.LoadExecPolicyOutput
+		loadExecInput := activities.LoadExecPolicyInput{
+			CodexHome: overrides.CodexHome,
+		}
+		if err := workflow.ExecuteActivity(actCtx, "LoadExecPolicy", loadExecInput).Get(ctx, &loadExecResult); err != nil {
+			logger.Warn("Failed to load exec policy", "error", err)
+		} else {
+			execPolicyRules = loadExecResult.RulesSource
+		}
+	}
+
+	// Load personal instructions.
+	var personalInstructions string
+	var loadPersonalResult activities.LoadPersonalInstructionsOutput
+	loadPersonalInput := activities.LoadPersonalInstructionsInput{
+		CodexHome: overrides.CodexHome,
+	}
+	if err := workflow.ExecuteActivity(actCtx, "LoadPersonalInstructions", loadPersonalInput).Get(ctx, &loadPersonalResult); err != nil {
+		logger.Warn("Failed to load personal instructions", "error", err)
+	} else {
+		personalInstructions = loadPersonalResult.Instructions
+	}
+
+	// Merge all instruction sources.
+	merged := instructions.MergeInstructions(instructions.MergeInput{
+		WorkerProjectDocs:        workerDocs,
+		UserPersonalInstructions: personalInstructions,
+		ApprovalMode:             string(overrides.Permissions.ApprovalMode),
+		Cwd:                      overrides.Cwd,
+	})
+
+	// Load config.toml from worker filesystem.
+	var loadConfigResult activities.LoadConfigFileOutput
+	loadConfigInput := activities.LoadConfigFileInput{
+		CodexHome: overrides.CodexHome,
+	}
+	if err := workflow.ExecuteActivity(actCtx, "LoadConfigFile", loadConfigInput).Get(ctx, &loadConfigResult); err != nil {
+		logger.Warn("Failed to load config file", "error", err)
+	}
+
+	// Assemble SessionConfiguration from defaults + overrides + resolved data.
+	cfg := models.DefaultSessionConfiguration()
+
+	// Apply TOML config (between defaults and CLI overrides).
+	if loadConfigResult.RawTOML != "" {
+		tomlCfg, err := models.ParseConfigToml([]byte(loadConfigResult.RawTOML))
+		if err != nil {
+			logger.Warn("Failed to parse config.toml", "error", err)
+		} else {
+			tomlCfg.ApplyToConfig(&cfg)
+		}
+	}
+
+	cfg.BaseInstructions = merged.Base
+	cfg.DeveloperInstructions = merged.Developer
+	cfg.UserInstructions = merged.User
+	cfg.ExecPolicyRules = execPolicyRules
+	cfg.Cwd = overrides.Cwd
+	cfg.CodexHome = overrides.CodexHome
+	cfg.SessionTaskQueue = overrides.SessionTaskQueue
+
+	if overrides.Permissions.ApprovalMode != "" {
+		cfg.Permissions.ApprovalMode = overrides.Permissions.ApprovalMode
+	}
+	if overrides.Provider != "" {
+		cfg.Model.Provider = overrides.Provider
+	}
+	if overrides.Model != "" {
+		cfg.Model.Model = overrides.Model
+	}
+	if overrides.DisableSuggestions {
+		cfg.DisableSuggestions = overrides.DisableSuggestions
+	}
+	if overrides.MemoryEnabled {
+		cfg.MemoryEnabled = overrides.MemoryEnabled
+	}
+	if overrides.MemoryDbPath != "" {
+		cfg.MemoryDbPath = overrides.MemoryDbPath
+	}
+
+	return cfg, nil
+}

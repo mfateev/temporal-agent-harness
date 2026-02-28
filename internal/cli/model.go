@@ -157,6 +157,7 @@ type Model struct {
 	turnCount         int
 	spinnerMsg        string
 	workerVersion     string
+	sessionName       string
 
 	// Approval state
 	pendingApprovals   []workflow.PendingApproval
@@ -558,6 +559,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PersonalityUpdateErrorMsg:
 		m.appendToViewport(fmt.Sprintf("Error updating personality: %v\n", msg.Err))
+		m.state = StateInput
+		cmds = append(cmds, m.focusTextarea())
+
+	case SessionNameSentMsg:
+		m.sessionName = msg.Name
+		m.appendToViewport(m.renderer.RenderSystemMessage(
+			fmt.Sprintf("Session renamed to %q.", msg.Name)))
+		m.state = StateInput
+		cmds = append(cmds, m.focusTextarea())
+
+	case SessionNameErrorMsg:
+		m.appendToViewport(fmt.Sprintf("Error renaming session: %v\n", msg.Err))
 		m.state = StateInput
 		cmds = append(cmds, m.focusTextarea())
 
@@ -1214,7 +1227,7 @@ func (m *Model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.textarea.Blur()
 			return m, sendUpdatePersonalityCmd(m.client, m.workflowID, personality)
 		}
-		if line == "/approvals" {
+		if line == "/approvals" || line == "/permissions" {
 			if m.workflowID == "" {
 				m.appendToViewport("No active session.\n")
 				return m, nil
@@ -1229,6 +1242,21 @@ func (m *Model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.state = StateInput
 			m.textarea.Blur()
 			return m, nil
+		}
+		if strings.HasPrefix(line, "/rename") {
+			if m.workflowID == "" {
+				m.appendToViewport("No active session.\n")
+				return m, nil
+			}
+			name := strings.TrimSpace(strings.TrimPrefix(line, "/rename"))
+			if name == "" {
+				m.appendToViewport("Usage: /rename <name>\n")
+				return m, nil
+			}
+			m.spinnerMsg = "Renaming session..."
+			m.state = StateWatching
+			m.textarea.Blur()
+			return m, sendSetSessionNameCmd(m.client, m.workflowID, name)
 		}
 		if line == "/init" {
 			cwd := m.config.Cwd
@@ -2234,14 +2262,17 @@ func (m *Model) buildSessionSelector(entries []SessionListEntry) *SelectorModel 
 		{Label: "New session", Shortcut: "n", ShortcutKey: 'n'},
 	}
 	for _, e := range entries {
-		// Extract the last path segment (e.g. "sess-20260219-150405-1")
-		short := e.WorkflowID
-		if idx := strings.LastIndex(short, "/"); idx >= 0 {
-			short = short[idx+1:]
+		// Use name if available, fall back to short workflow ID.
+		displayName := e.WorkflowID
+		if idx := strings.LastIndex(displayName, "/"); idx >= 0 {
+			displayName = displayName[idx+1:]
+		}
+		if e.Name != "" {
+			displayName = e.Name
 		}
 		icon := sessionStatusIcon(e.Status)
 		label := fmt.Sprintf("%-32s %s %-10s  %s",
-			short, icon, e.Status, e.StartTime.Local().Format("Jan 02, 15:04"))
+			displayName, icon, e.Status, e.StartTime.Local().Format("Jan 02, 15:04"))
 		opts = append(opts, SelectorOption{Label: label})
 	}
 	sel := NewSelectorModel(opts, m.styles)
@@ -2253,13 +2284,16 @@ func (m *Model) buildSessionSelector(entries []SessionListEntry) *SelectorModel 
 func (m *Model) buildResumeSessionSelector(entries []SessionListEntry) *SelectorModel {
 	var opts []SelectorOption
 	for _, e := range entries {
-		short := e.WorkflowID
-		if idx := strings.LastIndex(short, "/"); idx >= 0 {
-			short = short[idx+1:]
+		displayName := e.WorkflowID
+		if idx := strings.LastIndex(displayName, "/"); idx >= 0 {
+			displayName = displayName[idx+1:]
+		}
+		if e.Name != "" {
+			displayName = e.Name
 		}
 		icon := sessionStatusIcon(e.Status)
 		label := fmt.Sprintf("%-32s %s %-10s  %s",
-			short, icon, e.Status, e.StartTime.Local().Format("Jan 02, 15:04"))
+			displayName, icon, e.Status, e.StartTime.Local().Format("Jan 02, 15:04"))
 		opts = append(opts, SelectorOption{Label: label})
 	}
 	sel := NewSelectorModel(opts, m.styles)

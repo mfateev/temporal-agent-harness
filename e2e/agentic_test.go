@@ -449,6 +449,8 @@ func createWorker(c client.Client) worker.Worker {
 	w.RegisterWorkflow(workflow.AgenticWorkflowContinued)
 	w.RegisterWorkflow(workflow.HarnessWorkflow)
 	w.RegisterWorkflow(workflow.HarnessWorkflowContinued)
+	w.RegisterWorkflow(workflow.SessionWorkflow)
+	w.RegisterWorkflow(workflow.SessionWorkflowContinued)
 
 	// Create tool registry with all built-in tools
 	toolRegistry := tools.NewToolRegistry()
@@ -496,6 +498,10 @@ func createWorker(c client.Client) worker.Worker {
 	execSessionActivities := activities.NewExecSessionActivities(execStore)
 	w.RegisterActivity(execSessionActivities.ListExecSessions)
 	w.RegisterActivity(execSessionActivities.CleanExecSessions)
+
+	// Session lifecycle activities (polling for session readiness)
+	sessionActivities := activities.NewSessionActivities(c)
+	w.RegisterActivity(sessionActivities.WaitForSessionReady)
 
 	return w
 }

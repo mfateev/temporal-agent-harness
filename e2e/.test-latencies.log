@@ -1,41 +1,42 @@
-TUI/displays tool call with verb                                 6.40s  PASS
-TUI/displays tool output                                         6.80s  PASS
+TUI/displays tool output                                         7.80s  PASS
+TUI/displays tool call with verb                                 8.40s  PASS
+TUI/status bar shows model name                                  5.90s  PASS
 TUI/status bar shows token count                                 5.80s  PASS
-TUI/status bar shows model name                                  6.80s  PASS
-TUI/status bar shows turn count                                  5.70s  PASS
-TUI/status bar shows context window percentage                   7.20s  PASS
-TUI/status bar shows ready state after response                  5.60s  PASS
-TUI/displays plan header in viewport                             7.60s  PASS
-TUI/displays Updated verb for update_plan tool call              8.70s  PASS
-TUI/supports multi-turn conversation                             5.90s  PASS
-TUI/tcx starts session and displays LLM response                 6.10s  PASS
-TUI/status bar shows cached tokens after second Anthropic turn    12.70s  PASS
+TUI/status bar shows turn count                                  6.10s  PASS
+TUI/status bar shows context window percentage                   6.60s  PASS
+TUI/status bar shows ready state after response                  5.80s  PASS
+TUI/displays plan header in viewport                             8.30s  PASS
+TUI/supports multi-turn conversation                             6.00s  PASS
+TUI/displays Updated verb for update_plan tool call             15.00s  PASS
+TUI/status bar shows cached tokens after second Anthropic turn     8.10s  PASS
+TUI/tcx starts session and displays LLM response                 6.90s  PASS
 TUI//exit command quits                                          7.10s  PASS
-TUI//model command shows model selector                          5.80s  PASS
+TUI//model command shows model selector                          6.10s  PASS
 TUI//quit command exits                                          7.10s  PASS
 TUI//diff shows diff output or no changes                        5.10s  PASS
 TUI//status shows current model                                  5.10s  PASS
-TUI//init shows AGENTS.md reference                              6.30s  PASS
-TUI//compact compacts conversation history                       6.00s  PASS
-TUI//end ends the current session                               10.80s  PASS
-TUI//review processes review command                             6.00s  PASS
+TUI//init shows AGENTS.md reference                              6.60s  PASS
+TUI//compact compacts conversation history                       6.10s  PASS
+TUI//end ends the current session                               11.10s  PASS
+TUI//review processes review command                             6.20s  PASS
 TUI//approvals shows approval mode selector                      5.80s  PASS
-TUI//personality sets personality                                6.50s  PASS
-TUI//ps shows exec sessions                                      6.00s  PASS
-TUI//clean closes exec sessions                                  5.80s  PASS
-TUI//mcp shows MCP tools status                                  5.80s  PASS
-TUI//plan starts plan mode                                       5.90s  PASS
-TUI//done outside plan mode shows usage hint                     5.70s  PASS
-TUI//resume shows session picker or no-sessions message          6.20s  PASS
+TUI//personality sets personality                                6.40s  PASS
+TUI//ps shows exec sessions                                      5.90s  PASS
+TUI//clean closes exec sessions                                  6.30s  PASS
+TUI//mcp shows MCP tools status                                  6.20s  PASS
+TUI//plan starts plan mode                                       6.40s  PASS
+TUI//done outside plan mode shows usage hint                     6.10s  PASS
+TUI//resume shows session picker or no-sessions message          6.10s  PASS
 TUI//skills shows skills list or no-skills message               6.00s  PASS
-TUI//new starts a new session                                    5.80s  PASS
-TUI/shows Add( title format with file path                       6.50s  PASS
-TUI/shows + lines in the preview                                 6.30s  PASS
-TUI/post-execution shows file path not just Patched              8.20s  PASS
-TUI/shows both file names in terminal                            6.80s  PASS
+TUI//rename sets session name                                    6.00s  PASS
+TUI//new starts a new session                                    7.00s  PASS
+TUI/shows + lines in the preview                                 6.50s  PASS
+TUI/shows Add( title format with file path                       9.10s  PASS
+TUI/shows both file names in terminal                            6.70s  PASS
+TUI/post-execution shows file path not just Patched             10.10s  PASS
 TUI/Ctrl+C interrupts during watching state                      5.10s  PASS
 TUI/Ctrl+D exits during input state                              7.10s  PASS
-TUI/shows approval prompt for write_file                         6.20s  PASS
-TUI/denies tool call with n shortcut                             6.30s  PASS
-TUI/approves tool call with y shortcut                          14.10s  PASS
-TestTUI                                                        140.69s  PASS
+TUI/shows approval prompt for write_file                         6.50s  PASS
+TUI/approves tool call with y shortcut                           7.50s  PASS
+TUI/denies tool call with n shortcut                             6.50s  PASS
+TestTUI                                                        144.67s  PASS

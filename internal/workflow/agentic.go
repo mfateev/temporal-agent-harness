@@ -38,42 +38,54 @@ func AgenticWorkflow(ctx workflow.Context, input WorkflowInput) (WorkflowResult,
 		AgentCtl:       NewAgentControl(input.Depth),
 	}
 
-	// Resolve model profile (pure computation — must come first)
-	state.resolveProfile()
+	// Create LoopControl and register handlers early, before init activities.
+	// Handlers capture state/ctrl by pointer and read current values at call
+	// time, so they work correctly even while init is still running. This
+	// prevents races where a query or Update arrives during a slow init
+	// activity (e.g. LoadSkills retry) and finds no handlers registered.
+	ctrl := &LoopControl{}
+	state.registerHandlers(ctx, ctrl)
 
-	// Build tool specs based on configuration and profile
-	state.ToolSpecs = buildToolSpecs(input.Config.Tools, state.ResolvedProfile)
+	if input.ResolvedProfile != nil {
+		// Pre-resolved by SessionWorkflow — skip init.
+		state.ResolvedProfile = *input.ResolvedProfile
+		state.ToolSpecs = buildToolSpecs(input.Config.Tools, state.ResolvedProfile)
+		if len(input.McpToolSpecs) > 0 {
+			state.ToolSpecs = append(state.ToolSpecs, input.McpToolSpecs...)
+		}
+		state.McpToolLookup = input.McpToolLookup
+		state.LoadedSkills = input.LoadedSkills
+		state.ExecPolicyRules = input.Config.ExecPolicyRules
+	} else {
+		// Direct invocation (E2E tests, standalone, subagent) — do full init.
+		state.resolveProfile()
+		state.ToolSpecs = buildToolSpecs(input.Config.Tools, state.ResolvedProfile)
 
-	// Initialize MCP servers and discover tools (before first turn)
-	if err := state.initMcpServers(ctx); err != nil {
-		return WorkflowResult{}, err
-	}
+		if err := state.initMcpServers(ctx); err != nil {
+			return WorkflowResult{}, err
+		}
 
-	// If BaseInstructions is empty, config was not pre-assembled by HarnessWorkflow
-	// (e.g. direct invocation from E2E tests or CLI). Load from the worker filesystem.
-	if state.Config.BaseInstructions == "" {
-		state.resolveInstructions(ctx)
+		if state.Config.BaseInstructions == "" {
+			state.resolveInstructions(ctx)
+		}
+
+		state.ExecPolicyRules = input.Config.ExecPolicyRules
+		if state.ExecPolicyRules == "" {
+			state.loadExecPolicy(ctx)
+		}
+
+		if state.Config.MemoryEnabled && input.Depth == 0 {
+			state.loadMemorySummary(ctx)
+		}
+
+		if input.Depth == 0 {
+			state.loadSkills(ctx)
+		}
 	}
 
 	// Warn if using deprecated on-failure mode (Codex PR #11631)
 	if state.Config.Permissions.ApprovalMode == models.ApprovalOnFailure {
 		workflow.GetLogger(ctx).Warn("`on-failure` approval policy is deprecated and will be removed in a future release. Use `unless-trusted` for interactive approvals or `never` for non-interactive runs.")
-	}
-
-	// Copy pre-loaded exec policy rules, or load from the worker if not provided.
-	state.ExecPolicyRules = input.Config.ExecPolicyRules
-	if state.ExecPolicyRules == "" {
-		state.loadExecPolicy(ctx)
-	}
-
-	// Load memory summary at session start (only for root workflows)
-	if state.Config.MemoryEnabled && input.Depth == 0 {
-		state.loadMemorySummary(ctx)
-	}
-
-	// Load available skills at session start (only for root workflows)
-	if input.Depth == 0 {
-		state.loadSkills(ctx)
 	}
 
 	// Generate initial turn ID
@@ -108,12 +120,8 @@ func AgenticWorkflow(ctx workflow.Context, input WorkflowInput) (WorkflowResult,
 		return WorkflowResult{}, fmt.Errorf("failed to add user message: %w", err)
 	}
 
-	// Create LoopControl and mark first turn as pending.
-	ctrl := &LoopControl{}
+	// Mark first turn as pending and run multi-turn loop.
 	ctrl.SetPendingUserInput(turnID)
-
-	// Register handlers and run multi-turn loop
-	state.registerHandlers(ctx, ctrl)
 	return state.runMultiTurnLoop(ctx, ctrl)
 }
 

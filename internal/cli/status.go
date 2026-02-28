@@ -19,6 +19,9 @@ func (m *Model) formatStatusDisplay() string {
 	b.WriteString(fmt.Sprintf("  Sandbox:         %s\n", m.config.Permissions.SandboxMode))
 	b.WriteString(fmt.Sprintf("  Working dir:     %s\n", m.config.Cwd))
 
+	if m.sessionName != "" {
+		b.WriteString(fmt.Sprintf("  Session name:    %s\n", m.sessionName))
+	}
 	if m.workflowID != "" {
 		b.WriteString(fmt.Sprintf("  Workflow ID:     %s\n", m.workflowID))
 	}

@@ -14,6 +14,17 @@ import (
 	"github.com/mfateev/temporal-agent-harness/internal/tools"
 )
 
+// Signal/query name constants for SessionWorkflow ↔ HarnessWorkflow communication.
+const (
+	// SignalUpdateSessionStatus is sent by SessionWorkflow to the harness
+	// when the session's agent completes, errors, or changes name/model.
+	SignalUpdateSessionStatus = "update_session_status"
+
+	// QueryGetAgentWorkflowID is exposed by SessionWorkflow so the
+	// WaitForSessionReady activity can poll until the agent is started.
+	QueryGetAgentWorkflowID = "get_agent_workflow_id"
+)
+
 // Handler name constants for Temporal query and update handlers.
 const (
 	// QueryGetConversationItems returns conversation history.
@@ -95,6 +106,10 @@ const (
 	// UpdateToggleSkill enables or disables a specific skill.
 	// Used by the CLI /skills toggle command.
 	UpdateToggleSkill = "toggle_skill"
+
+	// UpdateSessionName sets a user-friendly name for the session.
+	// Used by the CLI /rename command.
+	UpdateSessionName = "set_session_name"
 )
 
 // UpdateModelRequest is the payload for the update_model Update.
@@ -173,6 +188,16 @@ type ToggleSkillResponse struct {
 	Acknowledged bool `json:"acknowledged"`
 }
 
+// SetSessionNameRequest is the payload for the set_session_name Update.
+type SetSessionNameRequest struct {
+	Name string `json:"name"`
+}
+
+// SetSessionNameResponse is returned by the set_session_name Update.
+type SetSessionNameResponse struct {
+	Acknowledged bool `json:"acknowledged"`
+}
+
 // TurnPhase indicates the current phase of the workflow turn.
 type TurnPhase string
 
@@ -209,6 +234,35 @@ type TurnStatus struct {
 	RateLimitSnapshot       *models.RateLimitSnapshot `json:"rate_limit_snapshot,omitempty"`
 }
 
+// SessionWorkflowInput is the input for SessionWorkflow.
+// It sits between HarnessWorkflow and AgenticWorkflow.
+type SessionWorkflowInput struct {
+	// SessionID is the harness-assigned short identifier (e.g. "sess-20060102-150405-1").
+	SessionID string `json:"session_id"`
+
+	// HarnessID is the workflow ID of the parent harness, used for signaling.
+	HarnessID string `json:"harness_id"`
+
+	// UserMessage is the initial message for the new session.
+	UserMessage string `json:"user_message"`
+
+	// Overrides contains merged CLI-level config overrides.
+	Overrides CLIOverrides `json:"overrides"`
+}
+
+// UpdateSessionStatusRequest is the payload for the update_session_status signal.
+// Sent by SessionWorkflow to the harness to update registry state.
+type UpdateSessionStatusRequest struct {
+	// SessionWorkflowID identifies the session to update.
+	SessionWorkflowID string `json:"session_workflow_id"`
+
+	// Status, if non-empty, updates the session lifecycle status.
+	Status AgentStatus `json:"status,omitempty"`
+
+	// Name, if non-empty, updates the user-assigned session name.
+	Name string `json:"name,omitempty"`
+}
+
 // WorkflowInput is the initial input to start a conversation.
 //
 // Maps to: codex-rs/core/src/codex.rs run_turn input
@@ -219,6 +273,13 @@ type WorkflowInput struct {
 	// Depth tracks subagent nesting level. 0 = top-level, 1 = child.
 	// Maps to: codex-rs SubAgentSource::ThreadSpawn.depth
 	Depth int `json:"depth,omitempty"`
+
+	// Pre-resolved fields set by SessionWorkflow. When ResolvedProfile is
+	// non-nil, AgenticWorkflow skips its own init and uses these directly.
+	ResolvedProfile *models.ResolvedProfile     `json:"resolved_profile,omitempty"`
+	McpToolLookup   map[string]tools.McpToolRef `json:"mcp_tool_lookup,omitempty"`
+	McpToolSpecs    []tools.ToolSpec            `json:"mcp_tool_specs,omitempty"`
+	LoadedSkills    []skills.SkillMetadata      `json:"loaded_skills,omitempty"`
 }
 
 // UserInput is the payload for the user_input Update.
@@ -455,6 +516,10 @@ type SessionState struct {
 	// Subagent control — manages child workflow lifecycles.
 	// Maps to: codex-rs/core/src/agent/control.rs AgentControl
 	AgentCtl *AgentControl `json:"agent_ctl,omitempty"`
+
+	// User-assigned session name (set via /rename, persists across CAN).
+	// Maps to: codex-rs thread_name
+	SessionName string `json:"session_name,omitempty"`
 
 	// Discovered skills metadata (loaded at session start, persists across CAN).
 	// Maps to: codex-rs/core/src/skills/manager.rs SkillsManager

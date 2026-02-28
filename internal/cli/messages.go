@@ -238,10 +238,12 @@ type HarnessSessionsErrorMsg struct {
 type SessionListEntry struct {
 	WorkflowID string
 	StartTime  time.Time
-	Status     string // "running", "completed", "failed", "canceled", "timed_out"
+	Status     string // "running", "completed", "errored", etc.
+	Name       string // User-assigned session name (from /rename)
+	Model      string // Model identifier
 }
 
-// HarnessSessionsListMsg is sent when the session list fetch (via Temporal ListWorkflow) completes.
+// HarnessSessionsListMsg is sent when the session list fetch completes.
 type HarnessSessionsListMsg struct {
 	Entries []SessionListEntry
 	Err     error
@@ -265,5 +267,15 @@ type SkillToggleSentMsg struct {
 
 // SkillToggleErrorMsg is sent when a skill toggle update fails.
 type SkillToggleErrorMsg struct {
+	Err error
+}
+
+// SessionNameSentMsg is sent after a session name update succeeds.
+type SessionNameSentMsg struct {
+	Name string
+}
+
+// SessionNameErrorMsg is sent when a session name update fails.
+type SessionNameErrorMsg struct {
 	Err error
 }

@@ -285,6 +285,28 @@ func (s *SessionState) registerHandlers(ctx workflow.Context, ctrl *LoopControl)
 		logger.Error("Failed to register update_personality update handler", "error", err)
 	}
 
+	// Update: set_session_name
+	// Allows the CLI to set a user-friendly name for the session.
+	err = workflow.SetUpdateHandlerWithOptions(
+		ctx,
+		UpdateSessionName,
+		func(ctx workflow.Context, req SetSessionNameRequest) (SetSessionNameResponse, error) {
+			s.SessionName = req.Name
+			return SetSessionNameResponse{Acknowledged: true}, nil
+		},
+		workflow.UpdateHandlerOptions{
+			Validator: func(ctx workflow.Context, req SetSessionNameRequest) error {
+				if ctrl.IsShutdown() {
+					return fmt.Errorf("session is shutting down")
+				}
+				return nil
+			},
+		},
+	)
+	if err != nil {
+		logger.Error("Failed to register set_session_name update handler", "error", err)
+	}
+
 	// Query: list_skills
 	// Returns the list of discovered skills with their enabled/disabled status.
 	err = workflow.SetQueryHandler(ctx, QueryListSkills, func() ([]skills.SkillMetadata, error) {

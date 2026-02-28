@@ -60,6 +60,8 @@ func main() {
 	w.RegisterWorkflow(workflow.AgenticWorkflowContinued)
 	w.RegisterWorkflow(workflow.HarnessWorkflow)
 	w.RegisterWorkflow(workflow.HarnessWorkflowContinued)
+	w.RegisterWorkflow(workflow.SessionWorkflow)
+	w.RegisterWorkflow(workflow.SessionWorkflowContinued)
 
 	// Create tool registry with handlers
 	// Maps to: codex-rs/core/src/tools/registry.rs ToolRegistry setup
@@ -129,6 +131,10 @@ func main() {
 	w.RegisterActivity(memoryActivities.RunConsolidationAgent)
 	w.RegisterActivity(memoryActivities.ReadMemorySummary)
 	w.RegisterActivity(memoryActivities.SignalConsolidation)
+
+	// Session lifecycle activities (polling for session readiness)
+	sessionActivities := activities.NewSessionActivities(c)
+	w.RegisterActivity(sessionActivities.WaitForSessionReady)
 
 	// Register consolidation workflow
 	w.RegisterWorkflow(workflow.ConsolidationWorkflow)

@@ -50,17 +50,28 @@ func GenerateSuggestions(_ context.Context, _ activities.SuggestionInput) (activ
 	panic("stub: should be mocked")
 }
 
+func LoadSkills(_ context.Context, _ activities.LoadSkillsInput) (activities.LoadSkillsOutput, error) {
+	panic("stub: should be mocked")
+}
+
 func (s *AgenticWorkflowTestSuite) SetupTest() {
 	s.env = s.NewTestWorkflowEnvironment()
 	s.env.RegisterActivity(ExecuteLLMCall)
 	s.env.RegisterActivity(ExecuteTool)
 	s.env.RegisterActivity(ExecuteCompact)
 	s.env.RegisterActivity(GenerateSuggestions)
+	s.env.RegisterActivity(LoadSkills)
 
 	// Default mock for ExecuteCompact — returns failure to trigger fallback.
 	// Tests that need compaction to succeed should override this.
 	s.env.OnActivity("ExecuteCompact", mock.Anything, mock.Anything).
 		Return(activities.CompactActivityOutput{}, fmt.Errorf("compaction not configured")).Maybe()
+
+	// Default mock for LoadSkills — returns empty list immediately.
+	// Without this, the unregistered activity triggers a retry timer that
+	// can race with test delayed callbacks at the same timestamp.
+	s.env.OnActivity("LoadSkills", mock.Anything, mock.Anything).
+		Return(activities.LoadSkillsOutput{}, nil).Maybe()
 
 	// Note: no default mock for GenerateSuggestions — testInput() sets
 	// DisableSuggestions=true, so it won't be called. Tests that enable

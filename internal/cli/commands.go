@@ -568,13 +568,8 @@ func fetchModelsCmd() tea.Cmd {
 	}
 }
 
-// fetchSessionsCmd lists recent AgenticWorkflow executions belonging to this
-// harness via the Temporal visibility API and returns a HarnessSessionsListMsg.
-//
-// TODO: Add a custom search attribute (e.g. "HarnessID") so sessions can be
-// filtered by workspace without relying on WorkflowId prefix syntax.
-// This would also allow filtering sessions belonging to the current user
-// across workspaces (multi-user/multi-tenant scenarios).
+// fetchSessionsCmd lists sessions for the session picker via the Temporal
+// visibility API. This is fast and works even without a running harness.
 func fetchSessionsCmd(c client.Client, harnessID string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -686,5 +681,30 @@ func sendToggleSkillCmd(c client.Client, workflowID, skillPath string, enabled b
 		}
 
 		return SkillToggleSentMsg{SkillPath: skillPath, Enabled: enabled}
+	}
+}
+
+// sendSetSessionNameCmd sends a set_session_name Update to the workflow.
+func sendSetSessionNameCmd(c client.Client, workflowID, name string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		updateHandle, err := c.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
+			WorkflowID:   workflowID,
+			UpdateName:   workflow.UpdateSessionName,
+			Args:         []interface{}{workflow.SetSessionNameRequest{Name: name}},
+			WaitForStage: client.WorkflowUpdateStageCompleted,
+		})
+		if err != nil {
+			return SessionNameErrorMsg{Err: err}
+		}
+
+		var resp workflow.SetSessionNameResponse
+		if err := updateHandle.Get(ctx, &resp); err != nil {
+			return SessionNameErrorMsg{Err: err}
+		}
+
+		return SessionNameSentMsg{Name: name}
 	}
 }

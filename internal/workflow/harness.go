@@ -1,19 +1,19 @@
 // Package workflow contains Temporal workflow definitions.
 //
 // harness.go implements HarnessWorkflow — a long-lived orchestrator that
-// owns multiple agentic sessions (child AgenticWorkflow runs) on behalf of
-// a single user identity.
+// manages a session registry on behalf of a single user identity.
+// Config resolution and initialization have been moved to SessionWorkflow;
+// the harness is a pure registry with signals, queries, and updates.
 package workflow
 
 import (
 	"fmt"
 	"time"
 
+	enums "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
-	"github.com/mfateev/temporal-agent-harness/internal/activities"
-	"github.com/mfateev/temporal-agent-harness/internal/instructions"
 	"github.com/mfateev/temporal-agent-harness/internal/models"
 )
 
@@ -22,7 +22,7 @@ const (
 	// QueryGetSessions returns the list of active/completed sessions.
 	QueryGetSessions = "get_sessions"
 
-	// UpdateStartSession starts a new agentic session as a child workflow.
+	// UpdateStartSession starts a new agentic session via SessionWorkflow.
 	UpdateStartSession = "start_session"
 )
 
@@ -73,7 +73,7 @@ type StartSessionRequest struct {
 	UserMessage string `json:"user_message"`
 
 	// OverrideConfig applies per-session CLI overrides on top of the
-	// harness-resolved base config. Optional.
+	// harness-level overrides. Optional.
 	OverrideConfig *CLIOverrides `json:"override_config,omitempty"`
 }
 
@@ -82,7 +82,8 @@ type StartSessionResponse struct {
 	// SessionID is a short stable ID for the session (e.g. "sess-00000001").
 	SessionID string `json:"session_id"`
 
-	// SessionWorkflowID is the Temporal workflow ID of the child workflow.
+	// SessionWorkflowID is the Temporal workflow ID of the AgenticWorkflow
+	// that the TUI should target for user_input/polling.
 	SessionWorkflowID string `json:"session_workflow_id"`
 }
 
@@ -91,11 +92,21 @@ type SessionEntry struct {
 	// SessionID is the harness-assigned short identifier.
 	SessionID string `json:"session_id"`
 
-	// WorkflowID is the Temporal workflow ID of the child AgenticWorkflow.
+	// SessionWorkflowID is the Temporal workflow ID of the SessionWorkflow.
+	SessionWorkflowID string `json:"session_workflow_id"`
+
+	// WorkflowID is the Temporal workflow ID of the AgenticWorkflow
+	// (child of SessionWorkflow). The TUI targets this workflow.
 	WorkflowID string `json:"workflow_id"`
 
 	// UserMessage is the initial message that started the session.
 	UserMessage string `json:"user_message"`
+
+	// Name is the user-assigned session name (set via /rename). Optional.
+	Name string `json:"name,omitempty"`
+
+	// Model is the model identifier for this session.
+	Model string `json:"model,omitempty"`
 
 	// Status is the current lifecycle status of the child workflow.
 	Status AgentStatus `json:"status"`
@@ -136,17 +147,10 @@ func HarnessWorkflowContinued(ctx workflow.Context, state HarnessWorkflowState) 
 }
 
 // runHarnessLoop is the core harness event loop shared by both entry points.
-// It resolves config, registers handlers, and loops until idle timeout triggers
-// ContinueAsNew.
+// It registers handlers and loops until idle timeout triggers ContinueAsNew.
+// The harness is a pure registry — no config resolution.
 func runHarnessLoop(ctx workflow.Context, state *HarnessWorkflowState) error {
 	logger := workflow.GetLogger(ctx)
-
-	// Resolve file-based config via activities (once per workflow run).
-	cfg, err := resolveHarnessConfig(ctx, state.Overrides)
-	if err != nil {
-		logger.Warn("Failed to resolve harness config, using defaults", "error", err)
-		cfg = models.DefaultSessionConfiguration()
-	}
 
 	// Register query handler for session list.
 	if err := workflow.SetQueryHandler(ctx, QueryGetSessions, func() ([]SessionEntry, error) {
@@ -158,12 +162,22 @@ func runHarnessLoop(ctx workflow.Context, state *HarnessWorkflowState) error {
 		return fmt.Errorf("failed to register %s query: %w", QueryGetSessions, err)
 	}
 
+	// Register signal handler for session status updates from SessionWorkflow.
+	updateStatusCh := workflow.GetSignalChannel(ctx, SignalUpdateSessionStatus)
+	workflow.Go(ctx, func(gCtx workflow.Context) {
+		for {
+			var req UpdateSessionStatusRequest
+			updateStatusCh.Receive(gCtx, &req)
+			updateSessionStatusByWorkflowID(state, req)
+		}
+	})
+
 	// Register update handler for starting new sessions.
 	if err := workflow.SetUpdateHandlerWithOptions(
 		ctx,
 		UpdateStartSession,
 		func(ctx workflow.Context, req StartSessionRequest) (StartSessionResponse, error) {
-			return handleStartSession(ctx, state, cfg, req)
+			return handleStartSession(ctx, state, req)
 		},
 		workflow.UpdateHandlerOptions{
 			Validator: func(ctx workflow.Context, req StartSessionRequest) error {
@@ -197,226 +211,166 @@ func runHarnessLoop(ctx workflow.Context, state *HarnessWorkflowState) error {
 	}
 }
 
-// resolveHarnessConfig loads all file-based configuration via activities and
-// assembles a SessionConfiguration to use as the base for new sessions.
-func resolveHarnessConfig(ctx workflow.Context, overrides CLIOverrides) (models.SessionConfiguration, error) {
-	logger := workflow.GetLogger(ctx)
-
-	actOpts := workflow.ActivityOptions{
-		StartToCloseTimeout: 30 * time.Second,
-		RetryPolicy: &temporal.RetryPolicy{
-			MaximumAttempts: 2,
-		},
-	}
-	if overrides.SessionTaskQueue != "" {
-		actOpts.TaskQueue = overrides.SessionTaskQueue
-	}
-	actCtx := workflow.WithActivityOptions(ctx, actOpts)
-
-	// Load worker-side project docs (AGENTS.md).
-	var workerDocs string
-	var loadWorkerResult activities.LoadWorkerInstructionsOutput
-	loadWorkerInput := activities.LoadWorkerInstructionsInput{
-		Cwd:             overrides.Cwd,
-		AgentsFileNames: nil, // use defaults
-	}
-	if err := workflow.ExecuteActivity(actCtx, "LoadWorkerInstructions", loadWorkerInput).Get(ctx, &loadWorkerResult); err != nil {
-		logger.Warn("Failed to load worker instructions", "error", err)
-	} else {
-		workerDocs = loadWorkerResult.ProjectDocs
-	}
-
-	// Load exec policy rules.
-	var execPolicyRules string
-	if overrides.CodexHome != "" {
-		var loadExecResult activities.LoadExecPolicyOutput
-		loadExecInput := activities.LoadExecPolicyInput{
-			CodexHome: overrides.CodexHome,
-		}
-		if err := workflow.ExecuteActivity(actCtx, "LoadExecPolicy", loadExecInput).Get(ctx, &loadExecResult); err != nil {
-			logger.Warn("Failed to load exec policy", "error", err)
-		} else {
-			execPolicyRules = loadExecResult.RulesSource
-		}
-	}
-
-	// Load personal instructions.
-	var personalInstructions string
-	var loadPersonalResult activities.LoadPersonalInstructionsOutput
-	loadPersonalInput := activities.LoadPersonalInstructionsInput{
-		CodexHome: overrides.CodexHome,
-	}
-	if err := workflow.ExecuteActivity(actCtx, "LoadPersonalInstructions", loadPersonalInput).Get(ctx, &loadPersonalResult); err != nil {
-		logger.Warn("Failed to load personal instructions", "error", err)
-	} else {
-		personalInstructions = loadPersonalResult.Instructions
-	}
-
-	// Merge all instruction sources.
-	merged := instructions.MergeInstructions(instructions.MergeInput{
-		WorkerProjectDocs:        workerDocs,
-		UserPersonalInstructions: personalInstructions,
-		ApprovalMode:             string(overrides.Permissions.ApprovalMode),
-		Cwd:                      overrides.Cwd,
-	})
-
-	// Load config.toml from worker filesystem.
-	var loadConfigResult activities.LoadConfigFileOutput
-	loadConfigInput := activities.LoadConfigFileInput{
-		CodexHome: overrides.CodexHome,
-	}
-	if err := workflow.ExecuteActivity(actCtx, "LoadConfigFile", loadConfigInput).Get(ctx, &loadConfigResult); err != nil {
-		logger.Warn("Failed to load config file", "error", err)
-	}
-
-	// Assemble SessionConfiguration from defaults + overrides + resolved data.
-	cfg := models.DefaultSessionConfiguration()
-
-	// Apply TOML config (between defaults and CLI overrides).
-	if loadConfigResult.RawTOML != "" {
-		tomlCfg, err := models.ParseConfigToml([]byte(loadConfigResult.RawTOML))
-		if err != nil {
-			logger.Warn("Failed to parse config.toml", "error", err)
-		} else {
-			tomlCfg.ApplyToConfig(&cfg)
-		}
-	}
-
-	cfg.BaseInstructions = merged.Base
-	cfg.DeveloperInstructions = merged.Developer
-	cfg.UserInstructions = merged.User
-	cfg.ExecPolicyRules = execPolicyRules
-	cfg.Cwd = overrides.Cwd
-	cfg.CodexHome = overrides.CodexHome
-	cfg.SessionTaskQueue = overrides.SessionTaskQueue
-
-	if overrides.Permissions.ApprovalMode != "" {
-		cfg.Permissions.ApprovalMode = overrides.Permissions.ApprovalMode
-	}
-	if overrides.Provider != "" {
-		cfg.Model.Provider = overrides.Provider
-	}
-	if overrides.Model != "" {
-		cfg.Model.Model = overrides.Model
-	}
-
-	return cfg, nil
-}
-
-// handleStartSession starts a new AgenticWorkflow child and records the session.
+// handleStartSession starts a SessionWorkflow child (with ABANDON policy) and
+// polls until the AgenticWorkflow is ready. Returns the AgenticWorkflow ID
+// so the TUI can target it directly.
 func handleStartSession(
 	ctx workflow.Context,
 	state *HarnessWorkflowState,
-	cfg models.SessionConfiguration,
 	req StartSessionRequest,
 ) (StartSessionResponse, error) {
-	// Generate a time+counter composite session ID so the ID is meaningful
-	// in the session picker list.
+	// Generate a time+counter composite session ID.
 	t := workflow.Now(ctx)
 	state.SessionCounter++
 	sessionID := fmt.Sprintf("sess-%s-%d", t.UTC().Format("20060102-150405"), state.SessionCounter)
-	childWfID := state.HarnessID + "/" + sessionID
+	sessionWfID := state.HarnessID + "/" + sessionID
 
-	// Apply per-request overrides if provided.
-	sessionCfg := cfg
-	if req.OverrideConfig != nil {
-		applyOverrides(&sessionCfg, req.OverrideConfig)
-	}
+	// Merge harness-level overrides with per-session overrides.
+	overrides := mergeCLIOverrides(state.Overrides, req.OverrideConfig)
 
-	// Build child workflow input.
-	childInput := WorkflowInput{
-		ConversationID: childWfID,
-		UserMessage:    req.UserMessage,
-		Config:         sessionCfg,
-	}
-
-	// Start child workflow.
-	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
-		WorkflowID: childWfID,
-	})
-	future := workflow.ExecuteChildWorkflow(childCtx, AgenticWorkflow, childInput)
-
-	// Wait for child workflow execution details (workflow ID, run ID).
-	var exec workflow.Execution
-	if err := future.GetChildWorkflowExecution().Get(ctx, &exec); err != nil {
-		return StartSessionResponse{}, fmt.Errorf("failed to start child workflow %s: %w", childWfID, err)
-	}
-
-	// Record the session entry.
-	entry := SessionEntry{
+	// Build SessionWorkflow input.
+	sessionInput := SessionWorkflowInput{
 		SessionID:   sessionID,
-		WorkflowID:  exec.ID,
+		HarnessID:   state.HarnessID,
 		UserMessage: req.UserMessage,
-		Status:      AgentStatusRunning,
-		StartedAt:   workflow.Now(ctx),
+		Overrides:   overrides,
+	}
+
+	// Determine model name for the registry (best-effort from overrides).
+	model := overrides.Model
+	if model == "" {
+		model = state.Overrides.Model
+	}
+
+	// Agent workflow ID is derived by convention from the session workflow ID.
+	agentWfID := sessionWfID + "/main"
+
+	// Record the session entry immediately with PendingInit status.
+	// The update_session_status signal from SessionWorkflow will flip it to Running.
+	entry := SessionEntry{
+		SessionID:         sessionID,
+		SessionWorkflowID: sessionWfID,
+		WorkflowID:        agentWfID,
+		UserMessage:       req.UserMessage,
+		Model:             model,
+		Status:            AgentStatusPendingInit,
+		StartedAt:         workflow.Now(ctx),
 	}
 	state.Sessions = append(state.Sessions, entry)
 
+	// Start SessionWorkflow as child with ABANDON policy so the harness
+	// can ContinueAsNew without terminating running sessions.
+	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+		WorkflowID:        sessionWfID,
+		ParentClosePolicy: enums.PARENT_CLOSE_POLICY_ABANDON,
+	})
+	future := workflow.ExecuteChildWorkflow(childCtx, SessionWorkflow, sessionInput)
+
+	// Wait for SessionWorkflow to actually start.
+	var exec workflow.Execution
+	if err := future.GetChildWorkflowExecution().Get(ctx, &exec); err != nil {
+		return StartSessionResponse{}, fmt.Errorf("failed to start SessionWorkflow %s: %w", sessionWfID, err)
+	}
+
+	// Wait for the update_session_status signal from SessionWorkflow to
+	// flip status from PendingInit → Running (meaning AgenticWorkflow is up).
+	// This avoids an activity-based polling loop that bloats harness history.
+	if err := workflow.Await(ctx, func() bool {
+		for _, s := range state.Sessions {
+			if s.SessionID == sessionID {
+				return s.Status != AgentStatusPendingInit
+			}
+		}
+		return false
+	}); err != nil {
+		return StartSessionResponse{}, fmt.Errorf("session %s readiness wait cancelled: %w", sessionID, err)
+	}
+
 	// Spawn goroutine to watch child completion and update status.
+	// Belt-and-suspenders: SessionWorkflow also signals on completion,
+	// which handles the case where the harness CAN'd (goroutine lost).
 	workflow.Go(ctx, func(gctx workflow.Context) {
 		var result WorkflowResult
 		err := future.Get(gctx, &result)
 		if err != nil {
-			updateSessionStatus(state, sessionID, AgentStatusErrored)
+			updateSessionStatusByID(state, sessionID, AgentStatusErrored)
 		} else {
-			updateSessionStatus(state, sessionID, AgentStatusCompleted)
+			updateSessionStatusByID(state, sessionID, AgentStatusCompleted)
 		}
 	})
 
 	return StartSessionResponse{
 		SessionID:         sessionID,
-		SessionWorkflowID: exec.ID,
+		SessionWorkflowID: agentWfID,
 	}, nil
 }
 
-// applyOverrides copies non-zero fields from o into cfg.
-func applyOverrides(cfg *models.SessionConfiguration, o *CLIOverrides) {
-	if o == nil {
-		return
+// mergeCLIOverrides overlays non-zero fields from overlay onto base.
+func mergeCLIOverrides(base CLIOverrides, overlay *CLIOverrides) CLIOverrides {
+	result := base
+	if overlay == nil {
+		return result
 	}
-	if o.Cwd != "" {
-		cfg.Cwd = o.Cwd
+	if overlay.Cwd != "" {
+		result.Cwd = overlay.Cwd
 	}
-	if o.CodexHome != "" {
-		cfg.CodexHome = o.CodexHome
+	if overlay.CodexHome != "" {
+		result.CodexHome = overlay.CodexHome
 	}
-	if o.Model != "" {
-		cfg.Model.Model = o.Model
+	if overlay.Model != "" {
+		result.Model = overlay.Model
 	}
-	if o.Provider != "" {
-		cfg.Model.Provider = o.Provider
+	if overlay.Provider != "" {
+		result.Provider = overlay.Provider
 	}
-	if o.Permissions.ApprovalMode != "" {
-		cfg.Permissions.ApprovalMode = o.Permissions.ApprovalMode
+	if overlay.Permissions.ApprovalMode != "" {
+		result.Permissions.ApprovalMode = overlay.Permissions.ApprovalMode
 	}
-	if o.Permissions.SandboxMode != "" {
-		cfg.Permissions.SandboxMode = o.Permissions.SandboxMode
+	if overlay.Permissions.SandboxMode != "" {
+		result.Permissions.SandboxMode = overlay.Permissions.SandboxMode
 	}
-	if len(o.Permissions.SandboxWritableRoots) > 0 {
-		cfg.Permissions.SandboxWritableRoots = o.Permissions.SandboxWritableRoots
+	if len(overlay.Permissions.SandboxWritableRoots) > 0 {
+		result.Permissions.SandboxWritableRoots = overlay.Permissions.SandboxWritableRoots
 	}
-	if o.Permissions.SandboxNetworkAccess {
-		cfg.Permissions.SandboxNetworkAccess = o.Permissions.SandboxNetworkAccess
+	if overlay.Permissions.SandboxNetworkAccess {
+		result.Permissions.SandboxNetworkAccess = overlay.Permissions.SandboxNetworkAccess
 	}
-	if o.SessionTaskQueue != "" {
-		cfg.SessionTaskQueue = o.SessionTaskQueue
+	if overlay.SessionTaskQueue != "" {
+		result.SessionTaskQueue = overlay.SessionTaskQueue
 	}
-	if o.DisableSuggestions {
-		cfg.DisableSuggestions = o.DisableSuggestions
+	if overlay.DisableSuggestions {
+		result.DisableSuggestions = overlay.DisableSuggestions
 	}
-	if o.MemoryEnabled {
-		cfg.MemoryEnabled = o.MemoryEnabled
+	if overlay.MemoryEnabled {
+		result.MemoryEnabled = overlay.MemoryEnabled
 	}
-	if o.MemoryDbPath != "" {
-		cfg.MemoryDbPath = o.MemoryDbPath
+	if overlay.MemoryDbPath != "" {
+		result.MemoryDbPath = overlay.MemoryDbPath
 	}
+	return result
 }
 
-// updateSessionStatus finds the session with the given sessionID and updates its status.
-func updateSessionStatus(state *HarnessWorkflowState, sessionID string, status AgentStatus) {
+// updateSessionStatusByID finds the session with the given sessionID and updates its status.
+func updateSessionStatusByID(state *HarnessWorkflowState, sessionID string, status AgentStatus) {
 	for i := range state.Sessions {
 		if state.Sessions[i].SessionID == sessionID {
 			state.Sessions[i].Status = status
+			return
+		}
+	}
+}
+
+// updateSessionStatusByWorkflowID finds the session with the given SessionWorkflowID
+// and applies the update from a signal.
+func updateSessionStatusByWorkflowID(state *HarnessWorkflowState, req UpdateSessionStatusRequest) {
+	for i := range state.Sessions {
+		if state.Sessions[i].SessionWorkflowID == req.SessionWorkflowID {
+			if req.Status != "" {
+				state.Sessions[i].Status = req.Status
+			}
+			if req.Name != "" {
+				state.Sessions[i].Name = req.Name
+			}
 			return
 		}
 	}
