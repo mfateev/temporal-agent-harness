@@ -131,8 +131,13 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	elapsed := time.Since(start)
 
-	// 7b. Write latency log (always, even on failure — helps debug slow tests)
-	latencyTracker.WriteLog()
+	// 7b. Write latency log and check for regressions (always, even on failure)
+	if latencyTracker.WriteLog() {
+		log.Println("E2E: Failing due to latency regressions against baseline")
+		if code == 0 {
+			code = 1
+		}
+	}
 
 	// 7c. Check total suite time against threshold
 	const e2eTimeoutThreshold = 150 * time.Second
@@ -328,16 +333,34 @@ func readBaseline(path string) map[string]time.Duration {
 	return baseline
 }
 
-// WriteLog writes the collected latencies to e2e/test-latencies.baseline and prints
-// a delta report comparing current run against the previous baseline.
-func (lt *LatencyTracker) WriteLog() {
+// Regression thresholds. A test is flagged as a regression if it exceeds the
+// per-test multiplier OR the total suite time exceeds the total multiplier.
+// Generous thresholds avoid flaky failures from CI/environment variance.
+const (
+	// perTestRegressionMultiplier flags individual tests that take more than
+	// 2x their baseline duration.
+	perTestRegressionMultiplier = 2.0
+
+	// totalRegressionMultiplier flags the total suite time if it exceeds
+	// 1.5x the baseline total.
+	totalRegressionMultiplier = 1.5
+
+	// minBaselineDuration ignores regression checks for very fast tests
+	// where small absolute changes cause large percentage swings.
+	minBaselineDuration = 2 * time.Second
+)
+
+// WriteLog writes the collected latencies to e2e/test-latencies.baseline, prints
+// a delta report comparing current run against the previous baseline, and returns
+// true if any latency regressions were detected.
+func (lt *LatencyTracker) WriteLog() bool {
 	lt.mu.Lock()
 	defer lt.mu.Unlock()
 
 	rootOut, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
 		log.Printf("E2E: Failed to find repo root for latency log: %v", err)
-		return
+		return false
 	}
 	root := strings.TrimSpace(string(rootOut))
 
@@ -358,22 +381,24 @@ func (lt *LatencyTracker) WriteLog() {
 
 	if err := os.WriteFile(logPath, []byte(b.String()), 0644); err != nil {
 		log.Printf("E2E: Failed to write latency log %s: %v", logPath, err)
-		return
+		return false
 	}
 	log.Printf("E2E: Wrote latency log to %s (%d tests)", logPath, len(lt.entries))
 
-	// Print delta report
-	lt.printDeltaReport(baseline)
+	// Print delta report and check for regressions
+	return lt.printDeltaReport(baseline)
 }
 
-// printDeltaReport prints a comparison table between baseline and current latencies.
-func (lt *LatencyTracker) printDeltaReport(baseline map[string]time.Duration) {
+// printDeltaReport prints a comparison table between baseline and current
+// latencies. Returns true if any regressions exceed the configured thresholds.
+func (lt *LatencyTracker) printDeltaReport(baseline map[string]time.Duration) bool {
 	var report strings.Builder
 	report.WriteString("E2E Latency Delta Report:\n")
 	report.WriteString(fmt.Sprintf("  %-55s %10s %10s %12s\n", "Test Name", "Baseline", "Current", "Delta"))
 
 	var totalBaseline, totalCurrent time.Duration
 	hasBaseline := len(baseline) > 0
+	var regressions []string
 
 	for _, e := range lt.entries {
 		currentSecs := e.Duration.Seconds()
@@ -391,15 +416,25 @@ func (lt *LatencyTracker) printDeltaReport(baseline map[string]time.Duration) {
 			if delta < 0 {
 				sign = ""
 			}
-			report.WriteString(fmt.Sprintf("  %-55s %9.2fs %9.2fs %s%.2fs (%s%.0f%%)\n",
-				e.Name, baseSecs, currentSecs, sign, delta, sign, pct))
+
+			// Check per-test regression (skip very fast tests)
+			marker := " "
+			if base >= minBaselineDuration && e.Duration > time.Duration(float64(base)*perTestRegressionMultiplier) {
+				marker = "!"
+				regressions = append(regressions,
+					fmt.Sprintf("%s: %.2fs → %.2fs (%.0f%% increase, threshold %.0f%%)",
+						e.Name, baseSecs, currentSecs, pct, (perTestRegressionMultiplier-1)*100))
+			}
+
+			report.WriteString(fmt.Sprintf("%s %-55s %9.2fs %9.2fs %s%.2fs (%s%.0f%%)\n",
+				marker, e.Name, baseSecs, currentSecs, sign, delta, sign, pct))
 		} else {
 			report.WriteString(fmt.Sprintf("  %-55s %10s %9.2fs\n",
 				e.Name, "\u2014", currentSecs))
 		}
 	}
 
-	// Total line
+	// Total line + total regression check
 	if hasBaseline {
 		totalDelta := totalCurrent.Seconds() - totalBaseline.Seconds()
 		totalPct := 0.0
@@ -410,14 +445,32 @@ func (lt *LatencyTracker) printDeltaReport(baseline map[string]time.Duration) {
 		if totalDelta < 0 {
 			sign = ""
 		}
-		report.WriteString(fmt.Sprintf("  %-55s %9.1fs %9.1fs %s%.2fs (%s%.0f%%)\n",
-			"TOTAL", totalBaseline.Seconds(), totalCurrent.Seconds(), sign, totalDelta, sign, totalPct))
+
+		marker := " "
+		if totalCurrent > time.Duration(float64(totalBaseline)*totalRegressionMultiplier) {
+			marker = "!"
+			regressions = append(regressions,
+				fmt.Sprintf("TOTAL: %.1fs → %.1fs (%.0f%% increase, threshold %.0f%%)",
+					totalBaseline.Seconds(), totalCurrent.Seconds(), totalPct, (totalRegressionMultiplier-1)*100))
+		}
+
+		report.WriteString(fmt.Sprintf("%s %-55s %9.1fs %9.1fs %s%.2fs (%s%.0f%%)\n",
+			marker, "TOTAL", totalBaseline.Seconds(), totalCurrent.Seconds(), sign, totalDelta, sign, totalPct))
 	} else {
 		report.WriteString(fmt.Sprintf("  %-55s %10s %9.1fs\n",
 			"TOTAL", "\u2014", totalCurrent.Seconds()))
 	}
 
 	log.Print(report.String())
+
+	if len(regressions) > 0 {
+		log.Printf("E2E: LATENCY REGRESSIONS DETECTED (%d):", len(regressions))
+		for _, r := range regressions {
+			log.Printf("  ! %s", r)
+		}
+		return true
+	}
+	return false
 }
 
 // waitForPort polls a TCP port until it accepts connections or the timeout expires.
