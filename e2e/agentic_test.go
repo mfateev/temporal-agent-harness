@@ -225,8 +225,8 @@ func writeE2EPassedMarker() {
 	log.Printf("E2E: Wrote passed marker to %s (SHA: %s)", markerPath, sha)
 }
 
-// LatencyTracker records test durations and writes them to e2e/.test-latencies.log.
-// The log is committed to the repo so latency regressions are visible in diffs.
+// LatencyTracker records test durations and writes them to e2e/test-latencies.baseline.
+// The baseline is committed to the repo so latency regressions are visible in diffs.
 type LatencyTracker struct {
 	mu      sync.Mutex
 	entries []latencyEntry
@@ -298,7 +298,7 @@ func (lt *LatencyTracker) AddTUIResults(output string) {
 	}
 }
 
-// readBaseline reads the existing .test-latencies.log and returns a map of
+// readBaseline reads the existing test-latencies.baseline and returns a map of
 // test name → duration. Returns nil if the file doesn't exist or can't be parsed.
 func readBaseline(path string) map[string]time.Duration {
 	data, err := os.ReadFile(path)
@@ -328,7 +328,7 @@ func readBaseline(path string) map[string]time.Duration {
 	return baseline
 }
 
-// WriteLog writes the collected latencies to e2e/.test-latencies.log and prints
+// WriteLog writes the collected latencies to e2e/test-latencies.baseline and prints
 // a delta report comparing current run against the previous baseline.
 func (lt *LatencyTracker) WriteLog() {
 	lt.mu.Lock()
@@ -341,7 +341,7 @@ func (lt *LatencyTracker) WriteLog() {
 	}
 	root := strings.TrimSpace(string(rootOut))
 
-	logPath := filepath.Join(root, "e2e", ".test-latencies.log")
+	logPath := filepath.Join(root, "e2e", "test-latencies.baseline")
 
 	// Read baseline before overwriting
 	baseline := readBaseline(logPath)
