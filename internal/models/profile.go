@@ -33,6 +33,13 @@ type ModelProfile struct {
 
 	// ContextWindow overrides the default context window. nil = inherit.
 	ContextWindow *int
+
+	// DefaultReasoningEffort is the default reasoning effort for this profile. nil = inherit.
+	DefaultReasoningEffort *ReasoningEffort
+
+	// SupportedReasoningEfforts lists the effort levels this model supports.
+	// nil = inherit (non-reasoning models leave this empty).
+	SupportedReasoningEfforts []ReasoningEffortPreset
 }
 
 // ToolOverrides configures tool-level overrides for a profile.
@@ -51,6 +58,9 @@ type ResolvedProfile struct {
 	Temperature     *float64
 	MaxTokens       *int
 	ContextWindow   *int
+
+	DefaultReasoningEffort    *ReasoningEffort        `json:"default_reasoning_effort,omitempty"`
+	SupportedReasoningEfforts []ReasoningEffortPreset  `json:"supported_reasoning_efforts,omitempty"`
 }
 
 // mergeProfiles merges overlay on top of base. Overlay's non-zero/non-nil
@@ -97,6 +107,13 @@ func mergeProfiles(base, overlay ModelProfile) ModelProfile {
 	}
 	if overlay.ContextWindow != nil {
 		result.ContextWindow = overlay.ContextWindow
+	}
+
+	if overlay.DefaultReasoningEffort != nil {
+		result.DefaultReasoningEffort = overlay.DefaultReasoningEffort
+	}
+	if overlay.SupportedReasoningEfforts != nil {
+		result.SupportedReasoningEfforts = overlay.SupportedReasoningEfforts
 	}
 
 	return result

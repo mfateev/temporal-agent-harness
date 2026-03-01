@@ -62,12 +62,14 @@ func profileMatches(p ModelProfile, provider, model string) bool {
 // All nil fields are replaced with zero values.
 func toResolved(p ModelProfile) ResolvedProfile {
 	r := ResolvedProfile{
-		PromptSuffix:    p.PromptSuffix,
-		AgentsFileNames: p.AgentsFileNames,
-		Tools:           p.Tools,
-		Temperature:     p.Temperature,
-		MaxTokens:       p.MaxTokens,
-		ContextWindow:   p.ContextWindow,
+		PromptSuffix:              p.PromptSuffix,
+		AgentsFileNames:           p.AgentsFileNames,
+		Tools:                     p.Tools,
+		Temperature:               p.Temperature,
+		MaxTokens:                 p.MaxTokens,
+		ContextWindow:             p.ContextWindow,
+		DefaultReasoningEffort:    p.DefaultReasoningEffort,
+		SupportedReasoningEfforts: p.SupportedReasoningEfforts,
 	}
 
 	if p.BasePrompt != nil {

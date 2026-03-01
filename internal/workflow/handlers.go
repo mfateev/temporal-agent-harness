@@ -233,6 +233,9 @@ func (s *SessionState) registerHandlers(ctx workflow.Context, ctrl *LoopControl)
 				s.Config.Model.ContextWindow = req.ContextWindow
 			}
 
+			// Validate reasoning effort against new model's supported efforts.
+			s.validateReasoningEffortForProfile()
+
 			// Reset response chaining and incremental history tracking.
 			s.LastResponseID = ""
 			s.lastSentHistoryLen = 0
@@ -305,6 +308,38 @@ func (s *SessionState) registerHandlers(ctx workflow.Context, ctrl *LoopControl)
 	)
 	if err != nil {
 		logger.Error("Failed to register set_session_name update handler", "error", err)
+	}
+
+	// Update: update_reasoning_effort
+	// Allows the CLI to change the reasoning effort level for reasoning models.
+	err = workflow.SetUpdateHandlerWithOptions(
+		ctx,
+		UpdateReasoningEffort,
+		func(ctx workflow.Context, req UpdateReasoningEffortRequest) (UpdateReasoningEffortResponse, error) {
+			effort, ok := models.ParseReasoningEffort(req.Effort)
+			if !ok {
+				return UpdateReasoningEffortResponse{}, fmt.Errorf("invalid reasoning effort: %s", req.Effort)
+			}
+			s.Config.Model.ReasoningEffort = effort
+			return UpdateReasoningEffortResponse{
+				Acknowledged: true,
+				Effort:       string(effort),
+			}, nil
+		},
+		workflow.UpdateHandlerOptions{
+			Validator: func(ctx workflow.Context, req UpdateReasoningEffortRequest) error {
+				if req.Effort == "" {
+					return fmt.Errorf("effort must not be empty")
+				}
+				if ctrl.IsShutdown() {
+					return fmt.Errorf("session is shutting down")
+				}
+				return nil
+			},
+		},
+	)
+	if err != nil {
+		logger.Error("Failed to register update_reasoning_effort update handler", "error", err)
 	}
 
 	// Query: list_skills

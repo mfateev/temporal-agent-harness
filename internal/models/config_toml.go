@@ -14,6 +14,7 @@ type ConfigToml struct {
 	ModelContextWindow         *int                           `toml:"model_context_window"`
 	ModelAutoCompactTokenLimit *int                           `toml:"model_auto_compact_token_limit"`
 	ModelReasoningEffort       *string                        `toml:"model_reasoning_effort"`
+	ModelReasoningSummary      *string                        `toml:"model_reasoning_summary"`
 	ApprovalPolicy             *string                        `toml:"approval_policy"`
 	SandboxMode                *string                        `toml:"sandbox_mode"`
 	SandboxWorkspaceWrite      *SandboxWorkspaceWriteToml     `toml:"sandbox_workspace_write"`
@@ -75,7 +76,14 @@ func (c *ConfigToml) ApplyToConfig(cfg *SessionConfiguration) {
 		cfg.AutoCompactTokenLimit = *c.ModelAutoCompactTokenLimit
 	}
 	if c.ModelReasoningEffort != nil {
-		cfg.Model.ReasoningEffort = *c.ModelReasoningEffort
+		if effort, ok := ParseReasoningEffort(*c.ModelReasoningEffort); ok {
+			cfg.Model.ReasoningEffort = effort
+		}
+	}
+	if c.ModelReasoningSummary != nil {
+		if summary, ok := ParseReasoningSummary(*c.ModelReasoningSummary); ok {
+			cfg.Model.ReasoningSummary = summary
+		}
 	}
 	if c.ApprovalPolicy != nil {
 		cfg.Permissions.ApprovalMode = ApprovalMode(*c.ApprovalPolicy)

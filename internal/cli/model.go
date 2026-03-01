@@ -151,6 +151,7 @@ type Model struct {
 
 	// Status
 	modelName         string
+	reasoningEffort   string
 	totalTokens       int
 	totalCachedTokens int
 	contextWindowPct  int
@@ -217,6 +218,9 @@ type Model struct {
 	// /approvals command state
 	selectingApprovalMode bool
 
+	// /reasoning command state
+	selectingReasoning bool
+
 	// /skills command state
 	skillsToggleMode bool
 	selectingSkill   bool
@@ -260,7 +264,7 @@ func NewModel(config Config, c client.Client) Model {
 		cwd, _ = os.Getwd()
 	}
 
-	return Model{
+	model := Model{
 		config:          config,
 		client:          c,
 		keys:            DefaultKeyMap(),
@@ -274,6 +278,15 @@ func NewModel(config Config, c client.Client) Model {
 		provider:        config.Provider,
 		harnessID:       harnessWorkflowID(cwd),
 	}
+
+	// Initialize reasoning effort from model profile
+	registry := models.NewDefaultRegistry()
+	profile := registry.Resolve(config.Provider, config.Model)
+	if profile.DefaultReasoningEffort != nil {
+		model.reasoningEffort = string(*profile.DefaultReasoningEffort)
+	}
+
+	return model
 }
 
 // Init implements tea.Model.
@@ -433,6 +446,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ModelUpdateSentMsg:
 		m.provider = msg.Provider
 		m.modelName = msg.Model
+		// Resolve profile to update reasoning effort display
+		registry := models.NewDefaultRegistry()
+		profile := registry.Resolve(msg.Provider, msg.Model)
+		if profile.DefaultReasoningEffort != nil {
+			m.reasoningEffort = string(*profile.DefaultReasoningEffort)
+		} else {
+			m.reasoningEffort = ""
+		}
 		m.appendToViewport(m.renderer.RenderSystemMessage(
 			fmt.Sprintf("Model updated to %s (%s).", msg.Model, msg.Provider)))
 		m.selectingModel = false
@@ -589,6 +610,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state = StateInput
 		cmds = append(cmds, m.focusTextarea())
 
+	case ReasoningEffortUpdateSentMsg:
+		m.reasoningEffort = msg.Effort
+		m.appendToViewport(m.renderer.RenderSystemMessage(
+			fmt.Sprintf("Reasoning effort updated to %s.", msg.Effort)))
+		m.selectingReasoning = false
+		m.selector = nil
+		m.state = StateInput
+		cmds = append(cmds, m.focusTextarea())
+
+	case ReasoningEffortUpdateErrorMsg:
+		m.appendToViewport(fmt.Sprintf("Error updating reasoning effort: %v\n", msg.Err))
+		m.selectingReasoning = false
+		m.selector = nil
+		m.state = StateInput
+		cmds = append(cmds, m.focusTextarea())
+
 	case InitResultMsg:
 		if msg.AlreadyExists {
 			m.appendToViewport(m.renderer.RenderSystemMessage(
@@ -731,7 +768,7 @@ func (m Model) View() string {
 			inputView = m.spinner.View() + " " + m.styles.SpinnerMessage.Render("Loading sessions...")
 		}
 	case StateInput:
-		if (m.selectingModel || m.selectingApprovalMode || m.selectingSkill) && m.selector != nil {
+		if (m.selectingModel || m.selectingApprovalMode || m.selectingReasoning || m.selectingSkill) && m.selector != nil {
 			inputView = m.selector.View()
 		} else {
 			inputView = m.textarea.View()
@@ -972,6 +1009,50 @@ func (m *Model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if msg.Type == tea.KeyEsc {
 			m.selectingApprovalMode = false
+			m.state = StateInput
+			return m, m.focusTextarea()
+		}
+		return m, nil
+	}
+
+	// /reasoning selection uses the selector UI.
+	if m.selectingReasoning {
+		if m.selector != nil {
+			if m.isViewportScrollKey(msg) {
+				var cmd tea.Cmd
+				m.viewport, cmd = m.viewport.Update(msg)
+				return m, cmd
+			}
+
+			done := m.selector.Update(msg)
+			if done {
+				m.selectingReasoning = false
+				if m.selector.Cancelled() {
+					m.selector = nil
+					m.state = StateInput
+					return m, m.focusTextarea()
+				}
+				idx := m.selector.Selected()
+				m.selector = nil
+
+				// Resolve supported efforts for current model
+				registry := models.NewDefaultRegistry()
+				profile := registry.Resolve(m.provider, m.modelName)
+				if idx < 0 || idx >= len(profile.SupportedReasoningEfforts) {
+					m.appendToViewport("Invalid selection.\n")
+					m.state = StateInput
+					return m, m.focusTextarea()
+				}
+				effort := string(profile.SupportedReasoningEfforts[idx].Effort)
+				m.spinnerMsg = "Updating reasoning effort..."
+				m.state = StateWatching
+				m.textarea.Blur()
+				return m, sendUpdateReasoningEffortCmd(m.client, m.workflowID, effort)
+			}
+			return m, nil
+		}
+		if msg.Type == tea.KeyEsc {
+			m.selectingReasoning = false
 			m.state = StateInput
 			return m, m.focusTextarea()
 		}
@@ -1239,6 +1320,33 @@ func (m *Model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}, m.styles)
 			m.selector.SetWidth(m.width)
 			m.selectingApprovalMode = true
+			m.state = StateInput
+			m.textarea.Blur()
+			return m, nil
+		}
+		if line == "/reasoning" {
+			if m.workflowID == "" {
+				m.appendToViewport("No active session.\n")
+				return m, nil
+			}
+			// Resolve the current model's supported reasoning efforts
+			registry := models.NewDefaultRegistry()
+			profile := registry.Resolve(m.provider, m.modelName)
+			if len(profile.SupportedReasoningEfforts) == 0 {
+				m.appendToViewport(m.renderer.RenderSystemMessage(
+					fmt.Sprintf("Model %s does not support reasoning effort configuration.", m.modelName)))
+				return m, nil
+			}
+			opts := make([]SelectorOption, 0, len(profile.SupportedReasoningEfforts))
+			for _, preset := range profile.SupportedReasoningEfforts {
+				opts = append(opts, SelectorOption{
+					Label: fmt.Sprintf("%s — %s", preset.Effort, preset.Description),
+				})
+			}
+			m.appendToViewport(m.renderer.RenderSystemMessage("Select reasoning effort (Esc to cancel):"))
+			m.selector = NewSelectorModel(opts, m.styles)
+			m.selector.SetWidth(m.width)
+			m.selectingReasoning = true
 			m.state = StateInput
 			m.textarea.Blur()
 			return m, nil

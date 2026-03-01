@@ -203,7 +203,7 @@ func TestApplyRoleOverrides(t *testing.T) {
 			},
 		}
 		applyRoleOverrides(&cfg, AgentRoleExplorer)
-		assert.Equal(t, "medium", cfg.Model.ReasoningEffort)
+		assert.Equal(t, models.ReasoningEffortMedium, cfg.Model.ReasoningEffort)
 		assert.False(t, cfg.Tools.HasTool("write_file"), "explorer should not write")
 		assert.False(t, cfg.Tools.HasTool("apply_patch"), "explorer should not patch")
 		assert.False(t, cfg.Tools.HasTool("request_user_input"), "explorer is one-shot")
@@ -223,7 +223,7 @@ func TestApplyRoleOverrides(t *testing.T) {
 		}
 		applyRoleOverrides(&cfg, AgentRoleExplorer)
 		assert.Equal(t, "claude-sonnet-4-5-20250929", cfg.Model.Model, "explorer on anthropic should NOT override model")
-		assert.Equal(t, "medium", cfg.Model.ReasoningEffort)
+		assert.Equal(t, models.ReasoningEffortMedium, cfg.Model.ReasoningEffort)
 	})
 
 	t.Run("orchestrator: no write tools, one-shot, has base instructions", func(t *testing.T) {
@@ -460,7 +460,7 @@ func TestBuildAgentSpawnConfig(t *testing.T) {
 
 	t.Run("explorer role", func(t *testing.T) {
 		input := buildAgentSpawnConfig(parentConfig, AgentRoleExplorer, "explore", 1)
-		assert.Equal(t, "medium", input.Config.Model.ReasoningEffort)
+		assert.Equal(t, models.ReasoningEffortMedium, input.Config.Model.ReasoningEffort)
 		assert.False(t, input.Config.Tools.HasTool("write_file"))
 		assert.False(t, input.Config.Tools.HasTool("apply_patch"))
 		assert.True(t, input.Config.Tools.HasTool("read_file"))

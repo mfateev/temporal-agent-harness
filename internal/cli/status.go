@@ -15,6 +15,9 @@ func (m *Model) formatStatusDisplay() string {
 
 	b.WriteString(fmt.Sprintf("  Model:           %s\n", m.modelName))
 	b.WriteString(fmt.Sprintf("  Provider:        %s\n", m.provider))
+	if m.reasoningEffort != "" {
+		b.WriteString(fmt.Sprintf("  Reasoning:       %s\n", m.reasoningEffort))
+	}
 	b.WriteString(fmt.Sprintf("  Approval mode:   %s\n", m.config.Permissions.ApprovalMode))
 	b.WriteString(fmt.Sprintf("  Sandbox:         %s\n", m.config.Permissions.SandboxMode))
 	b.WriteString(fmt.Sprintf("  Working dir:     %s\n", m.config.Cwd))

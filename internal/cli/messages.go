@@ -279,3 +279,13 @@ type SessionNameSentMsg struct {
 type SessionNameErrorMsg struct {
 	Err error
 }
+
+// ReasoningEffortUpdateSentMsg is sent after a reasoning effort update succeeds.
+type ReasoningEffortUpdateSentMsg struct {
+	Effort string
+}
+
+// ReasoningEffortUpdateErrorMsg is sent when a reasoning effort update fails.
+type ReasoningEffortUpdateErrorMsg struct {
+	Err error
+}

@@ -1,5 +1,8 @@
 package models
 
+// defaultReasoningEffort is the default reasoning effort for OpenAI reasoning models.
+var defaultReasoningEffort = ReasoningEffortMedium
+
 // openaiProfile is the provider-wide profile for OpenAI models.
 // No CLAUDE.md for OpenAI — only AGENTS files.
 var openaiProfile = ModelProfile{
@@ -11,6 +14,13 @@ var openaiProfile = ModelProfile{
 var openaiReasoningProfile = ModelProfile{
 	Provider:     "openai",
 	ModelPattern: `^(o1|o3|o4|codex)-`,
+	DefaultReasoningEffort: &defaultReasoningEffort,
+	SupportedReasoningEfforts: []ReasoningEffortPreset{
+		{Effort: ReasoningEffortLow, Description: "Fastest responses, least reasoning"},
+		{Effort: ReasoningEffortMedium, Description: "Balanced speed and reasoning (default)"},
+		{Effort: ReasoningEffortHigh, Description: "More thorough reasoning"},
+		{Effort: ReasoningEffortXHigh, Description: "Maximum reasoning effort"},
+	},
 }
 
 // builtinProfiles returns all built-in profiles in resolution order.

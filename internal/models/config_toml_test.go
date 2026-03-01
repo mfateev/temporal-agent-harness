@@ -132,7 +132,7 @@ required = true
 	assert.Equal(t, "anthropic", cfg.Model.Provider)
 	assert.Equal(t, 200000, cfg.Model.ContextWindow)
 	assert.Equal(t, 160000, cfg.AutoCompactTokenLimit)
-	assert.Equal(t, "high", cfg.Model.ReasoningEffort)
+	assert.Equal(t, ReasoningEffortHigh, cfg.Model.ReasoningEffort)
 	assert.Equal(t, ApprovalUnlessTrusted, cfg.Permissions.ApprovalMode)
 	assert.Equal(t, "workspace-write", cfg.Permissions.SandboxMode)
 	assert.Equal(t, []string{"/home/dev/projects"}, cfg.Permissions.SandboxWritableRoots)

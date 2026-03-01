@@ -14,7 +14,8 @@ type ModelConfig struct {
 	Temperature     float64 `json:"temperature"`               // 0.0 to 2.0
 	MaxTokens       int     `json:"max_tokens"`                // Max tokens to generate
 	ContextWindow   int     `json:"context_window"`            // Max context window size
-	ReasoningEffort string  `json:"reasoning_effort,omitempty"` // "low", "medium", "high" — for model reasoning control
+	ReasoningEffort  ReasoningEffort  `json:"reasoning_effort,omitempty"`  // Reasoning effort level for reasoning models
+	ReasoningSummary ReasoningSummary `json:"reasoning_summary,omitempty"` // Reasoning summary mode (auto/concise/detailed/none)
 }
 
 // DefaultModelConfig returns a sensible default configuration

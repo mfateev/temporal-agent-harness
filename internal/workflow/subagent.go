@@ -620,7 +620,7 @@ func applyRoleOverrides(cfg *models.SessionConfiguration, role AgentRole) {
 	switch role {
 	case AgentRoleExplorer:
 		// Explorer: cheaper model, medium reasoning, read-only tools, one-shot.
-		cfg.Model.ReasoningEffort = "medium"
+		cfg.Model.ReasoningEffort = models.ReasoningEffortMedium
 		cfg.Tools.RemoveTools("write_file", "apply_patch", "request_user_input")
 		// Override to cheaper model for OpenAI providers
 		if cfg.Model.Provider == "openai" {

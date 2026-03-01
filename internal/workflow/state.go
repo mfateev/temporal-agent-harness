@@ -110,6 +110,10 @@ const (
 	// UpdateSessionName sets a user-friendly name for the session.
 	// Used by the CLI /rename command.
 	UpdateSessionName = "set_session_name"
+
+	// UpdateReasoningEffort changes the reasoning effort level for reasoning models.
+	// Used by the CLI /reasoning command.
+	UpdateReasoningEffort = "update_reasoning_effort"
 )
 
 // UpdateModelRequest is the payload for the update_model Update.
@@ -196,6 +200,17 @@ type SetSessionNameRequest struct {
 // SetSessionNameResponse is returned by the set_session_name Update.
 type SetSessionNameResponse struct {
 	Acknowledged bool `json:"acknowledged"`
+}
+
+// UpdateReasoningEffortRequest is the payload for the update_reasoning_effort Update.
+type UpdateReasoningEffortRequest struct {
+	Effort string `json:"effort"`
+}
+
+// UpdateReasoningEffortResponse is returned by the update_reasoning_effort Update.
+type UpdateReasoningEffortResponse struct {
+	Acknowledged bool   `json:"acknowledged"`
+	Effort       string `json:"effort"` // The actual effort set (may differ from request if fallback was used)
 }
 
 // TurnPhase indicates the current phase of the workflow turn.

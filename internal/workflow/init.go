@@ -37,6 +37,48 @@ func (s *SessionState) resolveProfile() {
 	if s.ResolvedProfile.ContextWindow != nil {
 		s.Config.Model.ContextWindow = *s.ResolvedProfile.ContextWindow
 	}
+
+	// Apply default reasoning effort from profile if not explicitly set
+	if s.Config.Model.ReasoningEffort == "" && s.ResolvedProfile.DefaultReasoningEffort != nil {
+		s.Config.Model.ReasoningEffort = *s.ResolvedProfile.DefaultReasoningEffort
+	}
+}
+
+// validateReasoningEffortForProfile checks whether the current reasoning effort
+// is supported by the resolved profile. If not, falls back to the profile's
+// default or picks the median of supported efforts. If the new profile has no
+// supported efforts (non-reasoning model), clears the reasoning effort.
+func (s *SessionState) validateReasoningEffortForProfile() {
+	supported := s.ResolvedProfile.SupportedReasoningEfforts
+	if len(supported) == 0 {
+		// Non-reasoning model — clear reasoning effort
+		s.Config.Model.ReasoningEffort = ""
+		return
+	}
+
+	current := s.Config.Model.ReasoningEffort
+	if current == "" {
+		// No effort set — apply profile default
+		if s.ResolvedProfile.DefaultReasoningEffort != nil {
+			s.Config.Model.ReasoningEffort = *s.ResolvedProfile.DefaultReasoningEffort
+		}
+		return
+	}
+
+	// Check if current effort is in supported list
+	for _, preset := range supported {
+		if preset.Effort == current {
+			return // Current effort is valid
+		}
+	}
+
+	// Not supported — fall back to default, or median of supported
+	if s.ResolvedProfile.DefaultReasoningEffort != nil {
+		s.Config.Model.ReasoningEffort = *s.ResolvedProfile.DefaultReasoningEffort
+	} else {
+		// Pick median
+		s.Config.Model.ReasoningEffort = supported[len(supported)/2].Effort
+	}
 }
 
 // resolveInstructions loads worker-side AGENTS.md files and merges all

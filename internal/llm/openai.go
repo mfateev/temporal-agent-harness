@@ -58,11 +58,15 @@ func (c *OpenAIClient) Call(ctx context.Context, request LLMRequest) (LLMRespons
 		params.MaxOutputTokens = param.NewOpt(int64(request.ModelConfig.MaxTokens))
 	}
 
-	// Reasoning effort for reasoning models (o-series, codex)
+	// Reasoning effort and summary for reasoning models (o-series, codex)
 	if request.ModelConfig.ReasoningEffort != "" && isReasoningModel(request.ModelConfig.Model) {
-		params.Reasoning = shared.ReasoningParam{
+		reasoning := shared.ReasoningParam{
 			Effort: shared.ReasoningEffort(request.ModelConfig.ReasoningEffort),
 		}
+		if request.ModelConfig.ReasoningSummary != "" && request.ModelConfig.ReasoningSummary != models.ReasoningSummaryNone {
+			reasoning.Summary = shared.ReasoningSummary(request.ModelConfig.ReasoningSummary)
+		}
+		params.Reasoning = reasoning
 	}
 
 	// Tool definitions (function tools + optional web search)
