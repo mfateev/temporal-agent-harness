@@ -46,6 +46,10 @@ func AgenticWorkflow(ctx workflow.Context, input WorkflowInput) (WorkflowResult,
 	ctrl := &LoopControl{}
 	state.registerHandlers(ctx, ctrl)
 
+	// Carry crew agent definitions from input.
+	state.CrewAgents = input.CrewAgents
+	state.CrewMainAgent = input.CrewMainAgent
+
 	if input.ResolvedProfile != nil {
 		// Pre-resolved by SessionWorkflow — skip init.
 		state.ResolvedProfile = *input.ResolvedProfile
@@ -82,6 +86,9 @@ func AgenticWorkflow(ctx workflow.Context, input WorkflowInput) (WorkflowResult,
 			state.loadSkills(ctx)
 		}
 	}
+
+	// Apply crew-aware tool spec scoping.
+	state.applyCrewToolSpecs()
 
 	// Warn if using deprecated on-failure mode (Codex PR #11631)
 	if state.Config.Permissions.ApprovalMode == models.ApprovalOnFailure {

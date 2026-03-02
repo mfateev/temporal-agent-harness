@@ -118,6 +118,11 @@ type Config struct {
 	// 0 means no per-call timeout (default for interactive use).
 	// Short values (e.g. 10s) make tests fail fast when the server is dead.
 	ConnectionTimeout time.Duration
+
+	// Crew configuration (set by start-crew subcommand)
+	CrewAgents    map[string]models.CrewAgentDef // Interpolated crew agent definitions
+	CrewMainAgent string                         // Name of the main agent in the crew
+	CrewType      string                         // Name of the crew template
 }
 
 // Model is the bubbletea model for the interactive CLI.

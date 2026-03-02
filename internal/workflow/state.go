@@ -263,6 +263,13 @@ type SessionWorkflowInput struct {
 
 	// Overrides contains merged CLI-level config overrides.
 	Overrides CLIOverrides `json:"overrides"`
+
+	// CrewAgents carries interpolated crew agent definitions from start-crew.
+	// Populated by ApplyCrewType when a crew template is used.
+	CrewAgents map[string]models.CrewAgentDef `json:"crew_agents,omitempty"`
+
+	// CrewMainAgent is the name of the main agent in the crew (for available_agents lookup).
+	CrewMainAgent string `json:"crew_main_agent,omitempty"`
 }
 
 // UpdateSessionStatusRequest is the payload for the update_session_status signal.
@@ -295,6 +302,13 @@ type WorkflowInput struct {
 	McpToolLookup   map[string]tools.McpToolRef `json:"mcp_tool_lookup,omitempty"`
 	McpToolSpecs    []tools.ToolSpec            `json:"mcp_tool_specs,omitempty"`
 	LoadedSkills    []skills.SkillMetadata      `json:"loaded_skills,omitempty"`
+
+	// CrewAgents carries crew agent definitions scoped to this agent's visibility.
+	// For the main agent: all crew agents. For children: filtered by parent's available_agents.
+	CrewAgents map[string]models.CrewAgentDef `json:"crew_agents,omitempty"`
+
+	// CrewMainAgent is the name of the current agent in the crew (for available_agents lookup).
+	CrewMainAgent string `json:"crew_main_agent,omitempty"`
 }
 
 // UserInput is the payload for the user_input Update.
@@ -539,6 +553,13 @@ type SessionState struct {
 	// Discovered skills metadata (loaded at session start, persists across CAN).
 	// Maps to: codex-rs/core/src/skills/manager.rs SkillsManager
 	LoadedSkills []skills.SkillMetadata `json:"loaded_skills,omitempty"`
+
+	// CrewAgents carries crew agent definitions visible to this agent.
+	// Persists across ContinueAsNew so crew-aware spawn works after CAN.
+	CrewAgents map[string]models.CrewAgentDef `json:"crew_agents,omitempty"`
+
+	// CrewMainAgent is the name of this agent in the crew context (for available_agents lookup).
+	CrewMainAgent string `json:"crew_main_agent,omitempty"`
 }
 
 // PlanStepStatus indicates the status of a single step in a plan.

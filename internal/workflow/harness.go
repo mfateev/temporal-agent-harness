@@ -75,6 +75,15 @@ type StartSessionRequest struct {
 	// OverrideConfig applies per-session CLI overrides on top of the
 	// harness-level overrides. Optional.
 	OverrideConfig *CLIOverrides `json:"override_config,omitempty"`
+
+	// CrewAgents carries interpolated crew agent definitions (from start-crew).
+	CrewAgents map[string]models.CrewAgentDef `json:"crew_agents,omitempty"`
+
+	// CrewMainAgent is the name of the main agent in the crew.
+	CrewMainAgent string `json:"crew_main_agent,omitempty"`
+
+	// CrewType is the crew template name (for display in session list).
+	CrewType string `json:"crew_type,omitempty"`
 }
 
 // StartSessionResponse is returned by the UpdateStartSession update.
@@ -113,6 +122,9 @@ type SessionEntry struct {
 
 	// StartedAt is the time the session was started (workflow time).
 	StartedAt time.Time `json:"started_at"`
+
+	// CrewType is the name of the crew template used to start this session (if any).
+	CrewType string `json:"crew_type,omitempty"`
 }
 
 // HarnessWorkflowState is passed through ContinueAsNew.
@@ -230,10 +242,12 @@ func handleStartSession(
 
 	// Build SessionWorkflow input.
 	sessionInput := SessionWorkflowInput{
-		SessionID:   sessionID,
-		HarnessID:   state.HarnessID,
-		UserMessage: req.UserMessage,
-		Overrides:   overrides,
+		SessionID:     sessionID,
+		HarnessID:     state.HarnessID,
+		UserMessage:   req.UserMessage,
+		Overrides:     overrides,
+		CrewAgents:    req.CrewAgents,
+		CrewMainAgent: req.CrewMainAgent,
 	}
 
 	// Determine model name for the registry (best-effort from overrides).
@@ -255,6 +269,7 @@ func handleStartSession(
 		Model:             model,
 		Status:            AgentStatusPendingInit,
 		StartedAt:         workflow.Now(ctx),
+		CrewType:          req.CrewType,
 	}
 	state.Sessions = append(state.Sessions, entry)
 

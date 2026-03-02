@@ -84,6 +84,9 @@ func startWorkflowCmd(c client.Client, config Config) tea.Cmd {
 					MemoryDbPath:       config.MemoryDbPath,
 					Cwd:                cwd,
 				},
+				CrewAgents:    config.CrewAgents,
+				CrewMainAgent: config.CrewMainAgent,
+				CrewType:      config.CrewType,
 			}},
 			WaitForStage: client.WorkflowUpdateStageCompleted,
 		})
@@ -377,6 +380,9 @@ func startNewSessionCmd(c client.Client, harnessID, message string, config Confi
 					MemoryDbPath:       config.MemoryDbPath,
 					Cwd:                cwd,
 				},
+				CrewAgents:    config.CrewAgents,
+				CrewMainAgent: config.CrewMainAgent,
+				CrewType:      config.CrewType,
 			}},
 			WaitForStage: client.WorkflowUpdateStageCompleted,
 		})

@@ -109,6 +109,8 @@ func SessionWorkflow(ctx workflow.Context, input SessionWorkflowInput) error {
 		McpToolLookup:   mcpToolLookup,
 		McpToolSpecs:    mcpToolSpecs,
 		LoadedSkills:    loadedSkills,
+		CrewAgents:      input.CrewAgents,
+		CrewMainAgent:   input.CrewMainAgent,
 	}
 
 	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{

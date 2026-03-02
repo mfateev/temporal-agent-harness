@@ -4,6 +4,12 @@
 // See also: codex-rs/core/src/agent/collab.rs, codex-rs/core/src/agent/control.rs
 package tools
 
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
+
 func init() {
 	for _, e := range []SpecEntry{
 		{Name: "spawn_agent", Constructor: NewSpawnAgentToolSpec, Group: "collab"},
@@ -183,4 +189,81 @@ func NewResumeAgentToolSpec() ToolSpec {
 			},
 		},
 	}
+}
+
+// CrewAgentSummary is a lightweight description of a crew agent for tool spec generation.
+// This avoids importing the models package from tools (keeping tools dependency-free).
+type CrewAgentSummary struct {
+	Name        string
+	Description string
+}
+
+// UpdateSpawnAgentSpecWithCrewRoles extends the spawn_agent tool spec's agent_type
+// parameter description with crew-defined agent names and descriptions.
+// If crewAgents is empty, the specs are returned unchanged.
+// If crewAgents is non-empty but the agent has no available_agents (empty list),
+// collab tools are removed entirely.
+func UpdateSpawnAgentSpecWithCrewRoles(specs []ToolSpec, crewAgents []CrewAgentSummary) []ToolSpec {
+	if len(crewAgents) == 0 {
+		return specs
+	}
+
+	// Build the crew roles description string.
+	// Sort by name for deterministic output.
+	sorted := make([]CrewAgentSummary, len(crewAgents))
+	copy(sorted, crewAgents)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Name < sorted[j].Name
+	})
+
+	var parts []string
+	for _, agent := range sorted {
+		desc := agent.Description
+		if desc == "" {
+			desc = "Crew-defined agent"
+		}
+		parts = append(parts, fmt.Sprintf("'%s' — %s", agent.Name, desc))
+	}
+	crewDesc := " Crew agents: " + strings.Join(parts, " ")
+
+	// Find and modify the spawn_agent spec.
+	result := make([]ToolSpec, len(specs))
+	copy(result, specs)
+	for i, spec := range result {
+		if spec.Name != "spawn_agent" {
+			continue
+		}
+		// Clone parameters to avoid mutating the original.
+		params := make([]ToolParameter, len(spec.Parameters))
+		copy(params, spec.Parameters)
+		for j, p := range params {
+			if p.Name == "agent_type" {
+				params[j].Description += crewDesc
+				break
+			}
+		}
+		result[i].Parameters = params
+		break
+	}
+
+	return result
+}
+
+// RemoveCollabSpecs removes all collab tool specs from the list.
+// Used when an agent has no available_agents and cannot spawn sub-agents.
+func RemoveCollabSpecs(specs []ToolSpec) []ToolSpec {
+	collabNames := map[string]bool{
+		"spawn_agent":  true,
+		"send_input":   true,
+		"wait":         true,
+		"close_agent":  true,
+		"resume_agent": true,
+	}
+	var result []ToolSpec
+	for _, spec := range specs {
+		if !collabNames[spec.Name] {
+			result = append(result, spec)
+		}
+	}
+	return result
 }

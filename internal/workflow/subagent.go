@@ -17,6 +17,7 @@ import (
 
 	"github.com/mfateev/temporal-agent-harness/internal/instructions"
 	"github.com/mfateev/temporal-agent-harness/internal/models"
+	"github.com/mfateev/temporal-agent-harness/internal/tools"
 )
 
 // ExplorerModel is the cheaper model used for explorer agents on OpenAI.
@@ -302,11 +303,22 @@ func (s *SessionState) handleSpawnAgent(ctx workflow.Context, fc models.Conversa
 			"cannot spawn agent: maximum nesting depth (%d) exceeded", MaxThreadSpawnDepth)), nil
 	}
 
-	role := parseAgentRole(args.AgentType)
-	agentID := nextAgentID(ctx)
+	var childInput WorkflowInput
+	var role AgentRole
 
-	// Build child workflow input
-	childInput := buildAgentSpawnConfig(s.Config, role, msg, childDepth)
+	// Check if agent_type matches a crew agent definition.
+	if crewDef, ok := s.CrewAgents[args.AgentType]; ok {
+		role = AgentRole(args.AgentType) // Use crew agent name as role label
+
+		// Build child config: start with shared base, then apply crew overrides.
+		childInput = buildCrewAgentSpawnConfig(s.Config, crewDef, msg, childDepth, s.CrewAgents)
+	} else {
+		// Standard role-based spawn (existing path).
+		role = parseAgentRole(args.AgentType)
+		childInput = buildAgentSpawnConfig(s.Config, role, msg, childDepth)
+	}
+
+	agentID := nextAgentID(ctx)
 
 	// Register agent info before starting the child
 	info := &AgentInfo{
@@ -351,6 +363,109 @@ func (s *SessionState) handleSpawnAgent(ctx workflow.Context, fc models.Conversa
 	return collabSuccessOutput(fc.CallID, map[string]interface{}{
 		"agent_id": agentID,
 	}), nil
+}
+
+// buildCrewAgentSpawnConfig builds a WorkflowInput for a crew-defined child agent.
+// It applies the base role overrides (if any), then overrides with crew-specific model/instructions,
+// and scopes the child's crew agents to only those in its available_agents list.
+func buildCrewAgentSpawnConfig(parentConfig models.SessionConfiguration, crewDef models.CrewAgentDef, message string, depth int, allCrewAgents map[string]models.CrewAgentDef) WorkflowInput {
+	childConfig := buildAgentSharedConfig(parentConfig, depth)
+
+	// Apply base role overrides if the crew agent specifies one.
+	if crewDef.Role != "" {
+		baseRole := parseAgentRole(crewDef.Role)
+		applyRoleOverrides(&childConfig, baseRole)
+	} else {
+		// No base role — apply default role overrides (removes request_user_input).
+		applyRoleOverrides(&childConfig, AgentRoleDefault)
+	}
+
+	// Override with crew-specific model/instructions.
+	if crewDef.Model != "" {
+		childConfig.Model.Model = crewDef.Model
+	}
+	if crewDef.Instructions != "" {
+		childConfig.DeveloperInstructions = crewDef.Instructions
+	}
+
+	// Scope crew agents to this child's available_agents list.
+	var childCrewAgents map[string]models.CrewAgentDef
+	if len(crewDef.AvailableAgents) > 0 {
+		childCrewAgents = filterCrewAgents(allCrewAgents, crewDef.AvailableAgents)
+		// Ensure the child has collab tools if it can spawn agents.
+		if !childConfig.Tools.HasTool("collab") && depth < MaxThreadSpawnDepth {
+			childConfig.Tools.AddTools("collab")
+		}
+	} else {
+		// No available_agents — remove collab tools.
+		childConfig.Tools.RemoveTools("collab")
+	}
+
+	return WorkflowInput{
+		ConversationID: "", // Set by parent
+		UserMessage:    message,
+		Config:         childConfig,
+		Depth:          depth,
+		CrewAgents:     childCrewAgents,
+	}
+}
+
+// filterCrewAgents returns a new map containing only the crew agents whose names
+// are in the allowed list. Each agent retains its full definition (including its
+// own available_agents for recursive scoping).
+func filterCrewAgents(all map[string]models.CrewAgentDef, allowed []string) map[string]models.CrewAgentDef {
+	result := make(map[string]models.CrewAgentDef, len(allowed))
+	for _, name := range allowed {
+		if def, ok := all[name]; ok {
+			result[name] = def
+		}
+	}
+	return result
+}
+
+// applyCrewToolSpecs modifies the agent's ToolSpecs based on crew agent visibility.
+// For the main agent: adds crew agent descriptions to spawn_agent.
+// For agents with no available_agents: removes collab tools entirely.
+func (s *SessionState) applyCrewToolSpecs() {
+	if len(s.CrewAgents) == 0 {
+		return
+	}
+
+	// Determine which agents this agent can see.
+	// Look up this agent's available_agents from its own crew def.
+	var visibleAgents []tools.CrewAgentSummary
+
+	if s.CrewMainAgent != "" {
+		if myDef, ok := s.CrewAgents[s.CrewMainAgent]; ok {
+			if len(myDef.AvailableAgents) > 0 {
+				for _, name := range myDef.AvailableAgents {
+					if def, ok := s.CrewAgents[name]; ok {
+						visibleAgents = append(visibleAgents, tools.CrewAgentSummary{
+							Name:        name,
+							Description: def.Description,
+						})
+					}
+				}
+			}
+			// If available_agents is empty, agent cannot spawn — remove collab tools.
+			if len(myDef.AvailableAgents) == 0 {
+				s.ToolSpecs = tools.RemoveCollabSpecs(s.ToolSpecs)
+				return
+			}
+		}
+	} else {
+		// No specific main agent name — show all crew agents (child spawned without crew context).
+		for name, def := range s.CrewAgents {
+			visibleAgents = append(visibleAgents, tools.CrewAgentSummary{
+				Name:        name,
+				Description: def.Description,
+			})
+		}
+	}
+
+	if len(visibleAgents) > 0 {
+		s.ToolSpecs = tools.UpdateSpawnAgentSpecWithCrewRoles(s.ToolSpecs, visibleAgents)
+	}
 }
 
 // ---------------------------------------------------------------------------
