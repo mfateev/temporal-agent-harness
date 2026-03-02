@@ -120,9 +120,9 @@ type Config struct {
 	ConnectionTimeout time.Duration
 
 	// Crew configuration (set by start-crew subcommand)
-	CrewAgents    map[string]models.CrewAgentDef // Interpolated crew agent definitions
-	CrewMainAgent string                         // Name of the main agent in the crew
-	CrewType      string                         // Name of the crew template
+	CrewName   string            // Crew template name (e.g. "bug-fixer")
+	CrewInputs map[string]string // Raw user-provided inputs for crew interpolation
+	CrewType   string            // Name of the crew template (for display)
 }
 
 // Model is the bubbletea model for the interactive CLI.

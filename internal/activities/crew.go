@@ -101,3 +101,128 @@ func (a *CrewActivities) LoadCrew(ctx context.Context, input LoadCrewInput) (Loa
 
 	return LoadCrewOutput{Crew: crew}, nil
 }
+
+// ---------------------------------------------------------------------------
+// ResolveCrewMain — resolves the main agent's config from a crew template.
+// Called by SessionWorkflow to apply main agent overrides before profile resolution.
+// ---------------------------------------------------------------------------
+
+// ResolveCrewMainInput is the input for the ResolveCrewMain activity.
+type ResolveCrewMainInput struct {
+	CodexHome  string            `json:"codex_home"`
+	CrewName   string            `json:"crew_name"`
+	CrewInputs map[string]string `json:"crew_inputs"`
+}
+
+// ResolveCrewMainOutput is the output from the ResolveCrewMain activity.
+type ResolveCrewMainOutput struct {
+	MainAgentName  string              `json:"main_agent_name"`
+	MainAgentDef   models.CrewAgentDef `json:"main_agent_def"`
+	ApprovalPolicy string              `json:"approval_policy,omitempty"`
+	Mode           models.CrewMode     `json:"mode"`
+	InitialPrompt  string              `json:"initial_prompt,omitempty"`
+}
+
+// ResolveCrewMain loads the crew TOML, validates inputs, interpolates the main
+// agent definition, and returns it for SessionWorkflow to apply as config overrides.
+func (a *CrewActivities) ResolveCrewMain(ctx context.Context, input ResolveCrewMainInput) (ResolveCrewMainOutput, error) {
+	crew, err := loadCrewByName(input.CodexHome, input.CrewName)
+	if err != nil {
+		return ResolveCrewMainOutput{}, err
+	}
+
+	if err := crew.ValidateInputs(input.CrewInputs); err != nil {
+		return ResolveCrewMainOutput{}, fmt.Errorf("crew %q: %w", input.CrewName, err)
+	}
+
+	vars := crew.BuildVars(input.CrewInputs)
+	mainDef := models.InterpolateAgentDef(crew.Agents[crew.MainAgent], vars)
+
+	var initialPrompt string
+	if crew.Mode == models.CrewModeAutonomous && crew.InitialPrompt != "" {
+		initialPrompt = models.Interpolate(crew.InitialPrompt, vars)
+	}
+
+	return ResolveCrewMainOutput{
+		MainAgentName:  crew.MainAgent,
+		MainAgentDef:   mainDef,
+		ApprovalPolicy: crew.ApprovalPolicy,
+		Mode:           crew.Mode,
+		InitialPrompt:  initialPrompt,
+	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// ResolveCrewAgent — resolves a single agent's config + visible agents.
+// Called by AgenticWorkflow at init (both main and children).
+// ---------------------------------------------------------------------------
+
+// CrewAgentSummary is a lightweight description of a visible crew agent.
+type CrewAgentSummary struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// ResolveCrewAgentInput is the input for the ResolveCrewAgent activity.
+type ResolveCrewAgentInput struct {
+	CodexHome  string            `json:"codex_home"`
+	CrewName   string            `json:"crew_name"`
+	AgentName  string            `json:"agent_name"`
+	CrewInputs map[string]string `json:"crew_inputs"`
+}
+
+// ResolveCrewAgentOutput is the output from the ResolveCrewAgent activity.
+type ResolveCrewAgentOutput struct {
+	AgentDef        models.CrewAgentDef `json:"agent_def"`
+	AvailableAgents []CrewAgentSummary  `json:"available_agents"`
+}
+
+// ResolveCrewAgent loads the crew TOML, finds the named agent, interpolates it,
+// and returns the agent definition along with its visible agents list.
+func (a *CrewActivities) ResolveCrewAgent(ctx context.Context, input ResolveCrewAgentInput) (ResolveCrewAgentOutput, error) {
+	crew, err := loadCrewByName(input.CodexHome, input.CrewName)
+	if err != nil {
+		return ResolveCrewAgentOutput{}, err
+	}
+
+	agentDef, ok := crew.Agents[input.AgentName]
+	if !ok {
+		return ResolveCrewAgentOutput{}, fmt.Errorf("crew %q: agent %q not found", input.CrewName, input.AgentName)
+	}
+
+	vars := crew.BuildVars(input.CrewInputs)
+	interpolated := models.InterpolateAgentDef(agentDef, vars)
+
+	// Build available agents list from this agent's AvailableAgents.
+	var available []CrewAgentSummary
+	for _, name := range agentDef.AvailableAgents {
+		if peer, ok := crew.Agents[name]; ok {
+			available = append(available, CrewAgentSummary{
+				Name:        name,
+				Description: models.Interpolate(peer.Description, vars),
+			})
+		}
+	}
+
+	return ResolveCrewAgentOutput{
+		AgentDef:        interpolated,
+		AvailableAgents: available,
+	}, nil
+}
+
+// loadCrewByName is a shared helper that loads and parses a crew TOML by name.
+func loadCrewByName(codexHome, crewName string) (*models.CrewType, error) {
+	crewPath := filepath.Join(codexHome, "crews", crewName+".toml")
+	data, err := os.ReadFile(crewPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("crew %q not found at %s", crewName, crewPath)
+		}
+		return nil, fmt.Errorf("failed to read crew %q: %w", crewName, err)
+	}
+	crew, err := models.ParseCrewType(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse crew %q: %w", crewName, err)
+	}
+	return crew, nil
+}

@@ -264,12 +264,12 @@ type SessionWorkflowInput struct {
 	// Overrides contains merged CLI-level config overrides.
 	Overrides CLIOverrides `json:"overrides"`
 
-	// CrewAgents carries interpolated crew agent definitions from start-crew.
-	// Populated by ApplyCrewType when a crew template is used.
-	CrewAgents map[string]models.CrewAgentDef `json:"crew_agents,omitempty"`
+	// CrewName is the crew template name (e.g. "bug-fixer").
+	// When non-empty, SessionWorkflow calls ResolveCrewMain to resolve config.
+	CrewName string `json:"crew_name,omitempty"`
 
-	// CrewMainAgent is the name of the main agent in the crew (for available_agents lookup).
-	CrewMainAgent string `json:"crew_main_agent,omitempty"`
+	// CrewInputs are the raw user-provided inputs for crew interpolation.
+	CrewInputs map[string]string `json:"crew_inputs,omitempty"`
 }
 
 // UpdateSessionStatusRequest is the payload for the update_session_status signal.
@@ -303,12 +303,14 @@ type WorkflowInput struct {
 	McpToolSpecs    []tools.ToolSpec            `json:"mcp_tool_specs,omitempty"`
 	LoadedSkills    []skills.SkillMetadata      `json:"loaded_skills,omitempty"`
 
-	// CrewAgents carries crew agent definitions scoped to this agent's visibility.
-	// For the main agent: all crew agents. For children: filtered by parent's available_agents.
-	CrewAgents map[string]models.CrewAgentDef `json:"crew_agents,omitempty"`
+	// CrewName is the crew template name (for activity-based resolution).
+	CrewName string `json:"crew_name,omitempty"`
 
-	// CrewMainAgent is the name of the current agent in the crew (for available_agents lookup).
-	CrewMainAgent string `json:"crew_main_agent,omitempty"`
+	// CrewAgent is this agent's name within the crew.
+	CrewAgent string `json:"crew_agent,omitempty"`
+
+	// CrewInputs are the raw user-provided inputs for crew interpolation.
+	CrewInputs map[string]string `json:"crew_inputs,omitempty"`
 }
 
 // UserInput is the payload for the user_input Update.
@@ -554,12 +556,20 @@ type SessionState struct {
 	// Maps to: codex-rs/core/src/skills/manager.rs SkillsManager
 	LoadedSkills []skills.SkillMetadata `json:"loaded_skills,omitempty"`
 
-	// CrewAgents carries crew agent definitions visible to this agent.
-	// Persists across ContinueAsNew so crew-aware spawn works after CAN.
-	CrewAgents map[string]models.CrewAgentDef `json:"crew_agents,omitempty"`
+	// CrewName is the crew template name. Persists across ContinueAsNew.
+	CrewName string `json:"crew_name,omitempty"`
 
-	// CrewMainAgent is the name of this agent in the crew context (for available_agents lookup).
-	CrewMainAgent string `json:"crew_main_agent,omitempty"`
+	// CrewAgent is this agent's name in the crew. Persists across ContinueAsNew.
+	CrewAgent string `json:"crew_agent,omitempty"`
+
+	// CrewInputs are the raw user-provided inputs for crew interpolation.
+	// Persists across ContinueAsNew so re-resolution works after CAN.
+	CrewInputs map[string]string `json:"crew_inputs,omitempty"`
+
+	// CrewVisibleAgents is resolved by ResolveCrewAgent activity at init.
+	// Not passed between workflows — each agent resolves its own.
+	// Persists across ContinueAsNew for spawn_agent tool spec.
+	CrewVisibleAgents []tools.CrewAgentSummary `json:"crew_visible_agents,omitempty"`
 }
 
 // PlanStepStatus indicates the status of a single step in a plan.

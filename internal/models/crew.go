@@ -135,6 +135,18 @@ func ParseCrewType(data []byte) (*CrewType, error) {
 	return &crew, nil
 }
 
+// InterpolateAgentDef returns a copy of def with Description and Instructions
+// interpolated using the provided vars. Other fields are copied as-is.
+func InterpolateAgentDef(def CrewAgentDef, vars map[string]string) CrewAgentDef {
+	return CrewAgentDef{
+		Role:            def.Role,
+		Model:           def.Model,
+		Description:     Interpolate(def.Description, vars),
+		Instructions:    Interpolate(def.Instructions, vars),
+		AvailableAgents: def.AvailableAgents,
+	}
+}
+
 // Interpolate replaces {key} placeholders in template with values from vars.
 // Unknown placeholders are left as-is.
 func Interpolate(template string, vars map[string]string) string {

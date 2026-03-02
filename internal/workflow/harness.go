@@ -76,11 +76,11 @@ type StartSessionRequest struct {
 	// harness-level overrides. Optional.
 	OverrideConfig *CLIOverrides `json:"override_config,omitempty"`
 
-	// CrewAgents carries interpolated crew agent definitions (from start-crew).
-	CrewAgents map[string]models.CrewAgentDef `json:"crew_agents,omitempty"`
+	// CrewName is the crew template name (e.g. "bug-fixer").
+	CrewName string `json:"crew_name,omitempty"`
 
-	// CrewMainAgent is the name of the main agent in the crew.
-	CrewMainAgent string `json:"crew_main_agent,omitempty"`
+	// CrewInputs are the raw user-provided inputs for crew interpolation.
+	CrewInputs map[string]string `json:"crew_inputs,omitempty"`
 
 	// CrewType is the crew template name (for display in session list).
 	CrewType string `json:"crew_type,omitempty"`
@@ -242,12 +242,12 @@ func handleStartSession(
 
 	// Build SessionWorkflow input.
 	sessionInput := SessionWorkflowInput{
-		SessionID:     sessionID,
-		HarnessID:     state.HarnessID,
-		UserMessage:   req.UserMessage,
-		Overrides:     overrides,
-		CrewAgents:    req.CrewAgents,
-		CrewMainAgent: req.CrewMainAgent,
+		SessionID:  sessionID,
+		HarnessID:  state.HarnessID,
+		UserMessage: req.UserMessage,
+		Overrides:  overrides,
+		CrewName:   req.CrewName,
+		CrewInputs: req.CrewInputs,
 	}
 
 	// Determine model name for the registry (best-effort from overrides).

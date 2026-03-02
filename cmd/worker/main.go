@@ -132,10 +132,12 @@ func main() {
 	w.RegisterActivity(memoryActivities.ReadMemorySummary)
 	w.RegisterActivity(memoryActivities.SignalConsolidation)
 
-	// Crew activities (discovery & loading)
+	// Crew activities (discovery, loading, and resolution)
 	crewActivities := activities.NewCrewActivities()
 	w.RegisterActivity(crewActivities.DiscoverCrews)
 	w.RegisterActivity(crewActivities.LoadCrew)
+	w.RegisterActivity(crewActivities.ResolveCrewMain)
+	w.RegisterActivity(crewActivities.ResolveCrewAgent)
 
 	// Session lifecycle activities (polling for session readiness)
 	sessionActivities := activities.NewSessionActivities(c)

@@ -270,10 +270,8 @@ func runStartCrew() error {
 		inputs[parts[0]] = parts[1]
 	}
 
-	// Apply crew to config
-	cfg := models.DefaultSessionConfiguration()
-	crewAgents, err := models.ApplyCrewType(crew, inputs, &cfg)
-	if err != nil {
+	// Validate inputs (still done in CLI for fast failure).
+	if err := crew.ValidateInputs(inputs); err != nil {
 		return err
 	}
 
@@ -288,10 +286,11 @@ func runStartCrew() error {
 		}
 	}
 
-	// Resolve model/provider
-	resolvedModel := cfg.Model.Model
-	if *model != "" {
-		resolvedModel = *model
+	// Resolve model/provider (crew model override happens in SessionWorkflow
+	// via ResolveCrewMain activity, but CLI flags still take priority).
+	resolvedModel := *model
+	if resolvedModel == "" {
+		resolvedModel = "gpt-4o-mini" // default, may be overridden by crew
 	}
 	resolvedProvider := *provider
 	if resolvedProvider == "" {
@@ -301,8 +300,6 @@ func runStartCrew() error {
 	var resolvedApproval models.ApprovalMode
 	if *fullAuto {
 		resolvedApproval = models.ApprovalNever
-	} else if cfg.Permissions.ApprovalMode != "" {
-		resolvedApproval = cfg.Permissions.ApprovalMode
 	} else {
 		resolvedApproval = models.ApprovalUnlessTrusted
 	}
@@ -323,10 +320,10 @@ func runStartCrew() error {
 		MemoryDbPath:      *memoryDb,
 		ConnectionTimeout: *connTimeout,
 
-		// Crew-specific fields
-		CrewAgents:    crewAgents,
-		CrewMainAgent: crew.MainAgent,
-		CrewType:      crew.Name,
+		// Crew-specific fields — lightweight, no upfront interpolation.
+		CrewName:   crew.Name,
+		CrewInputs: inputs,
+		CrewType:   crew.Name,
 	}
 
 	return cli.Run(cliConfig)

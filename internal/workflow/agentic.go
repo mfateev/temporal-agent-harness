@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"time"
 
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
+	"github.com/mfateev/temporal-agent-harness/internal/activities"
 	"github.com/mfateev/temporal-agent-harness/internal/history"
 	"github.com/mfateev/temporal-agent-harness/internal/instructions"
 	"github.com/mfateev/temporal-agent-harness/internal/models"
+	"github.com/mfateev/temporal-agent-harness/internal/tools"
 )
 
 // IdleTimeout is how long the workflow waits for user input before triggering ContinueAsNew.
@@ -46,9 +49,10 @@ func AgenticWorkflow(ctx workflow.Context, input WorkflowInput) (WorkflowResult,
 	ctrl := &LoopControl{}
 	state.registerHandlers(ctx, ctrl)
 
-	// Carry crew agent definitions from input.
-	state.CrewAgents = input.CrewAgents
-	state.CrewMainAgent = input.CrewMainAgent
+	// Carry lightweight crew context from input.
+	state.CrewName = input.CrewName
+	state.CrewAgent = input.CrewAgent
+	state.CrewInputs = input.CrewInputs
 
 	if input.ResolvedProfile != nil {
 		// Pre-resolved by SessionWorkflow — skip init.
@@ -84,6 +88,48 @@ func AgenticWorkflow(ctx workflow.Context, input WorkflowInput) (WorkflowResult,
 
 		if input.Depth == 0 {
 			state.loadSkills(ctx)
+		}
+	}
+
+	// Resolve crew agent config via activity (main and children).
+	if input.CrewName != "" && input.CrewAgent != "" {
+		actCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+			StartToCloseTimeout: 30 * time.Second,
+			RetryPolicy: &temporal.RetryPolicy{
+				MaximumAttempts: 3,
+			},
+		})
+		var crewAgentOut activities.ResolveCrewAgentOutput
+		err := workflow.ExecuteActivity(actCtx, "ResolveCrewAgent", activities.ResolveCrewAgentInput{
+			CodexHome:  input.Config.CodexHome,
+			CrewName:   input.CrewName,
+			AgentName:  input.CrewAgent,
+			CrewInputs: input.CrewInputs,
+		}).Get(ctx, &crewAgentOut)
+		if err != nil {
+			workflow.GetLogger(ctx).Warn("ResolveCrewAgent failed, continuing without crew scoping", "error", err)
+		} else {
+			// For children (no pre-resolved profile): apply role/model/instructions overrides.
+			if input.ResolvedProfile == nil {
+				if crewAgentOut.AgentDef.Role != "" {
+					baseRole := parseAgentRole(crewAgentOut.AgentDef.Role)
+					applyRoleOverrides(&state.Config, baseRole)
+				}
+				if crewAgentOut.AgentDef.Model != "" {
+					state.Config.Model.Model = crewAgentOut.AgentDef.Model
+				}
+				if crewAgentOut.AgentDef.Instructions != "" {
+					state.Config.DeveloperInstructions = crewAgentOut.AgentDef.Instructions
+				}
+			}
+			// Convert activity output to tools.CrewAgentSummary for tool spec scoping.
+			state.CrewVisibleAgents = make([]tools.CrewAgentSummary, len(crewAgentOut.AvailableAgents))
+			for i, a := range crewAgentOut.AvailableAgents {
+				state.CrewVisibleAgents[i] = tools.CrewAgentSummary{
+					Name:        a.Name,
+					Description: a.Description,
+				}
+			}
 		}
 	}
 
