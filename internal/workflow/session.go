@@ -10,9 +10,12 @@ package workflow
 
 import (
 	"fmt"
+	"time"
 
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
+	"github.com/mfateev/temporal-agent-harness/internal/activities"
 	"github.com/mfateev/temporal-agent-harness/internal/models"
 	"github.com/mfateev/temporal-agent-harness/internal/tools"
 )
@@ -43,6 +46,39 @@ func SessionWorkflow(ctx workflow.Context, input SessionWorkflowInput) error {
 	if err != nil {
 		logger.Warn("Failed to resolve config, using defaults", "error", err)
 		cfg = models.DefaultSessionConfiguration()
+	}
+
+	// 1b. Resolve crew main agent overrides (if this is a crew session).
+	var crewMainAgentName string
+	if input.CrewName != "" {
+		actCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+			StartToCloseTimeout: 30 * time.Second,
+			RetryPolicy: &temporal.RetryPolicy{
+				MaximumAttempts: 3,
+			},
+		})
+		var crewOut activities.ResolveCrewMainOutput
+		err := workflow.ExecuteActivity(actCtx, "ResolveCrewMain", activities.ResolveCrewMainInput{
+			CodexHome:  cfg.CodexHome,
+			CrewName:   input.CrewName,
+			CrewInputs: input.CrewInputs,
+		}).Get(ctx, &crewOut)
+		if err != nil {
+			return fmt.Errorf("ResolveCrewMain failed: %w", err)
+		}
+
+		crewMainAgentName = crewOut.MainAgentName
+
+		// Apply main agent overrides to cfg.
+		if crewOut.MainAgentDef.Model != "" {
+			cfg.Model.Model = crewOut.MainAgentDef.Model
+		}
+		if crewOut.MainAgentDef.Instructions != "" {
+			cfg.DeveloperInstructions = crewOut.MainAgentDef.Instructions
+		}
+		if crewOut.ApprovalPolicy != "" {
+			cfg.Permissions.ApprovalMode = models.ApprovalMode(crewOut.ApprovalPolicy)
+		}
 	}
 
 	// 2. Resolve model profile (pure computation).
@@ -109,8 +145,9 @@ func SessionWorkflow(ctx workflow.Context, input SessionWorkflowInput) error {
 		McpToolLookup:   mcpToolLookup,
 		McpToolSpecs:    mcpToolSpecs,
 		LoadedSkills:    loadedSkills,
-		CrewAgents:      input.CrewAgents,
-		CrewMainAgent:   input.CrewMainAgent,
+		CrewName:        input.CrewName,
+		CrewAgent:       crewMainAgentName,
+		CrewInputs:      input.CrewInputs,
 	}
 
 	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
